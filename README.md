@@ -6,7 +6,7 @@
 
 ---
 
-> **🔥 CRITICAL SECURITY RESEARCH**: This tool demonstrates the **"Azure Null Session"** vulnerability - guest users can often enumerate entire directories due to misconfigured default permissions. Most organizations are vulnerable. [Read more →](#-guest-user-enumeration---the-azure-null-session)
+> **🔥 SECURITY RESEARCH**: This tool demonstrates the **"Azure Null Session"** vulnerability - guest users can often enumerate entire directories due to misconfigured default permissions. Most organizations are vulnerable. [Read more →](#-guest-user-enumeration---the-azure-null-session)
 
 ---
 
