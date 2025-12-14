@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.png" alt="AZexec Logo" width="300"/>
+</p>
+
 # AZexec - Azure Execution Tool
 
 **AZX** is a PowerShell-based Azure/Entra ID enumeration tool designed to provide netexec-style output for cloud environments. It offers a familiar command-line interface for security professionals and administrators working with Azure/Entra ID.
