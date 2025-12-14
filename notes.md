@@ -20,3 +20,5 @@ The following capabilities are planned for future releases:
 - **Advanced Querying**: Support for custom OData filters
 - **Reporting**: Generate comprehensive HTML/PDF reports
 - **Guest Activity Monitoring**: Generate detection rules for suspicious guest behavior
+- **Enumerate Logged-On Users with the Remote Registry Service** 
+- 
