@@ -3809,6 +3809,51 @@ function Invoke-VulnListEnumeration {
     return $vulnTargets
 }
 
+function Show-LogisekBanner {
+    Write-Host ""
+    
+    $asciiArt = @"
+                                                                      
+         _____   ______ _____ _______ _______ _     _
+ |      |     | |  ____   |   |______ |______ |____/ 
+ |_____ |_____| |_____| __|__ ______| |______ |    \_
+                                                                  
+                                                                      
+"@
+    
+    # Try to use colors if available (PowerShell supports ANSI by default on modern systems)
+    try {
+        # Check if ANSI escape sequences are supported
+        if ($Host.UI.SupportsVirtualTerminal) {
+            # ANSI color codes: Magenta for ASCII art, Yellow for title
+            $magenta = "`e[35m"
+            $yellow = "`e[33m"
+            $reset = "`e[0m"
+            
+            Write-Host "${magenta}${asciiArt}${reset}"
+            Write-Host "${yellow}  AZexec - Azure Execution Tool v1.0${reset}"
+        }
+        else {
+            # Fallback to PowerShell colors
+            Write-Host $asciiArt -ForegroundColor Magenta
+            Write-Host "  AZexec - Azure Execution Tool v1.0" -ForegroundColor Yellow
+        }
+    }
+    catch {
+        # Fallback without colors
+        Write-Host $asciiArt
+        Write-Host "  AZexec - Azure Execution Tool v1.0"
+    }
+    
+    Write-Host "  GNU General Public License v3.0"
+    Write-Host "  https://logisek.com"
+    Write-Host "  info@logisek.com"
+    Write-Host ""
+    Write-Host ""
+}
+
+Show-LogisekBanner
+
 # Main execution
 # For tenant discovery and user enumeration, we don't need Graph module
 # For authenticated commands (hosts, groups, pass-pol, sessions), we need Graph module
