@@ -235,7 +235,7 @@ the Free Software Foundation, either version 3 of the License, or
 
 ## 🤝 Contributing
 
-This tool is part of the **EvilMist** toolkit. Contributions, issues, and feature requests are welcome!
+Contributions, issues, and feature requests are welcome!
 
 ## ⚠️ Disclaimer
 
@@ -251,7 +251,6 @@ This tool is provided for legitimate security testing and administrative purpose
 
 - Inspired by the netexec tool
 - Built with Microsoft Graph PowerShell SDK
-- Part of the EvilMist toolkit
 
 ---
 
