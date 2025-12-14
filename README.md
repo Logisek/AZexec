@@ -30,6 +30,7 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb -u 'a' -p ''` | `.\azx.ps1 guest -Domain example.com -Username user -Password ''` | ❌ None | **Test guest/null login** |
 | `nxc smb --groups` | `.\azx.ps1 groups` | ✅ Required | Enumerate groups |
 | `nxc smb --pass-pol` | `.\azx.ps1 pass-pol` | ✅ Required | Display password policies |
+| `nxc smb --qwinsta` | `.\azx.ps1 sessions` | ✅ Required | **Enumerate active sign-in sessions** |
 | `nxc smb 10.10.10.161` | `.\azx.ps1 hosts` | ✅ Required | Enumerate devices (hosts) |
 | `nxc smb --gen-relay-list` | `.\azx.ps1 vuln-list` | ⚡ Hybrid | **Enumerate vulnerable targets** (relay equivalent) |
 | `nxc smb --shares` | *(N/A for Azure)* | - | Azure doesn't have SMB shares |
@@ -80,6 +81,12 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
   - Exploit default guest permissions for directory enumeration
   - Modern equivalent of SMB null session attacks
   - Test for misconfigured guest access policies
+- **Active Session Enumeration**: Query sign-in logs to enumerate active sessions (mimics `nxc smb --qwinsta`)
+  - Query Azure AD sign-in audit logs
+  - Display recent authentication events and active sessions
+  - Show device information, location, IP address, and application used
+  - Identify MFA status and risky sign-ins
+  - Filter by username and export results
 - **Vulnerable Target Enumeration**: Enumerate weak authentication configurations (mimics `nxc smb --gen-relay-list`)
   - Service principals with password-only credentials (like SMB hosts without signing)
   - Applications with public client flows enabled (ROPC vulnerable)
@@ -144,6 +151,15 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 - **No authentication required** - Uses public ROPC OAuth2 endpoint
 - Tests credentials against Azure/Entra ID authentication endpoints
 - Detects MFA requirements, account lockouts, and password expiration
+
+### For Active Session Enumeration (sessions command):
+- **Authentication required** - Uses Microsoft Graph API
+- **Microsoft.Graph PowerShell Module** (automatically installed if missing)
+- **Azure/Entra ID Permissions**:
+  - `AuditLog.Read.All` - Query sign-in logs (required)
+  - `Directory.Read.All` - Access directory information
+- **Note**: Guest users typically cannot access audit logs (expected behavior)
+- Queries sign-in logs from the last 24 hours by default
 
 ### For Vulnerable Target Enumeration (vuln-list command):
 - **Hybrid approach**: Performs unauthenticated checks first, then authenticated enumeration
@@ -232,6 +248,16 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 .\azx.ps1 vuln-list -ExportPath full.json    # Export all findings as JSON
 ```
 
+**Scenario 5: Active Session Monitoring (Like nxc smb --qwinsta)**
+```powershell
+# Enumerate active sign-in sessions - the cloud equivalent of qwinsta
+.\azx.ps1 sessions                           # Last 24 hours (default)
+.\azx.ps1 sessions -Hours 168                # Last 7 days
+.\azx.ps1 sessions -Username alice@corp.com  # Track specific user
+.\azx.ps1 sessions -Hours 1                  # Real-time monitoring (last hour)
+.\azx.ps1 sessions -Hours 720 -ExportPath audit.csv  # 30-day audit (requires Premium)
+```
+
 ### Basic Syntax
 
 ```powershell
@@ -256,6 +282,9 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 # Guest login enumeration (like nxc smb -u 'a' -p '') - domain auto-detected if not specified
 .\azx.ps1 guest [-Domain <DomainName>] [-Username <User>] [-Password <Password>] [-UserFile <Path>] [-NoColor] [-ExportPath <Path>]
 
+# Active session enumeration (like nxc smb --qwinsta) - authentication required
+.\azx.ps1 sessions [-Username <User>] [-Hours <Hours>] [-NoColor] [-ExportPath <Path>]
+
 # Vulnerable target enumeration (like nxc smb --gen-relay-list) - domain auto-detected if not specified
 .\azx.ps1 vuln-list [-Domain <DomainName>] [-NoColor] [-ExportPath <Path>]
 ```
@@ -264,14 +293,15 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 
 | Parameter | Description | Required | Default |
 |-----------|-------------|----------|---------|
-| `Command` | Operation to perform: `hosts`, `tenant`, `users`, `user-profiles`, `groups`, `pass-pol`, `guest`, `vuln-list` | Yes | - |
+| `Command` | Operation to perform: `hosts`, `tenant`, `users`, `user-profiles`, `groups`, `pass-pol`, `guest`, `vuln-list`, `sessions` | Yes | - |
 | `Domain` | Domain name for tenant/user/guest discovery. Auto-detected from UPN, username, or environment if not provided | No | Auto-detect |
 | `Filter` | Filter devices by criteria | No | `all` |
 | `ShowOwners` | Display device/group owners (slower) | No | `False` |
-| `Username` | Single username to check (users/guest commands) | No | - |
+| `Username` | Single username to check (users/guest/sessions commands) | No | - |
 | `Password` | Password to test for authentication (guest command). Use `''` for null password | No | - |
 | `UserFile` | File with usernames to check (users/guest commands) | No | - |
 | `CommonUsernames` | Use built-in common username list (users command) | No | `False` |
+| `Hours` | Number of hours to look back for sign-in events (sessions command). Azure AD retention: 7 days (Free), 30 days (Premium) | No | `24` |
 | `NoColor` | Disable colored output | No | `False` |
 | `ExportPath` | Export results to CSV or JSON | No | - |
 | `Scopes` | Microsoft Graph scopes to request (automatically set based on command) | No | Command-specific |
@@ -873,6 +903,124 @@ Write-Host "`n[+] Report saved to: spray-report-$(Get-Date -Format 'yyyyMMdd-HHm
 | Multiple password spray rounds | 🔴 High | High - Pattern detection | Long delays between passwords (24+ hours) |
 | Account lockouts | 🔴 Critical | Critical - Immediate SOC alert | Test minimal passwords, monitor for lockouts |
 
+### Active Session Enumeration Examples (like nxc smb --qwinsta)
+
+### Example 29-sessions-a: Enumerate All Active Sessions
+Query sign-in logs for all users in the last 24 hours:
+```powershell
+.\azx.ps1 sessions
+```
+
+**Output Shows:**
+- Recent sign-in events (last 24 hours)
+- User principal names and display names
+- Success/failure status
+- Device information (name, OS, browser)
+- IP addresses and geographic locations
+- Application accessed
+- MFA status
+- Risk levels (if Identity Protection is enabled)
+
+### Example 29-sessions-b: Target Specific User
+Enumerate sessions for a specific user:
+```powershell
+.\azx.ps1 sessions -Username alice@targetcorp.com
+```
+
+**Use Case**: Track sign-in activity for a compromised or suspicious account.
+
+### Example 29-sessions-c: Export Sessions to CSV
+Export all session data for analysis:
+```powershell
+.\azx.ps1 sessions -ExportPath sessions.csv
+```
+
+### Example 29-sessions-d: Export to JSON with Full Details
+Export with complete session metadata:
+```powershell
+.\azx.ps1 sessions -ExportPath sessions.json
+```
+
+### Example 29-sessions-e: Query Extended Time Range (7 Days)
+Query sign-in events for the last 7 days:
+```powershell
+.\azx.ps1 sessions -Hours 168
+```
+
+**Note**: Free Azure AD retains logs for 7 days, Premium P1/P2 for 30 days.
+
+### Example 29-sessions-f: Query Maximum Time Range (30 Days)
+Query sign-in events for the last 30 days (requires Premium license):
+```powershell
+.\azx.ps1 sessions -Hours 720
+```
+
+### Example 29-sessions-g: Targeted Long-Term Investigation
+Investigate specific user over extended period:
+```powershell
+.\azx.ps1 sessions -Username alice@targetcorp.com -Hours 168 -ExportPath alice_7day_activity.csv
+```
+
+**Use Case**: Track user activity patterns over a week for incident response or insider threat investigation.
+
+### Example 29-sessions-h: Short-Term Real-Time Monitoring
+Query only recent sign-ins (last hour):
+```powershell
+.\azx.ps1 sessions -Hours 1
+```
+
+**Use Case**: Monitor active sessions during an ongoing incident or during a penetration test.
+
+**What Sessions Shows:**
+
+| Information | Description | Security Value |
+|------------|-------------|----------------|
+| **Timestamp** | When the sign-in occurred | Timeline for incident response |
+| **User** | UserPrincipalName | Identify compromised accounts |
+| **Status** | Success/Failed | Spot brute force attempts |
+| **Device Info** | Name, OS, Browser | Detect unusual devices |
+| **IP Address** | Source IP | Geolocation tracking |
+| **Location** | City, Country | Detect impossible travel |
+| **Application** | App accessed | Identify lateral movement |
+| **MFA Status** | Required/Not Required | Find MFA bypass attempts |
+| **Risk Level** | Low/Medium/High | Identity Protection alerts |
+
+**Detection Use Cases:**
+
+| Scenario | What to Look For | Command |
+|----------|-----------------|---------|
+| **Compromised Account** | Multiple failed logins, unusual locations | `.\azx.ps1 sessions -Username target@corp.com` |
+| **Insider Threat** | Access to unusual applications, off-hours activity | `.\azx.ps1 sessions` (review all users) |
+| **Brute Force Detection** | Many failed login attempts from same IP | `.\azx.ps1 sessions -ExportPath logs.csv` (analyze in Excel) |
+| **Impossible Travel** | Sign-ins from different countries within short time | Review location data in exported results |
+| **MFA Bypass** | Successful logins without MFA where it should be required | Check MFA status in output |
+
+**Azure Equivalent to qwinsta:**
+
+Traditional `qwinsta` shows who's logged into a Windows machine locally. In Azure/cloud environments, this translates to:
+- **Sign-in logs** = Active authentication sessions
+- **IP address** = Remote connection source
+- **Device info** = Client machine details
+- **Application** = What service/resource was accessed
+
+**Time Range Configuration:**
+- Default: Last 24 hours (`-Hours 24`)
+- Configurable: Use `-Hours` parameter (e.g., `-Hours 168` for 7 days)
+- Azure AD log retention:
+  - **Free tier**: 7 days (max `-Hours 168`)
+  - **Premium P1/P2**: 30 days (max `-Hours 720`)
+
+**Permission Requirements:**
+- Requires `AuditLog.Read.All` permission
+- Guest users typically cannot access sign-in logs
+- Must be authenticated (unlike unauthenticated commands like `users` or `tenant`)
+
+**Common Time Ranges:**
+- `-Hours 1` - Last hour (real-time monitoring)
+- `-Hours 24` - Last day (default)
+- `-Hours 168` - Last week (7 days)
+- `-Hours 720` - Last 30 days (requires Premium)
+
 ### Vulnerable Target Enumeration Examples (like nxc smb --gen-relay-list)
 
 ### Example 29: Basic Vulnerability Enumeration (Auto-Detect Domain)
@@ -1232,6 +1380,99 @@ AZR         targetcorp.com                      443    service@targetcorp.com   
 - MFA detection (valid creds even if MFA blocks)
 - Account lockout detection
 - Password expiration detection
+
+### Active Session Enumeration Output (mimics `nxc smb --qwinsta`)
+
+```
+[*] AZX - Azure/Entra Active Session Enumeration
+[*] Command: Sessions (Similar to: nxc smb --qwinsta)
+[*] Querying sign-in logs for last 24 hours...
+
+[+] Authenticated as: admin@targetcorp.com
+
+[*] ========================================
+[*] ACTIVE SIGN-IN SESSIONS
+[*] ========================================
+
+[*] Querying Azure AD sign-in logs (this may take a moment)...
+[+] Found 47 sign-in events
+
+AZR          alice@targetcorp.com                      203.0.113.45   [+] SUCCESS
+    Time:      2024-12-14 08:23:15
+    Device:    ALICE-LAPTOP (Windows 11)
+    App:       Microsoft Teams
+    Location:  Seattle, United States
+    MFA:       Required
+
+AZR          bob@targetcorp.com                        198.51.100.12  [+] SUCCESS
+    Time:      2024-12-14 08:15:42
+    Device:    BOB-DESKTOP (Windows 10)
+    App:       Office 365 Exchange Online
+    Location:  New York, United States
+
+AZR          charlie@targetcorp.com                    192.0.2.100    [!] FAILED
+    Time:      2024-12-14 07:58:30
+    Device:    Unknown Device (Linux)
+    App:       Azure Portal
+    Location:  Moscow, Russia
+    Risk:      HIGH
+    Error:     Invalid username or password
+
+AZR          alice@targetcorp.com                      203.0.113.45   [+] SUCCESS
+    Time:      2024-12-14 07:45:12
+    Device:    ALICE-LAPTOP (Windows 11)
+    App:       SharePoint Online
+    Location:  Seattle, United States
+    MFA:       Required
+
+[*] ========================================
+[*] SESSION SUMMARY
+[*] ========================================
+
+AZR          Total Sign-ins:      47
+AZR          Unique Users:        15
+AZR          Successful:          42
+AZR          Failed:              5
+AZR          MFA Protected:       38
+AZR          Risky Sign-ins:      2
+
+[*] Top Active Users:
+    alice@targetcorp.com: 8 sign-ins
+    bob@targetcorp.com: 6 sign-ins
+    carol@targetcorp.com: 4 sign-ins
+    dave@targetcorp.com: 3 sign-ins
+    eve@targetcorp.com: 3 sign-ins
+
+[*] Top Applications:
+    Microsoft Teams: 12 sign-ins
+    Office 365 Exchange Online: 10 sign-ins
+    SharePoint Online: 8 sign-ins
+    Azure Portal: 5 sign-ins
+    Microsoft Graph: 4 sign-ins
+
+[*] Session enumeration complete!
+```
+
+**Key Information Displayed:**
+- **Timestamp**: Local time when sign-in occurred
+- **User**: UserPrincipalName (email/username)
+- **Status**: SUCCESS (green) or FAILED (red)
+- **IP Address**: Source IP of the connection
+- **Device**: Device name and operating system
+- **Application**: Which app/service was accessed
+- **Location**: Geographic location (city, country)
+- **MFA Status**: Whether MFA was required
+- **Risk Level**: HIGH/MEDIUM/LOW (if Identity Protection detects risk)
+- **Error Details**: Failure reason for unsuccessful sign-ins
+
+**Summary Statistics:**
+- Total sign-in events found
+- Number of unique users
+- Success vs failure counts
+- MFA-protected session count
+- Risky sign-in count
+- Top 5 most active users
+- Top 5 most accessed applications
 
 ### Vulnerable Target Enumeration Output (mimics `nxc smb --gen-relay-list`)
 

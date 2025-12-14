@@ -49,6 +49,11 @@
       * Test credentials with empty/null passwords
       * Password spray with single password against user list
       * Detect MFA requirements, locked accounts, expired passwords
+    - Active session enumeration (mimics nxc smb --qwinsta)
+      * Query Azure AD sign-in logs
+      * Display active/recent user sessions
+      * Show device, location, IP, application details
+      * Identify risky sign-ins and MFA status
     - Netexec-style formatted output
     - Filter by OS, trust type, compliance status
     - Device owner enumeration
@@ -68,6 +73,7 @@
     - pass-pol: Enumerate password policies and security defaults (authentication required)
     - guest: Test guest/external authentication (similar to nxc smb -u 'a' -p '')
     - vuln-list: Enumerate vulnerable targets (similar to nxc smb --gen-relay-list)
+    - sessions: Enumerate active Windows sessions (similar to nxc smb --qwinsta)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -107,6 +113,12 @@
 .PARAMETER Password
     Password to test for guest authentication (for 'guest' command).
     Use empty string '' for null/guest login testing.
+
+.PARAMETER Hours
+    Number of hours to look back for sign-in events (for 'sessions' command).
+    Default: 24 hours
+    Azure AD retention: 7 days (Free), 30 days (Premium P1/P2)
+    Examples: 24 (1 day), 168 (7 days), 720 (30 days)
 
 .EXAMPLE
     .\azx.ps1 hosts
@@ -224,19 +236,44 @@
     .\azx.ps1 vuln-list -ExportPath vuln_report.json
     Full vulnerability enumeration with JSON export
 
+.EXAMPLE
+    .\azx.ps1 sessions
+    Enumerate active sign-in sessions for the last 24 hours (similar to nxc smb --qwinsta)
+
+.EXAMPLE
+    .\azx.ps1 sessions -Username alice@example.com
+    Enumerate sign-in sessions for a specific user
+
+.EXAMPLE
+    .\azx.ps1 sessions -ExportPath sessions.csv
+    Enumerate active sessions and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 sessions -ExportPath sessions.json
+    Enumerate active sessions with full details exported to JSON
+
+.EXAMPLE
+    .\azx.ps1 sessions -Hours 168
+    Enumerate sign-in sessions for the last 7 days (168 hours)
+
+.EXAMPLE
+    .\azx.ps1 sessions -Hours 720 -Username alice@example.com
+    Enumerate sessions for a specific user over the last 30 days (requires Premium license)
+
 .NOTES
     Requires PowerShell 7+
-    Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'pass-pol', 'vuln-list' commands)
+    Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'pass-pol', 'sessions', 'vuln-list' commands)
     Requires appropriate Azure/Entra permissions (for authenticated commands)
     The 'tenant' and 'users' commands do not require authentication
     The 'vuln-list' command performs unauthenticated checks first, then authenticated checks
-    Guest users may have limited access to groups and policy information
+    The 'sessions' command requires AuditLog.Read.All permission
+    Guest users may have limited access to groups, policy information, and audit logs
 #>
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "groups", "pass-pol", "guest", "vuln-list")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "groups", "pass-pol", "guest", "vuln-list", "sessions")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -268,7 +305,10 @@ param(
     [switch]$CommonUsernames,
     
     [Parameter(Mandatory = $false)]
-    [string]$Password
+    [string]$Password,
+    
+    [Parameter(Mandatory = $false)]
+    [int]$Hours = 24
 )
 
 # Color output functions
@@ -627,6 +667,17 @@ function Get-CommonUsernames {
         "administrator",
         "root",
         "sysadmin",
+        "sa",
+        "sql",
+        "dba",
+        "dbadmin",
+        "dbmanager",
+        "dbowner",
+        "dbroot",
+        "dbadmin",
+        "dbmanager",
+        "dbowner",
+        "dbroot",
         
         # Support and helpdesk
         "support",
@@ -634,6 +685,8 @@ function Get-CommonUsernames {
         "servicedesk",
         "itadmin",
         "itsupport",
+        "ithelp",
+        "ithelper",
         
         # Security and compliance
         "security",
@@ -643,6 +696,7 @@ function Get-CommonUsernames {
         "dpo",
         "compliance",
         "privacy",
+        "privacyofficer",
         
         # Business departments
         "accounting",
@@ -658,6 +712,7 @@ function Get-CommonUsernames {
         "marketing",
         "legal",
         "contracts",
+        "contractsmanager",        
         
         # Communications
         "info",
@@ -672,6 +727,7 @@ function Get-CommonUsernames {
         "notifications",
         "alerts",
         "social",
+        "supportemail",
         
         # Web and portal accounts
         "webadmin",
@@ -680,6 +736,7 @@ function Get-CommonUsernames {
         "mail",
         "smtp",
         "imap",
+        "help",
         
         # IT and operations
         "it",
@@ -695,7 +752,7 @@ function Get-CommonUsernames {
         "logs",
         "logging",
         "internal",
-        "intranet",
+        "intranet",        
         
         # Service accounts
         "service",
@@ -712,6 +769,7 @@ function Get-CommonUsernames {
         "demo",
         "guest",
         "user",
+        "users",
         
         # Executive accounts
         "ceo",
@@ -820,6 +878,7 @@ function Test-UsernameExistence {
 function Format-UsernameOutput {
     param(
         [string]$Domain,
+        [string]$Username,
         [PSCustomObject]$Result
     )
     
@@ -828,7 +887,7 @@ function Format-UsernameOutput {
         $output = "AZR".PadRight(12) + 
                   $Domain.PadRight(35) + 
                   "443".PadRight(7) + 
-                  $Result.Username.PadRight(38) + 
+                  $Username.PadRight(38) + 
                   "[!] Check failed"
         Write-ColorOutput -Message $output -Color "Red"
         return
@@ -989,7 +1048,7 @@ function Invoke-UserEnumeration {
     
     foreach ($user in $usernames) {
         $result = Test-UsernameExistence -Username $user
-        Format-UsernameOutput -Domain $Domain -Result $result
+        Format-UsernameOutput -Domain $Domain -Username $user -Result $result
         
         if ($result -and $result.Exists) {
             $validUsers += $result
@@ -2089,6 +2148,291 @@ function Test-GuestAuthentication {
     }
     
     return $result
+}
+
+# Enumerate active Windows sessions (similar to nxc smb --qwinsta)
+function Invoke-SessionEnumeration {
+    param(
+        [string]$Username,
+        [string]$ExportPath,
+        [int]$Hours = 24
+    )
+    
+    Write-ColorOutput -Message "`n[*] AZX - Azure/Entra Active Session Enumeration" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Command: Sessions (Similar to: nxc smb --qwinsta)" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Querying sign-in logs for last $Hours hours..." -Color "Cyan"
+    
+    # Initialize connection context
+    try {
+        $context = Get-MgContext -ErrorAction SilentlyContinue
+        
+        if (-not $context) {
+            Write-ColorOutput -Message "[!] Not authenticated to Microsoft Graph" -Color "Red"
+            Write-ColorOutput -Message "[*] Attempting authentication..." -Color "Yellow"
+            
+            # Connect with required permissions
+            $requiredScopes = "AuditLog.Read.All,Directory.Read.All"
+            Connect-GraphAPI -Scopes $requiredScopes
+            $context = Get-MgContext
+        }
+        
+        if ($context) {
+            Write-ColorOutput -Message "[+] Authenticated as: $($context.Account)" -Color "Green"
+            
+            # Check if current user is guest
+            $isGuest = Test-IsGuestUser -UserPrincipalName $context.Account
+            if ($isGuest) {
+                Write-ColorOutput -Message "[!] Warning: Guest users typically have limited access to audit logs" -Color "Yellow"
+            }
+        }
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to get authentication context: $($_.Exception.Message)" -Color "Red"
+        return
+    }
+    
+    # Calculate time filter
+    $startTime = (Get-Date).AddHours(-$Hours).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ACTIVE SIGN-IN SESSIONS" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    $sessions = @()
+    $uniqueUsers = @{}
+    
+    try {
+        # Build filter query
+        $filterQuery = "createdDateTime ge $startTime"
+        if ($Username) {
+            $filterQuery += " and userPrincipalName eq '$Username'"
+        }
+        
+        # Query sign-in logs
+        Write-ColorOutput -Message "[*] Querying Azure AD sign-in logs (this may take a moment)..." -Color "Cyan"
+        
+        $uri = "https://graph.microsoft.com/v1.0/auditLogs/signIns?`$filter=$filterQuery&`$top=999&`$orderby=createdDateTime desc"
+        
+        $allSignIns = @()
+        do {
+            $response = Invoke-MgGraphRequest -Uri $uri -Method GET -ErrorAction Stop
+            $allSignIns += $response.value
+            $uri = $response.'@odata.nextLink'
+        } while ($uri)
+        
+        if ($allSignIns.Count -eq 0) {
+            Write-ColorOutput -Message "[!] No sign-in events found in the last $Hours hours" -Color "Yellow"
+            if ($Username) {
+                Write-ColorOutput -Message "[!] No sign-ins found for user: $Username" -Color "Yellow"
+            }
+            return
+        }
+        
+        Write-ColorOutput -Message "[+] Found $($allSignIns.Count) sign-in events" -Color "Green"
+        Write-ColorOutput -Message ""
+        
+        # Process and display sessions
+        foreach ($signIn in $allSignIns) {
+            # Track unique users
+            $userKey = $signIn.userPrincipalName
+            if (-not $uniqueUsers.ContainsKey($userKey)) {
+                $uniqueUsers[$userKey] = 0
+            }
+            $uniqueUsers[$userKey]++
+            
+            # Determine success/failure status
+            $statusColor = if ($signIn.status.errorCode -eq 0) { "Green" } else { "Red" }
+            $statusIcon = if ($signIn.status.errorCode -eq 0) { "+" } else { "!" }
+            $statusText = if ($signIn.status.errorCode -eq 0) { "SUCCESS" } else { "FAILED" }
+            
+            # Format device info
+            $deviceName = if ($signIn.deviceDetail.displayName) { 
+                $signIn.deviceDetail.displayName 
+            } else { 
+                "Unknown Device" 
+            }
+            
+            $deviceOS = if ($signIn.deviceDetail.operatingSystem) {
+                $signIn.deviceDetail.operatingSystem
+            } else {
+                "Unknown OS"
+            }
+            
+            # Format location
+            $location = if ($signIn.location.city -and $signIn.location.countryOrRegion) {
+                "$($signIn.location.city), $($signIn.location.countryOrRegion)"
+            } elseif ($signIn.location.countryOrRegion) {
+                $signIn.location.countryOrRegion
+            } else {
+                "Unknown Location"
+            }
+            
+            # Format IP address
+            $ipAddress = if ($signIn.ipAddress) { $signIn.ipAddress } else { "N/A" }
+            
+            # Format application
+            $appName = if ($signIn.appDisplayName) { $signIn.appDisplayName } else { "Unknown App" }
+            
+            # Format timestamp
+            $timestamp = ([DateTime]$signIn.createdDateTime).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+            
+            # Risk level (if available)
+            $riskLevel = if ($signIn.riskLevelDuringSignIn -and $signIn.riskLevelDuringSignIn -ne "none") {
+                $signIn.riskLevelDuringSignIn.ToUpper()
+            } else {
+                $null
+            }
+            
+            # MFA details
+            $mfaRequired = $signIn.conditionalAccessStatus -eq "success" -or $signIn.authenticationRequirement -eq "multiFactorAuthentication"
+            
+            # Build session object
+            $sessionObj = [PSCustomObject]@{
+                Timestamp = $timestamp
+                User = $signIn.userPrincipalName
+                DisplayName = $signIn.userDisplayName
+                Status = $statusText
+                ErrorCode = $signIn.status.errorCode
+                ErrorReason = $signIn.status.failureReason
+                Application = $appName
+                DeviceName = $deviceName
+                OperatingSystem = $deviceOS
+                Browser = $signIn.deviceDetail.browser
+                IsCompliant = $signIn.deviceDetail.isCompliant
+                IsManagedDevice = $signIn.deviceDetail.isManaged
+                IPAddress = $ipAddress
+                Location = $location
+                RiskLevel = $riskLevel
+                MFARequired = $mfaRequired
+                ConditionalAccessStatus = $signIn.conditionalAccessStatus
+                SessionId = $signIn.id
+            }
+            
+            $sessions += $sessionObj
+            
+            # Display in netexec-style format
+            # Handle null/empty userPrincipalName
+            $displayUser = if ($signIn.userPrincipalName) { $signIn.userPrincipalName } else { $signIn.userDisplayName }
+            if (-not $displayUser) { $displayUser = "Unknown User" }
+            
+            $userDisplay = $displayUser.PadRight(45)
+            $ipDisplay = $ipAddress.PadRight(15)
+            
+            Write-ColorOutput -Message "AZR".PadRight(12) + $userDisplay + $ipDisplay + "[$statusIcon] $statusText" -Color $statusColor
+            
+            # Show display name if different from UPN
+            if ($signIn.userDisplayName -and $signIn.userDisplayName -ne $displayUser) {
+                Write-ColorOutput -Message "    Name:      $($signIn.userDisplayName)" -Color "DarkGray"
+            }
+            Write-ColorOutput -Message "    Time:      $timestamp" -Color "DarkGray"
+            Write-ColorOutput -Message "    Device:    $deviceName ($deviceOS)" -Color "DarkGray"
+            Write-ColorOutput -Message "    App:       $appName" -Color "DarkGray"
+            Write-ColorOutput -Message "    Location:  $location" -Color "DarkGray"
+            
+            if ($mfaRequired) {
+                Write-ColorOutput -Message "    MFA:       Required" -Color "Cyan"
+            }
+            
+            if ($riskLevel) {
+                $riskColor = switch ($riskLevel) {
+                    "HIGH" { "Red" }
+                    "MEDIUM" { "Yellow" }
+                    default { "Cyan" }
+                }
+                Write-ColorOutput -Message "    Risk:      $riskLevel" -Color $riskColor
+            }
+            
+            if ($signIn.status.errorCode -ne 0) {
+                Write-ColorOutput -Message "    Error:     $($signIn.status.failureReason)" -Color "Red"
+            }
+            
+            Write-ColorOutput -Message ""
+        }
+        
+        # Summary statistics
+        Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+        Write-ColorOutput -Message "[*] SESSION SUMMARY" -Color "Cyan"
+        Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+        
+        $successCount = ($sessions | Where-Object { $_.Status -eq "SUCCESS" }).Count
+        $failedCount = ($sessions | Where-Object { $_.Status -eq "FAILED" }).Count
+        $uniqueUserCount = $uniqueUsers.Count
+        $mfaCount = ($sessions | Where-Object { $_.MFARequired -eq $true }).Count
+        $riskyCount = ($sessions | Where-Object { $_.RiskLevel -ne $null }).Count
+        
+        Write-ColorOutput -Message "AZR".PadRight(12) + "Total Sign-ins:      $($sessions.Count)" -Color "Cyan"
+        Write-ColorOutput -Message "AZR".PadRight(12) + "Unique Users:        $uniqueUserCount" -Color "Cyan"
+        Write-ColorOutput -Message "AZR".PadRight(12) + "Successful:          $successCount" -Color "Green"
+        if ($failedCount -gt 0) {
+            Write-ColorOutput -Message "AZR".PadRight(12) + "Failed:              $failedCount" -Color "Red"
+        }
+        if ($mfaCount -gt 0) {
+            Write-ColorOutput -Message "AZR".PadRight(12) + "MFA Protected:       $mfaCount" -Color "Cyan"
+        }
+        if ($riskyCount -gt 0) {
+            Write-ColorOutput -Message "AZR".PadRight(12) + "Risky Sign-ins:      $riskyCount" -Color "Yellow"
+        }
+        
+        # Top users
+        if ($uniqueUsers.Count -gt 1) {
+            Write-ColorOutput -Message "`n[*] Top Active Users:" -Color "Yellow"
+            $topUsers = $uniqueUsers.GetEnumerator() | Sort-Object -Property Value -Descending | Select-Object -First 5
+            foreach ($user in $topUsers) {
+                Write-ColorOutput -Message "    $($user.Name): $($user.Value) sign-ins" -Color "DarkGray"
+            }
+        }
+        
+        # Top applications
+        $appCounts = @{}
+        foreach ($session in $sessions) {
+            if (-not $appCounts.ContainsKey($session.Application)) {
+                $appCounts[$session.Application] = 0
+            }
+            $appCounts[$session.Application]++
+        }
+        
+        if ($appCounts.Count -gt 0) {
+            Write-ColorOutput -Message "`n[*] Top Applications:" -Color "Yellow"
+            $topApps = $appCounts.GetEnumerator() | Sort-Object -Property Value -Descending | Select-Object -First 5
+            foreach ($app in $topApps) {
+                Write-ColorOutput -Message "    $($app.Name): $($app.Value) sign-ins" -Color "DarkGray"
+            }
+        }
+        
+        # Export if requested
+        if ($ExportPath) {
+            try {
+                $extension = [System.IO.Path]::GetExtension($ExportPath).ToLower()
+                
+                if ($extension -eq ".csv") {
+                    $sessions | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                } elseif ($extension -eq ".json") {
+                    $sessions | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -Force
+                } else {
+                    # Default to JSON
+                    $sessions | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -Force
+                }
+                
+                Write-ColorOutput -Message "`n[+] Session data exported to: $ExportPath" -Color "Green"
+            } catch {
+                Write-ColorOutput -Message "`n[!] Failed to export results: $_" -Color "Red"
+            }
+        }
+        
+        Write-ColorOutput -Message "`n[*] Session enumeration complete!" -Color "Green"
+        
+    } catch {
+        # Check if it's a permission error
+        if ($_.Exception.Message -like "*403*" -or $_.Exception.Message -like "*Forbidden*" -or $_.Exception.Message -like "*Insufficient privileges*") {
+            Write-ColorOutput -Message "[!] Access Denied: Insufficient permissions to read sign-in logs" -Color "Red"
+            Write-ColorOutput -Message "[*] Required permissions: AuditLog.Read.All or Directory.Read.All" -Color "Yellow"
+            Write-ColorOutput -Message "[*] Guest users typically cannot access audit logs" -Color "Yellow"
+        } else {
+            Write-ColorOutput -Message "[!] Failed to enumerate sessions" -Color "Red"
+            Write-ColorOutput -Message "[!] Error: $($_.Exception.Message)" -Color "Red"
+        }
+    }
+    
+    return $sessions
 }
 
 # Main guest enumeration function
@@ -3467,9 +3811,9 @@ function Invoke-VulnListEnumeration {
 
 # Main execution
 # For tenant discovery and user enumeration, we don't need Graph module
-# For authenticated commands (hosts, groups, pass-pol), we need Graph module
+# For authenticated commands (hosts, groups, pass-pol, sessions), we need Graph module
 # vuln-list handles authentication internally (hybrid unauthenticated + authenticated)
-if ($Command -in @("hosts", "groups", "pass-pol")) {
+if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles")) {
     Initialize-GraphModule
     
     # Determine required scopes based on command
@@ -3478,6 +3822,7 @@ if ($Command -in @("hosts", "groups", "pass-pol")) {
         "user-profiles" { "User.Read.All,Directory.Read.All,AuditLog.Read.All" }
         "groups" { "Group.Read.All,Directory.Read.All" }
         "pass-pol" { "Organization.Read.All,Directory.Read.All,Policy.Read.All" }
+        "sessions" { "AuditLog.Read.All,Directory.Read.All" }
         default { $Scopes }
     }
     
@@ -3514,8 +3859,11 @@ switch ($Command) {
     "vuln-list" {
         Invoke-VulnListEnumeration -Domain $Domain -ExportPath $ExportPath
     }
+    "sessions" {
+        Invoke-SessionEnumeration -Username $Username -ExportPath $ExportPath -Hours $Hours
+    }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, groups, pass-pol, guest, vuln-list" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, groups, pass-pol, guest, vuln-list, sessions" -Color "Yellow"
     }
 }

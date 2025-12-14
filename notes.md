@@ -2,8 +2,6 @@
 
 The following capabilities are planned for future releases:
 
-- ~~**User Profile Enumeration**: Enumerate detailed user information from Azure/Entra ID (requires authentication)~~ **IMPLEMENTED** - Available as `user-profiles` command
-- ~~**Password Spray Attacks**: GetCredentialType-based username enumeration + ROPC password spraying~~ **IMPLEMENTED** - Two-phase attack using `users` + `guest` commands
   - Phase 1: Username enumeration via GetCredentialType API (no auth logs, stealthy)
   - Phase 2: ROPC-based password spray with lockout detection
   - Support for multiple attack patterns (single password, multi-password campaigns, username:password format)
@@ -22,6 +20,3 @@ The following capabilities are planned for future releases:
 - **Advanced Querying**: Support for custom OData filters
 - **Reporting**: Generate comprehensive HTML/PDF reports
 - **Guest Activity Monitoring**: Generate detection rules for suspicious guest behavior
-- **Netexec Enumerate Active Windows Sessions**
-- 
----
