@@ -1,0 +1,114 @@
+# Sample usernames file for AZexec username enumeration
+# Lines starting with # are comments and will be ignored
+# You can provide usernames with or without @domain.com suffix
+# If no @ is present, the domain from -Domain parameter will be appended
+
+# Common admin accounts
+admin
+administrator
+root
+sysadmin
+
+# IT and support accounts
+helpdesk
+support
+servicedesk
+itadmin
+itsupport
+
+# Security and compliance accounts
+security
+cybersecurity
+infosec
+secops
+dpo
+compliance
+privacy
+
+# Finance and accounting
+accounting
+finance
+billing
+payroll
+invoices
+accounts
+
+# HR and recruitment
+hr
+humanresources
+recruitment
+
+# Sales and marketing
+sales
+marketing
+
+# Legal
+legal
+contracts
+
+# Communications and notifications
+info
+contact
+hello
+noreply
+no-reply
+donotreply
+mailer
+postmaster
+webmaster
+notifications
+alerts
+social
+
+# Web and portal accounts
+webadmin
+webmail
+portal
+mail
+smtp
+imap
+
+# IT operations
+it
+dev
+developer
+ops
+devops
+sysops
+operations
+infrastructure
+network
+monitoring
+logs
+logging
+internal
+intranet
+
+# Service accounts
+service
+backup
+reports
+reporting
+automation
+api
+webhook
+
+# Testing and demo accounts
+test
+testing
+demo
+guest
+user
+
+# Executive accounts
+ceo
+cfo
+cto
+cio
+cso
+ciso
+
+# You can also specify full email addresses
+# admin@example.com
+# support@example.com
+# noreply@example.com
