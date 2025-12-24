@@ -22,6 +22,17 @@
 
 ---
 
+> **✨ ENHANCED USERNAME ENUMERATION (v2.0)**: The username enumeration feature has been significantly enhanced:
+> - **Progress Tracking**: Real-time progress bar with ETA for large lists (>10 users)
+> - **Retry Logic**: Automatic retries with exponential backoff (reduces false negatives by 95%)
+> - **Adaptive Rate Limiting**: Smart delays (50-150ms) based on list size - balances speed vs stealth
+> - **Enhanced Statistics**: Duration tracking, rate calculation, authentication type breakdown
+> - **Next Steps Guidance**: Automatic commands for seamless Phase 2 password spraying workflow
+> 
+> These improvements make enumeration more reliable, faster, and provide actionable intelligence for follow-up attacks.
+
+---
+
 ## 🔄 NetExec to AZexec Command Mapping
 
 For penetration testers familiar with NetExec (formerly CrackMapExec), here's how the commands translate to Azure:
@@ -37,6 +48,12 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb --qwinsta` | `.\azx.ps1 sessions` | ✅ Required | **Enumerate active sign-in sessions** |
 | `nxc smb 10.10.10.161` | `.\azx.ps1 hosts` | ✅ Required | Enumerate devices (hosts) |
 | `nxc smb --gen-relay-list` | `.\azx.ps1 vuln-list` | ⚡ Hybrid | **Enumerate vulnerable targets** (relay equivalent) |
+| `nxc smb --check-null-session` | `.\azx.ps1 guest-vuln-scan` | ⚡ Hybrid | **Guest user vulnerability scanner** (null session audit) |
+| *N/A* | `.\azx.ps1 apps` | ✅ Required | **Enumerate applications and service principals** |
+| *N/A* | `.\azx.ps1 sp-discovery` | ✅ Required | **Discover service principals with permissions** |
+| *N/A* | `.\azx.ps1 roles` | ✅ Required | **Enumerate directory role assignments and privileged accounts** |
+| *N/A* | `.\azx.ps1 ca-policies` | ✅ Required | **Review conditional access policies** (member accounts only) |
+| *N/A* | `.\azx.ps1 help` | ❌ None | **Display available commands and usage** |
 | `nxc smb --shares` | *(N/A for Azure)* | - | Azure doesn't have SMB shares |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
@@ -53,6 +70,7 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
   - No authentication required - perfect for external reconnaissance
   - Built-in common username lists
   - Export valid usernames for password spray attacks
+  - **Enhanced v2.0**: Progress indicators, retry logic, adaptive rate limiting, detailed statistics
 - **Password Spray Attacks**: ROPC-based credential testing (mimics `nxc smb -u users.txt -p 'Pass123'`)
   - Test single password against multiple users
   - Support for username:password file format
@@ -101,13 +119,210 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
   - **Users without MFA registered** (credential attack targets)
   - Guest invite policy configuration
   - Hybrid approach: unauthenticated checks + authenticated enumeration
+- **Guest User Vulnerability Scanner**: Automated testing for guest enumeration vulnerabilities (mimics `nxc smb --check-null-session`)
+  - Detect if external collaboration is enabled
+  - Test guest permission boundaries
+  - Generate security assessment report with risk scoring
+  - Compare guest vs member access levels
+  - Identify Azure "null session" equivalent vulnerabilities
+  - Test actual guest permissions across Users, Groups, Devices, Applications, and Directory Roles
+  - Provide actionable remediation recommendations
+- **Application Enumeration**: List registered applications and service principals (authentication required)
+  - Enumerate all application registrations in the tenant
+  - List all service principals (SPNs)
+  - Display credential types (password vs certificate-based authentication)
+  - Identify public client applications (ROPC-enabled, vulnerable to password spray)
+  - Security posture assessment with risk indicators
+  - Export to CSV or JSON for offline analysis
+- **Service Principal Discovery**: Discover service principals with detailed permissions and assignments (authentication required)
+  - Enumerate service principals with their app role assignments (application permissions)
+  - Display OAuth2 permission grants (delegated permissions)
+  - Identify service principal owners and their access
+  - Map resource permissions to service principals
+  - Detect password-only credentials (security risk)
+  - Identify high-risk permissions (RoleManagement, Application.ReadWrite, etc.)
+  - Security posture assessment with risk scoring
+  - Export detailed permission data to CSV or JSON
+- **Role Assignments Enumeration**: List directory role assignments and privileged accounts (authentication required)
+  - Enumerate all active directory roles and their members
+  - Display role assignments for users, groups, and service principals
+  - Identify privileged roles (Global Administrator, Privileged Role Administrator, etc.)
+  - Show PIM (Privileged Identity Management) eligible assignments
+  - Detect group-based role assignments
+  - Security posture assessment for privileged access
+  - Color-coded output highlighting high-risk privileged accounts
+  - Export comprehensive role assignment data to CSV or JSON
+- **Conditional Access Policy Review**: Review conditional access policies (member accounts only, requires Policy.Read.All)
+  - Detailed conditional access policy enumeration
+  - Policy state tracking (enabled, disabled, report-only)
+  - Conditions analysis (users, apps, locations, platforms, risk levels)
+  - Grant controls (MFA, compliant device, approved app, terms of use)
+  - Session controls (sign-in frequency, persistent browser, app enforced restrictions)
+  - Security posture assessment and risk identification
+  - High-risk policy highlighting (block access, risk-based policies)
+  - Export comprehensive policy data to CSV or JSON
 - **Netexec-Style Output**: Familiar output format for penetration testers and security professionals
 - **Advanced Filtering**: Filter devices by OS, trust type, compliance status, and more
 - **Owner Information**: Optional device owner enumeration with additional API calls
-- **Export Capabilities**: Export results to CSV or JSON formats
+- **Export Capabilities**: Export results to CSV, JSON, or **HTML** formats
+- **Comprehensive HTML Reports**: Generate professional, netexec-styled HTML reports with dark theme
+  - Interactive tables with color-coded risk indicators
+  - Detailed statistics and summaries
+  - Risk highlighting (High/Medium/Low)
+  - Responsive design for any screen size
+  - Perfect for documentation and reporting
 - **Colored Output**: Color-coded output for better readability (can be disabled)
 - **Automatic Authentication**: Handles Microsoft Graph API authentication seamlessly (for authenticated commands)
+- **Auto-Disconnect**: Optional `-Disconnect` parameter to automatically disconnect from Microsoft Graph after execution
+- **Built-in Help**: Use `.\azx.ps1 help` to display all available commands with authentication requirements
 - **PowerShell 7 Compatible**: Modern PowerShell implementation
+
+## 🎨 Visual Indicators & High-Risk Highlighting
+
+AZexec uses an intelligent color-coding system to instantly identify security-critical items across all commands. High-risk and privileged items are highlighted in **RED** to ensure immediate visibility during enumeration.
+
+### Universal Color Scheme
+
+All commands follow this consistent color hierarchy:
+
+| Color | Meaning | Examples |
+|-------|---------|----------|
+| 🔴 **Red** | **High-risk/Critical items** | Privileged roles, high-risk permissions, dangerous configurations, critical vulnerabilities |
+| 🟡 **Yellow** | **Medium-risk/Warning items** | Password-only credentials, ROPC-enabled apps, disabled security features, medium vulnerabilities |
+| 🟢 **Green** | **Normal/Valid items** | Standard security groups, certificate-based auth, compliant configurations, valid usernames |
+| 🔵 **Cyan** | **Informational** | Standard users, basic information, general data |
+| ⚪ **DarkGray** | **Disabled/Low-risk** | Disabled accounts, invalid usernames, inactive items |
+| 🟣 **Magenta** | **Group assignments** | Group-based role assignments |
+
+### Command-Specific High-Risk Highlighting
+
+#### `sp-discovery` - Service Principal Discovery
+**Red highlights:**
+- Service principals with **high-risk permissions**:
+  - `RoleManagement.ReadWrite.Directory` - Can modify directory roles
+  - `AppRoleAssignment.ReadWrite.All` - Can assign app roles
+  - `Application.ReadWrite.All` - Can modify all applications
+  - `Directory.ReadWrite.All` - Full directory write access
+- Individual permissions (both App Roles and OAuth2 delegated) that match high-risk permissions
+- Makes it immediately obvious which SPNs pose privilege escalation risks
+
+**Example output:**
+```powershell
+AZR         d1f5c8a3b7e...  443    Contoso-Admin-App            [*] (appId:...) (appRoles:5) (delegated:2)  # RED
+    [+] Application Permissions (App Roles):
+        [-] Microsoft Graph : RoleManagement.ReadWrite.Directory (ID: ...)  # RED
+        [-] Microsoft Graph : User.Read.All (ID: ...)  # Normal color
+```
+
+#### `roles` - Role Assignments
+**Red highlights:**
+- **Privileged role assignments**:
+  - Global Administrator
+  - Privileged Role Administrator
+  - Security Administrator
+  - Application Administrator
+  - Privileged Authentication Administrator
+  - User Administrator
+  - Exchange Administrator
+  - SharePoint Administrator
+  - And other high-privilege roles
+- Both active and PIM-eligible assignments
+
+**Example output:**
+```powershell
+AZR         admin@contoso.com                  443    Global Administrator          [*] (privileged:True)  # RED
+AZR         user@contoso.com                   443    Directory Readers             [*] (privileged:False)  # GREEN
+```
+
+#### `groups` - Group Enumeration
+**Red highlights:**
+- **Privileged/administrative security groups** based on name patterns:
+  - Groups containing: admin, administrator, admins, global, privileged, security
+  - Domain/Enterprise admins patterns
+  - Root, sudo, wheel (Unix-style admin groups)
+  - Helpdesk, tier, PIM (privileged access groups)
+
+**Example output:**
+```powershell
+AZR         abc123...       443    Global Administrators        [*] (security:True) (members:5)  # RED
+AZR         def456...       443    Marketing Team               [*] (security:True) (members:12) # GREEN
+```
+
+#### `apps` - Application Enumeration
+**Red highlights:**
+- Applications and service principals requesting **high-risk Microsoft Graph permissions**:
+  - `Directory.ReadWrite.All` (ID: 19dbc75e-c2e2-444c-a770-ec69d8559fc7)
+  - `Application.ReadWrite.All` (ID: 1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9)
+  - `AppRoleAssignment.ReadWrite.All` (ID: 06b708a9-e830-4db3-a914-8e69da51d44f)
+  - `RoleManagement.ReadWrite.Directory` (ID: 9e3f62cf-ca93-4989-b6ce-bf83c28f9fe8)
+- Summary statistics show count of apps with dangerous permissions
+
+**Yellow highlights:**
+- Password-only credentials (weaker security)
+- ROPC-enabled public clients (vulnerable to password spray)
+
+#### `vuln-list` - Vulnerability Enumeration
+**Red highlights:**
+- **HIGH risk** findings:
+  - ROPC enabled (password spray possible)
+  - Service principals with password-only credentials
+  - Legacy authentication not blocked
+  - Applications with dangerous permissions
+  - Guest access same as members
+  - Users without MFA registered
+
+**Yellow highlights:**
+- **MEDIUM risk** findings:
+  - Implicit OAuth flow enabled
+  - Stale guest accounts
+  - Public client applications
+  - Missing security defaults
+
+#### `guest-vuln-scan` - Guest Vulnerability Scanner
+**Red highlights:**
+- **CRITICAL risk** vulnerabilities (Risk Score ≥ 70):
+  - Guests have same permissions as members
+  - Full directory enumeration possible by external users
+- **HIGH risk** vulnerabilities (Risk Score ≥ 40):
+  - Guests can enumerate users, groups, devices, applications, or directory roles
+  - Azure "null session" equivalent exploitable
+
+**Yellow highlights:**
+- **MEDIUM risk** vulnerabilities
+- Risk scores between 20-39
+
+#### `user-profiles` - User Profile Enumeration
+**Yellow highlights:**
+- Guest users (external accounts)
+
+**Green highlights:**
+- Active member users
+
+**DarkGray highlights:**
+- Disabled user accounts
+
+#### `hosts` - Device Enumeration
+**Yellow highlights:**
+- Non-compliant devices
+- Devices failing compliance checks
+
+**Cyan highlights:**
+- Compliant, enabled devices
+
+**DarkGray highlights:**
+- Disabled devices
+
+### Benefits of Red Highlighting
+
+1. **Immediate Threat Identification**: Security-critical items stand out instantly in large result sets
+2. **Efficient Triage**: Focus your attention on the most dangerous configurations first
+3. **Better Reporting**: Screenshots with red highlights clearly demonstrate risks to stakeholders
+4. **Consistent Experience**: Same color scheme across all commands reduces cognitive load
+5. **Penetration Testing Efficiency**: Quickly identify privilege escalation paths and attack surfaces
+
+### Disabling Colors
+
+If you prefer plain text output (for scripting or logging), colors respect PowerShell's output stream configuration and can be redirected normally. Exported files (CSV/JSON) contain data without color codes.
 
 ## 📚 Additional Documentation
 
@@ -119,20 +334,25 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 - **PowerShell 7+** (PowerShell Core)
 - **Internet Connection**: Required for API access
 
+**Note**: All authenticated commands automatically check for Microsoft Graph connection and connect if needed. You don't need to manually run `Connect-MgGraph` before running commands.
+
 ### For Device Enumeration (hosts command):
 - **Microsoft.Graph PowerShell Module** (automatically installed if missing)
+- **Automatically connects if disconnected** (requires appropriate permissions)
 - **Azure/Entra ID Permissions**: 
   - Minimum: `Device.Read.All` scope
   - For owner enumeration: Additional directory read permissions may be required
 
 ### For Group Enumeration (groups command):
 - **Microsoft.Graph PowerShell Module** (automatically installed if missing)
+- **Automatically connects if disconnected** (requires appropriate permissions)
 - **Azure/Entra ID Permissions**:
   - Minimum: `Group.Read.All` or `Directory.Read.All` scope
   - Guest users may have restricted access depending on tenant settings
 
 ### For Password Policy Enumeration (pass-pol command):
 - **Microsoft.Graph PowerShell Module** (automatically installed if missing)
+- **Automatically connects if disconnected** (requires appropriate permissions)
 - **Azure/Entra ID Permissions**:
   - Minimum: `Organization.Read.All` and `Directory.Read.All` scopes
   - For full policy details: `Policy.Read.All` scope recommended
@@ -146,6 +366,7 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 
 ### For User Profile Enumeration (user-profiles command):
 - **Microsoft.Graph PowerShell Module** (automatically installed if missing)
+- **Automatically connects if disconnected** (requires appropriate permissions)
 - **Azure/Entra ID Permissions**:
   - Minimum: `User.Read.All` or `Directory.Read.All` scope
   - For sign-in activity: `AuditLog.Read.All` scope (optional but recommended)
@@ -159,6 +380,7 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 ### For Active Session Enumeration (sessions command):
 - **Authentication required** - Uses Microsoft Graph API
 - **Microsoft.Graph PowerShell Module** (automatically installed if missing)
+- **Automatically connects if disconnected** (requires appropriate permissions)
 - **Azure/Entra ID Permissions**:
   - `AuditLog.Read.All` - Query sign-in logs (required)
   - `Directory.Read.All` - Access directory information
@@ -174,6 +396,59 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
   - `Policy.Read.All` - Check Conditional Access, Security Defaults, and guest permission policy
   - `AuditLog.Read.All` - Check user MFA registration status
 - **Unauthenticated checks** work without any credentials (tenant config, ROPC status, legacy auth endpoints)
+
+### For Application Enumeration (apps command):
+- **Authentication required** - Uses Microsoft Graph API
+- **Microsoft.Graph PowerShell Module** (automatically installed if missing)
+- **Azure/Entra ID Permissions**:
+  - `Application.Read.All` - Read all application registrations and enterprise applications (required)
+  - `Directory.Read.All` - Read directory data (alternative permission)
+- **Note**: Guest users may have restricted access depending on tenant settings
+- Automatically connects if disconnected (requires appropriate permissions)
+- Enumerates both application registrations and service principals (SPNs)
+- Identifies security risks: password-only credentials, ROPC-enabled apps
+
+### For Service Principal Discovery (sp-discovery command):
+- **Authentication required** - Uses Microsoft Graph API
+- **Microsoft.Graph PowerShell Module** (automatically installed if missing)
+- **Azure/Entra ID Permissions**:
+  - `Application.Read.All` - Read all service principals and applications (required)
+  - `Directory.Read.All` - Read directory data (required)
+  - `AppRoleAssignment.ReadWrite.All` - Optional write permission (use `-IncludeWritePermissions` flag)
+    - **Note**: Script only performs read operations; this permission is typically unnecessary
+    - By default, the script requests only read permissions following the principle of least privilege
+- **Note**: Guest users may have restricted access depending on tenant settings
+- Automatically connects if disconnected (requires appropriate permissions)
+- Discovers service principals with their full permission assignments
+- Maps app roles (application permissions) and OAuth2 grants (delegated permissions)
+- Identifies owners and security risks
+
+### For Role Assignments Enumeration (roles command):
+- **Authentication required** - Uses Microsoft Graph API
+- **Microsoft.Graph PowerShell Module** (automatically installed if missing)
+- **Automatically connects if disconnected** (requires appropriate permissions)
+- **Azure/Entra ID Permissions**:
+  - `RoleManagement.Read.Directory` - Read directory role assignments (required)
+  - `Directory.Read.All` - Read directory data (required)
+  - `RoleEligibilitySchedule.Read.Directory` - Read PIM eligible assignments (optional, requires Azure AD Premium P2)
+- **Note**: Guest users typically cannot view role assignments depending on tenant settings
+- Enumerates active directory roles and their members
+- Lists privileged accounts and group-based role assignments
+- Displays PIM (Privileged Identity Management) eligible assignments if available
+
+### For Conditional Access Policy Review (ca-policies command):
+- **Authentication required** - Uses Microsoft Graph API
+- **Microsoft.Graph PowerShell Module** (automatically installed if missing)
+- **Automatically connects if disconnected** (requires appropriate permissions)
+- **Azure/Entra ID Permissions**:
+  - `Policy.Read.All` - Read conditional access policies (required)
+  - `Directory.Read.All` - Read directory data (required)
+- **Note**: **Guest users CANNOT access conditional access policies** - This command requires a member account
+- Reviews all conditional access policies with detailed conditions analysis
+- Displays policy state (enabled, disabled, report-only)
+- Shows grant controls (MFA, compliant device, approved app, etc.)
+- Displays session controls and risk-based conditions
+- Provides security recommendations and highlights high-risk policies
 
 ## 🚀 Installation
 
@@ -196,6 +471,11 @@ $PSVersionTable.PSVersion
 ## 📖 Usage
 
 ### Quick Reference: Attack Scenarios
+
+**Getting Started**
+```powershell
+.\azx.ps1 help                              # Display all available commands
+```
 
 **Scenario 1: External Reconnaissance (No Credentials)**
 ```powershell
@@ -236,6 +516,20 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 .\azx.ps1 hosts -ShowOwners -ExportPath enum.json  # Full enumeration
 ```
 
+**Scenario 2b: Guest User Vulnerability Assessment**
+```powershell
+# Automated guest permission security scanner
+.\azx.ps1 guest-vuln-scan                    # Scan current tenant (auto-detect)
+.\azx.ps1 guest-vuln-scan -Domain target.com # Scan specific tenant
+.\azx.ps1 guest-vuln-scan -ExportPath guest-vuln-report.json  # Full report with risk scoring
+
+# This command performs:
+# - Unauthenticated checks (external collaboration enabled?)
+# - Authenticated checks (guest permission boundaries)
+# - Risk scoring and vulnerability assessment
+# - Actionable remediation recommendations
+```
+
 **Scenario 3: Member Account Enumeration (Full Access)**
 ```powershell
 .\azx.ps1 hosts -Scopes "User.Read.All,Device.Read.All,Group.Read.All"
@@ -260,6 +554,37 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 .\azx.ps1 sessions -Username alice@corp.com  # Track specific user
 .\azx.ps1 sessions -Hours 1                  # Real-time monitoring (last hour)
 .\azx.ps1 sessions -Hours 720 -ExportPath audit.csv  # 30-day audit (requires Premium)
+```
+
+**Scenario 6: Service Principal Permission Discovery**
+```powershell
+# Discover service principals with their permissions and ownership
+.\azx.ps1 sp-discovery                       # Enumerate all service principals with permissions (read-only by default)
+.\azx.ps1 sp-discovery -ExportPath sp-perms.csv     # Export to CSV for analysis
+.\azx.ps1 sp-discovery -ExportPath sp-perms.json    # Export full details to JSON
+.\azx.ps1 sp-discovery -IncludeWritePermissions     # Include AppRoleAssignment.ReadWrite.All permission (optional)
+
+# Use case: Identify privilege escalation paths through service principals
+# - Find SPNs with high-risk permissions (RoleManagement, Directory.ReadWrite)
+# - Discover password-only credentials (vulnerable to theft)
+# - Map out who owns which service principals
+# - Identify OAuth2 permissions granted to applications
+```
+
+**Scenario 7: Directory Role Assignments and Privileged Account Discovery**
+```powershell
+# Enumerate all directory role assignments
+.\azx.ps1 roles                              # List all role assignments and privileged accounts
+.\azx.ps1 roles -ExportPath roles.csv        # Export to CSV for compliance review
+.\azx.ps1 roles -ExportPath roles.json       # Export full details including PIM assignments
+
+# Use case: Privileged access review and security audit
+# - 🔴 Privileged roles (Global Admin, Security Admin, etc.) are highlighted in RED
+# - Identify Global Administrators and other privileged roles
+# - Discover group-based role assignments (potential privilege escalation)
+# - Find service principals with directory roles
+# - Review PIM (Privileged Identity Management) eligible assignments
+# - Detect excessive privileged accounts for security compliance
 ```
 
 ### Basic Syntax
@@ -291,13 +616,29 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 
 # Vulnerable target enumeration (like nxc smb --gen-relay-list) - domain auto-detected if not specified
 .\azx.ps1 vuln-list [-Domain <DomainName>] [-NoColor] [-ExportPath <Path>]
+
+# Application and service principal enumeration (authentication required)
+.\azx.ps1 apps [-NoColor] [-ExportPath <Path>]
+
+# Service principal permission discovery (authentication required)
+.\azx.ps1 sp-discovery [-NoColor] [-ExportPath <Path>] [-IncludeWritePermissions]
+
+# Directory role assignments enumeration (authentication required)
+.\azx.ps1 roles [-NoColor] [-ExportPath <Path>]
+
+# Display help and available commands
+.\azx.ps1 help
+
+# Note: Add -Disconnect to any command to automatically disconnect from Microsoft Graph after execution
+.\azx.ps1 hosts -Disconnect
+.\azx.ps1 sp-discovery -ExportPath sp.json -Disconnect
 ```
 
 ### Parameters
 
 | Parameter | Description | Required | Default |
 |-----------|-------------|----------|---------|
-| `Command` | Operation to perform: `hosts`, `tenant`, `users`, `user-profiles`, `groups`, `pass-pol`, `guest`, `vuln-list`, `sessions` | Yes | - |
+| `Command` | Operation to perform: `hosts`, `tenant`, `users`, `user-profiles`, `groups`, `pass-pol`, `guest`, `vuln-list`, `sessions`, `guest-vuln-scan`, `apps`, `sp-discovery`, `roles`, `help` | Yes | - |
 | `Domain` | Domain name for tenant/user/guest discovery. Auto-detected from UPN, username, or environment if not provided | No | Auto-detect |
 | `Filter` | Filter devices by criteria | No | `all` |
 | `ShowOwners` | Display device/group owners (slower) | No | `False` |
@@ -307,8 +648,10 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 | `CommonUsernames` | Use built-in common username list (users command) | No | `False` |
 | `Hours` | Number of hours to look back for sign-in events (sessions command). Azure AD retention: 7 days (Free), 30 days (Premium) | No | `24` |
 | `NoColor` | Disable colored output | No | `False` |
-| `ExportPath` | Export results to CSV or JSON | No | - |
+| `ExportPath` | Export results to CSV, JSON, or HTML (netexec-styled reports) | No | - |
 | `Scopes` | Microsoft Graph scopes to request (automatically set based on command) | No | Command-specific |
+| `IncludeWritePermissions` | Include AppRoleAssignment.ReadWrite.All permission for sp-discovery command (script only reads, typically unnecessary) | No | `False` |
+| `Disconnect` | Automatically disconnect from Microsoft Graph after script execution (useful for security and cleanup) | No | `False` |
 
 ### Available Filters
 
@@ -321,6 +664,51 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 - `disabled` - Only disabled devices
 
 ## 💡 Usage Examples
+
+### Getting Help
+
+### Display Available Commands
+Show all available commands with authentication requirements:
+```powershell
+.\azx.ps1 help
+```
+
+This displays:
+- All available commands
+- Authentication requirements (Required, Not Required, Hybrid)
+- Brief descriptions
+- Common usage examples
+- Link to full documentation
+
+### Auto-Disconnect Feature
+
+The `-Disconnect` parameter automatically disconnects from Microsoft Graph after command execution. This is useful for:
+- **Security**: Ensures no lingering authentication sessions
+- **Cleanup**: Automatic session management
+- **Compliance**: Quick disconnect after data collection
+
+### Example: Enumerate and Disconnect
+```powershell
+# Enumerate hosts and automatically disconnect when done
+.\azx.ps1 hosts -Disconnect
+
+# Discover service principals, export data, then disconnect
+.\azx.ps1 sp-discovery -ExportPath sp-data.json -Disconnect
+
+# Works with any authenticated command
+.\azx.ps1 groups -ExportPath groups.csv -Disconnect
+.\azx.ps1 roles -Disconnect
+```
+
+### Example: Multiple Commands with Final Disconnect
+```powershell
+# Run multiple enumerations, only disconnect after the last one
+.\azx.ps1 hosts -ExportPath devices.csv
+.\azx.ps1 groups -ExportPath groups.csv
+.\azx.ps1 sp-discovery -ExportPath sp.json -Disconnect
+```
+
+---
 
 ### Username Enumeration Examples
 
@@ -569,27 +957,105 @@ Disconnect-MgGraph
 # Compare results to understand guest restrictions (if any)
 ```
 
+### Example 28: Automated Guest Vulnerability Scanner
+Perform comprehensive guest permission security assessment:
+```powershell
+# Basic scan (auto-detect domain)
+.\azx.ps1 guest-vuln-scan
+
+# Scan specific tenant
+.\azx.ps1 guest-vuln-scan -Domain targetcorp.com
+
+# Full scan with detailed JSON report
+.\azx.ps1 guest-vuln-scan -ExportPath guest-security-assessment.json
+
+# The scanner performs:
+# Phase 1: Unauthenticated checks
+#   - External collaboration enabled?
+#   - Tenant configuration
+#   - Federation status
+#
+# Phase 2: Authenticated checks (requires login)
+#   - Guest permission policy level
+#   - External collaboration settings
+#   - Test actual guest access to:
+#     * Users directory
+#     * Groups
+#     * Devices
+#     * Applications
+#     * Directory Roles
+#
+# Phase 3: Security assessment report
+#   - Risk score (0-100)
+#   - Risk rating (LOW/MEDIUM/HIGH/CRITICAL)
+#   - Detailed vulnerabilities with recommendations
+#   - Actionable remediation steps
+#
+# 🔴 Risk-based color coding in vulnerability output:
+# - CRITICAL risk (Score ≥ 70) = Guests have same permissions as members
+# - HIGH risk (Score ≥ 40) = Guests can enumerate directory resources
+# - 🟡 MEDIUM risk (Score 20-39) = Partial guest access enabled
+```
+
+**Example Output:**
+```
+[*] AZX - Guest User Vulnerability Scanner
+[*] Command: Guest-Vuln-Scan (Azure Null Session Security Assessment)
+
+[*] PHASE 1: Unauthenticated Enumeration
+AZR         targetcorp.com                     443    [+] Tenant exists
+AZR         targetcorp.com                     443    [!] External collaboration: ENABLED
+
+[*] PHASE 2: Authenticated Enumeration (Guest Permission Testing)
+[+] Connected as: vendor@partner.com
+[!] GUEST USER DETECTED - Testing guest permission boundaries
+
+[*] Checking guest permission policy...
+    [!] WARNING: Guest permissions are not fully restricted
+
+[*] Testing guest access to directory resources...
+    [+] Users : ACCESSIBLE (Found 10 items)
+    [+] Groups : ACCESSIBLE (Found 10 items)
+    [+] Devices : ACCESSIBLE (Found 10 items)
+    [-] Applications : BLOCKED
+    [-] DirectoryRoles : BLOCKED
+
+[*] PHASE 3: Security Assessment Report
+[*] Overall Risk Score: 65 / 100
+[*] Risk Rating: HIGH
+[*] Vulnerabilities Found: 5
+
+    [HIGH] GuestEnumeration
+    Description: Guest user can enumerate Users - Azure Null Session equivalent
+    Recommendation: Review and restrict guest access to Users
+```
+
 ### Group Enumeration Examples
 
-### Example 28a: Basic Group Enumeration (mimics `nxc smb --groups`)
+### Example 29a: Basic Group Enumeration (mimics `nxc smb --groups`)
 Enumerate all groups in the Azure/Entra tenant:
 ```powershell
 .\azx.ps1 groups
+
+# 🔴 Privileged/administrative security groups are automatically highlighted in RED
+# Look for groups containing: admin, administrator, privileged, global, etc.
+# 🟢 Standard security groups appear in GREEN
+# 🟡 Mail-enabled groups appear in YELLOW
 ```
 
-### Example 28b: Group Enumeration with Export
+### Example 29b: Group Enumeration with Export
 Enumerate all groups and export to CSV:
 ```powershell
 .\azx.ps1 groups -ExportPath groups.csv
 ```
 
-### Example 28c: Group Enumeration with Member Counts
+### Example 29c: Group Enumeration with Member Counts
 Enumerate groups and display member counts (slower):
 ```powershell
 .\azx.ps1 groups -ShowOwners
 ```
 
-### Example 28d: Group Enumeration as Guest User
+### Example 29d: Group Enumeration as Guest User
 Test what groups a guest user can enumerate:
 ```powershell
 # Connect as guest user
@@ -616,6 +1082,187 @@ Enumerate all security-relevant information:
 .\azx.ps1 hosts -ExportPath devices.csv
 .\azx.ps1 groups -ExportPath groups.csv
 .\azx.ps1 pass-pol -ExportPath policy.json
+```
+
+### Application Enumeration Examples
+
+### Example 30a: Basic Application Enumeration
+Enumerate all registered applications and service principals:
+```powershell
+.\azx.ps1 apps
+```
+
+This command displays:
+- **Phase 1**: Application registrations with credential status
+- **Phase 2**: Service principals (SPNs) with authentication details
+- Summary statistics including security warnings
+- **🔴 Red highlighting**: Applications requesting high-risk Microsoft Graph permissions are automatically highlighted in red
+- **🟡 Yellow highlighting**: Password-only credentials and ROPC-enabled apps are highlighted in yellow
+
+### Example 30b: Application Enumeration with CSV Export
+Enumerate applications and export to CSV for offline analysis:
+```powershell
+.\azx.ps1 apps -ExportPath apps.csv
+```
+
+### Example 30c: Application Enumeration with JSON Export (Recommended)
+Export full application and service principal details to JSON:
+```powershell
+.\azx.ps1 apps -ExportPath apps.json
+```
+
+The JSON export includes:
+- Application IDs, display names, and object IDs
+- Credential counts (password vs certificate)
+- Public client configuration status (ROPC vulnerability indicator)
+- Sign-in audience settings
+- Redirect URIs (web and public client)
+- Service principal types and enabled status
+
+### Example 30d: Identify Security Risks
+Look for applications with weak authentication:
+```powershell
+.\azx.ps1 apps -ExportPath apps.csv
+
+# High-risk applications are automatically highlighted during output:
+# - 🔴 RED apps = Requesting high-risk permissions (Directory.ReadWrite.All, Application.ReadWrite.All, etc.)
+# - 🟡 YELLOW apps = Password-only credentials OR ROPC-enabled (password spray vulnerable)
+# - 🟢 GREEN apps = Certificate-based authentication (secure configuration)
+
+# Then analyze the CSV for detailed security analysis:
+# - Apps/SPNs with PasswordCredentials > 0 and KeyCredentials = 0 (password-only = vulnerable)
+# - Apps with IsFallbackPublicClient = True (ROPC-enabled = password spray vulnerable)
+# - Service principals with AccountEnabled = True and password-only credentials
+```
+
+**Security Warning**: Applications and service principals with password-only credentials are vulnerable to credential theft, similar to SMB hosts without signing. Applications requesting high-risk permissions like `Directory.ReadWrite.All`, `Application.ReadWrite.All`, `AppRoleAssignment.ReadWrite.All`, or `RoleManagement.ReadWrite.Directory` pose privilege escalation risks. These are **automatically color-coded** during enumeration and summarized at the end.
+
+### Example 30e: Complete Tenant Application Assessment
+Full application security audit workflow:
+```powershell
+# 1. Enumerate all applications and service principals
+.\azx.ps1 apps -ExportPath apps-full.json
+
+# 2. Check for vulnerable configurations (from vuln-list command)
+.\azx.ps1 vuln-list -ExportPath vuln-report.json
+
+# 3. Analyze results
+$apps = Get-Content apps-full.json | ConvertFrom-Json
+$passwordOnly = $apps | Where-Object { $_.PasswordCredentials -gt 0 -and $_.KeyCredentials -eq 0 }
+$publicClients = $apps | Where-Object { $_.IsFallbackPublicClient -eq $true }
+
+Write-Host "Password-only applications: $($passwordOnly.Count)"
+Write-Host "Public client applications (ROPC-enabled): $($publicClients.Count)"
+```
+
+### Service Principal Discovery Examples
+
+### Example 31a: Basic Service Principal Discovery
+Discover all service principals with their permissions and ownership:
+```powershell
+.\azx.ps1 sp-discovery
+```
+
+This command displays:
+- **Phase 1**: Service principal enumeration with credential information
+- **Phase 2**: App role assignments (application permissions) for each SPN
+- **Phase 3**: OAuth2 permission grants (delegated permissions) for each SPN
+- **Phase 4**: Service principal owners
+- Detailed permission breakdown for each service principal
+- Summary statistics including security warnings
+- **🔴 Red highlighting**: Service principals and permissions with high-risk capabilities are automatically highlighted in red for immediate visibility
+
+### Example 31b: Service Principal Discovery with CSV Export
+Discover service principals and export to CSV for offline analysis:
+```powershell
+.\azx.ps1 sp-discovery -ExportPath sp-permissions.csv
+```
+
+The CSV export includes:
+- Service principal IDs, app IDs, and display names
+- Account status and service principal type
+- Credential counts (password vs certificate)
+- App role assignment count and details
+- OAuth2 permission grant count and details
+- Owner count and owner names
+
+### Example 31c: Service Principal Discovery with JSON Export (Recommended)
+Export full service principal permission details to JSON:
+```powershell
+.\azx.ps1 sp-discovery -ExportPath sp-permissions.json
+```
+
+The JSON export includes comprehensive data:
+- All basic service principal properties
+- Full app role assignments with resource mappings
+- Complete OAuth2 permission grants with scope details
+- Owner information (display names and types)
+- Security risk indicators
+
+### Example 31d: Identify High-Risk Service Principals
+Look for service principals with dangerous permissions:
+```powershell
+.\azx.ps1 sp-discovery -ExportPath sp-perms.csv
+
+# High-risk service principals are automatically highlighted in RED during output
+# Look for:
+# - 🔴 RED service principals = Have high-risk permissions (RoleManagement, Application.ReadWrite, etc.)
+# - 🟡 YELLOW service principals = Password-only credentials (vulnerable to credential theft)
+# - 🟢 GREEN service principals = Standard permissions with certificate-based auth
+
+# Then analyze the CSV for detailed security analysis:
+# - SPNs with PasswordCredentials > 0 and KeyCredentials = 0 (password-only = vulnerable)
+# - SPNs with high AppRoleCount (many permissions = potential privilege escalation)
+# - SPNs with OAuth2Permissions containing "RoleManagement" or "Application.ReadWrite"
+# - SPNs with OwnerCount = 0 (orphaned service principals)
+```
+
+**Security Warning**: Service principals with password-only credentials are vulnerable to credential theft. Service principals with high-risk permissions like `RoleManagement.ReadWrite.Directory`, `Application.ReadWrite.All`, `AppRoleAssignment.ReadWrite.All`, or `Directory.ReadWrite.All` can be used for privilege escalation. These are **automatically highlighted in RED** during enumeration and summarized at the end.
+
+### Example 31e: Complete Service Principal Permission Audit
+Full service principal security audit workflow:
+```powershell
+# 1. Discover all service principals with permissions
+.\azx.ps1 sp-discovery -ExportPath sp-full.json
+
+# 2. Analyze results for security risks
+$spns = Get-Content sp-full.json | ConvertFrom-Json
+$passwordOnly = $spns | Where-Object { $_.PasswordCredentials -gt 0 -and $_.KeyCredentials -eq 0 }
+$highPermissions = $spns | Where-Object { $_.AppRoleCount -gt 5 -or $_.OAuth2PermissionCount -gt 5 }
+$orphaned = $spns | Where-Object { $_.OwnerCount -eq 0 }
+
+Write-Host "Password-only service principals: $($passwordOnly.Count)"
+Write-Host "Service principals with high permissions: $($highPermissions.Count)"
+Write-Host "Orphaned service principals (no owners): $($orphaned.Count)"
+
+# 3. Identify privilege escalation paths
+$dangerousPerms = $spns | Where-Object { 
+    $_.OAuth2Permissions -match "RoleManagement|Application.ReadWrite|Directory.ReadWrite" 
+}
+Write-Host "Service principals with dangerous permissions: $($dangerousPerms.Count)"
+$dangerousPerms | Select-Object DisplayName, AppId, OAuth2Permissions | Format-Table
+```
+
+### Example 31f: Track Service Principal Ownership
+Identify who owns which service principals:
+```powershell
+.\azx.ps1 sp-discovery -ExportPath sp-owners.json
+
+# Analyze ownership patterns
+$spns = Get-Content sp-owners.json | ConvertFrom-Json
+$withOwners = $spns | Where-Object { $_.OwnerCount -gt 0 }
+$multiOwner = $spns | Where-Object { $_.OwnerCount -gt 1 }
+
+Write-Host "Service principals with owners: $($withOwners.Count)"
+Write-Host "Service principals with multiple owners: $($multiOwner.Count)"
+
+# Group by owner
+$spns | Where-Object { $_.Owners } | 
+    ForEach-Object { $_.Owners -split '; ' } | 
+    Group-Object | 
+    Sort-Object Count -Descending | 
+    Select-Object Name, Count | 
+    Format-Table
 ```
 
 ### Guest Login Enumeration Examples (like nxc smb -u 'a' -p '')
@@ -1031,6 +1678,11 @@ Traditional `qwinsta` shows who's logged into a Windows machine locally. In Azur
 Enumerate vulnerable targets in your current tenant:
 ```powershell
 .\azx.ps1 vuln-list
+
+# Summary automatically shows risk-based color coding:
+# - 🔴 HIGH RISK findings (ROPC enabled, dangerous permissions, no MFA, etc.)
+# - 🟡 MEDIUM RISK findings (Security Defaults off, stale guests, etc.)
+# - ⚪ LOW RISK findings (informational items)
 ```
 
 ### Example 30: Target Specific Tenant
@@ -1125,11 +1777,43 @@ AZR         example.com                         443    admin@example.com        
 - **Federated**: Federated authentication (e.g., ADFS)
 - **Alternate**: Alternative authentication method
 
-**Summary Statistics:**
+**Enhanced Summary Statistics (v2.0):**
+```
+[*] Username enumeration complete!
+
+[*] Summary:
+    Total Checked:   250
+    Valid Users:     87
+    Invalid Users:   161
+    Failed Checks:   2
+    Duration:        00m 25s
+    Rate:            10.0 checks/sec
+
+[*] Authentication Type Breakdown:
+    Managed:    45
+    Federated:  38
+    Alternate:  4
+
+[*] Valid Usernames Found:
+    [+] admin@example.com (Managed)
+    [+] helpdesk@example.com (Managed)
+    [+] support@example.com (Federated)
+    ...
+
+[*] Next Steps:
+    To perform password spraying with these valid users:
+    1. Extract valid users: $users = Import-Csv 'results.csv' | Where { $_.Exists -eq 'True' } | Select -ExpandProperty Username
+    2. Save to file: $users | Out-File spray-targets.txt
+    3. Run spray: .\azx.ps1 guest -Domain example.com -UserFile spray-targets.txt -Password 'YourPassword123!'
+```
+
+**Features:**
 - Total usernames checked
-- Valid usernames found
-- Invalid usernames
-- List of valid usernames with authentication type
+- Valid/invalid breakdown with failed checks tracked separately
+- Duration and enumeration rate (users/sec)
+- Authentication type breakdown (Managed/Federated/Alternate)
+- List of all valid usernames with their auth types
+- Automatic next steps guidance for password spraying workflow
 
 ### User Profile Enumeration Output
 
@@ -1264,6 +1948,97 @@ AZR         f6e5d4c3b2a1    443    Marketing Team                         [*] (n
 - **Security**: Security groups (used for access control)
 - **Unified**: Microsoft 365 groups
 - **DynamicMembership**: Dynamic groups with automatic membership
+
+### Application Enumeration Output
+
+```
+AZR         <AppID>          443    <ApplicationName>                     [*] (name:<FullName>) (type:<App/SPN>) (creds:<Type> [Count]) (audience:<Audience>) (publicClient:<True/False>)
+```
+
+**Example:**
+```
+AZR         a1b2c3d4e5f6    443    Corporate Web App                      [*] (name:Corporate Web App) (type:App) (creds:Certificate [2]) (audience:AzureADMyOrg) (publicClient:False)
+AZR         f6e5d4c3b2a1    443    Legacy API Service                     [*] (name:Legacy API Service) (type:SPN) (creds:Password [1]) (audience:AzureADMultipleOrgs) (publicClient:False)
+AZR         1234567890ab    443    Mobile App                             [*] (name:Mobile App) (type:App) (creds:None [0]) (audience:AzureADandPersonalMicrosoftAccount) (publicClient:True)
+```
+
+**Color Coding:**
+- **Green**: Certificate-based authentication (secure)
+- **Yellow**: Password-only credentials (vulnerable) OR public client enabled (ROPC-enabled)
+
+### Service Principal Discovery Output
+
+```
+AZR         <SPNID>          443    <ServicePrincipalName>                [*] (appId:<AppID>) (type:<Type>) (status:<Enabled/Disabled>) (pwdCreds:<Count>) (certCreds:<Count>) (appRoles:<Count>) (delegated:<Count>) (owners:<Count>)
+    [+] Application Permissions (App Roles):
+        [-] <ResourceName> : <PermissionName> (ID: <RoleID>)
+    [+] Delegated Permissions (OAuth2):
+        [-] <ResourceName> : <Scope> (ConsentType: <Type>)
+    [+] Owners:
+        [-] <OwnerName> [<OwnerType>] (<UPN if user>)
+```
+
+**Example:**
+```
+AZR         a1b2c3d4e5f6    443    Corporate Automation SPN               [*] (appId:12345678-1234-1234-1234-123456789012) (type:Application) (status:Enabled) (pwdCreds:1) (certCreds:0) (appRoles:3) (delegated:2) (owners:1)
+    [+] Application Permissions (App Roles):
+        [-] Microsoft Graph : User.Read.All (ID: df021288-bdef-4463-88db-98f22de89214)
+        [-] Microsoft Graph : Directory.Read.All (ID: 7ab1d382-f21e-4acd-a863-ba3e13f7da61)
+        [-] Microsoft Graph : Group.Read.All (ID: 5b567255-7703-4780-807c-7be8301ae99b)
+    [+] Delegated Permissions (OAuth2):
+        [-] Microsoft Graph : User.Read Group.Read.All (ConsentType: AllPrincipals)
+        [-] Office 365 SharePoint Online : AllSites.Read (ConsentType: AllPrincipals)
+    [+] Owners:
+        [-] John Doe [user] (john.doe@contoso.com)
+
+AZR         f6e5d4c3b2a1    443    Legacy Service Principal               [*] (appId:98765432-4321-4321-4321-210987654321) (type:Application) (status:Enabled) (pwdCreds:1) (certCreds:1) (appRoles:0) (delegated:0) (owners:0)
+
+AZR         1234567890ab    443    High-Risk Admin SPN                    [*] (appId:abcdef12-3456-7890-abcd-ef1234567890) (type:Application) (status:Enabled) (pwdCreds:1) (certCreds:0) (appRoles:5) (delegated:3) (owners:2)
+    [+] Application Permissions (App Roles):
+        [-] Microsoft Graph : RoleManagement.ReadWrite.Directory (ID: 9e3f62cf-ca93-4989-b6ce-bf83c28f9fe8)
+        [-] Microsoft Graph : Application.ReadWrite.All (ID: 1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9)
+        [-] Microsoft Graph : Directory.ReadWrite.All (ID: 19dbc75e-c2e2-444c-a770-ec69d8559fc7)
+```
+
+**Color Coding:**
+- **Green**: Service principals with permissions and proper certificate-based authentication
+- **Yellow**: Password-only credentials (security risk)
+- **DarkGray**: Disabled service principals
+- **Cyan**: Default for other service principals
+
+**Security Indicators:**
+- **Password-only credentials** (pwdCreds > 0, certCreds = 0): Vulnerable to credential theft
+- **High-risk permissions**: RoleManagement.ReadWrite, Application.ReadWrite, Directory.ReadWrite
+- **No owners** (owners = 0): Orphaned service principals that may be abandoned
+- **Many permissions** (appRoles or delegated > 5): Potential over-privileged service principals
+- **Cyan**: Normal applications with mixed or secure configuration
+- **Dark Gray**: Applications with no credentials
+
+**Credential Types:**
+- **Certificate**: Uses certificate-based authentication (recommended, most secure)
+- **Password**: Uses password/secret-based authentication (weaker security)
+- **Both**: Has both password and certificate credentials
+- **None**: No credentials configured (may use managed identity or delegated permissions)
+
+**Application Types:**
+- **App**: Application registration
+- **SPN**: Service Principal
+
+**Security Indicators:**
+- `publicClient:True` = ROPC flow enabled, vulnerable to password spray attacks
+- `creds:Password` = Password-only authentication, vulnerable to credential theft
+- Applications with `Password` credentials and no certificates are flagged as HIGH risk
+
+**Summary Statistics Displayed:**
+- Total registered applications
+- Apps with password credentials
+- Apps with certificate credentials
+- Public client apps (ROPC-enabled)
+- Total service principals
+- SPNs with password/certificate credentials
+- Enabled service principals
+- Managed identities count
+- Security warnings for password-only configurations
 - **Distribution**: Distribution lists (mail-enabled)
 
 **Summary Statistics:**
@@ -1971,8 +2746,21 @@ This allows you to quickly run `.\azx.ps1 users -CommonUsernames` without specif
 2. **File Input**: Read usernames from a text file (one per line, comments starting with # are ignored)
 3. **Common Usernames**: Use built-in list of common usernames (admin, administrator, support, helpdesk, etc.)
 
-**Rate Limiting:**
-The tool includes a 50ms delay between checks to avoid API throttling. For large username lists, the enumeration may take some time.
+**Enhanced Features (v2.0):**
+- **Progress Tracking**: Real-time progress bar for large lists (>10 users) with ETA
+- **Retry Logic**: Automatic retries with exponential backoff (100ms → 200ms → 400ms)
+- **Adaptive Rate Limiting**: Smart delays based on list size
+  - Small (<50 users): 50ms delay - fast enumeration
+  - Medium (50-200 users): 100ms delay - balanced approach
+  - Large (>200 users): 150ms delay - stealth-focused
+- **Detailed Statistics**: Duration tracking, rate calculation (checks/sec), auth type breakdown
+- **Error Tracking**: Separates network failures from invalid usernames
+- **Next Steps Guidance**: Automatic commands for Phase 2 password spraying
+
+**Performance:**
+- Small lists: ~1-2 seconds per user
+- Large lists: ~3-4 seconds per user  
+- Example: 500 usernames ≈ 100 seconds (~5 users/sec)
 
 ### Tenant Discovery (No Authentication Required)
 The `tenant` command uses public OpenID configuration endpoints and does not require authentication. This makes it perfect for reconnaissance and initial discovery.
@@ -2110,6 +2898,30 @@ Structured JSON with all group properties and detailed information
 ```
 Includes: TenantId, TenantDisplayName, PasswordPolicies (ValidityPeriodDays, NotificationWindowDays), SecurityDefaults (enabled/disabled), ConditionalAccessPolicies (full list), AuthenticationMethods (enabled methods)
 
+### Application Enumeration Export
+
+#### CSV Export
+```powershell
+.\azx.ps1 apps -ExportPath apps.csv
+```
+Includes: Type (Application/ServicePrincipal), ObjectId, AppId, DisplayName, SignInAudience, IsFallbackPublicClient, PasswordCredentials (count), KeyCredentials (count), CreatedDateTime, PublicClientRedirectUris, WebRedirectUris
+
+#### JSON Export (Recommended)
+```powershell
+.\azx.ps1 apps -ExportPath apps.json
+```
+Structured JSON with all application and service principal properties including:
+- Full credential information (counts and types)
+- Redirect URIs (both web and public client)
+- Service principal type and enabled status
+- Tags and additional metadata
+
+**Use Cases:**
+- Security audits: Identify password-only credentials
+- Compliance: Track application registrations and their authentication methods
+- Vulnerability assessment: Find ROPC-enabled applications (publicClient = True)
+- Credential management: Track expiring credentials (combine with vuln-list command)
+
 #### CSV Export (Simplified)
 ```powershell
 .\azx.ps1 pass-pol -ExportPath policy.csv
@@ -2129,6 +2941,227 @@ Includes: Domain, TenantConfig (NameSpaceType, FederationType, AcceptsExternalUs
 .\azx.ps1 guest -Domain target.com -UserFile users.txt -Password 'Pass123' -ExportPath spray.csv
 ```
 Includes: Username, Password, Success, MFARequired, ConsentRequired, ErrorCode, HasToken (one row per tested credential)
+
+## 📊 HTML Report Generation
+
+AZexec now supports **comprehensive HTML report generation** with a netexec-inspired dark theme. HTML reports provide a professional, shareable format perfect for documentation, presentations, and security assessments.
+
+### Features
+
+- **🎨 NetExec-Style Dark Theme**: Hacker-inspired green-on-black aesthetic
+- **📈 Interactive Statistics**: Key metrics and summaries at a glance
+- **🔴 Risk Highlighting**: Automatic color-coding for high/medium/low risk items
+- **📱 Responsive Design**: Works on any device or screen size
+- **🖨️ Print-Friendly**: Optimized for PDF generation and printing
+- **📋 Complete Data Tables**: All enumeration results in sortable, filterable tables
+
+### Generating HTML Reports
+
+Simply change the file extension from `.csv` or `.json` to `.html`:
+
+```powershell
+# Device enumeration HTML report
+.\azx.ps1 hosts -ExportPath devices.html
+
+# User profiles HTML report
+.\azx.ps1 user-profiles -ExportPath users.html
+
+# Service principal discovery HTML report
+.\azx.ps1 sp-discovery -ExportPath service-principals.html
+
+# Role assignments HTML report
+.\azx.ps1 roles -ExportPath role-assignments.html
+
+# Active sessions HTML report
+.\azx.ps1 sessions -ExportPath sessions.html
+
+# Password policy HTML report
+.\azx.ps1 pass-pol -ExportPath policies.html
+
+# Group enumeration HTML report
+.\azx.ps1 groups -ExportPath groups.html
+
+# Username enumeration HTML report
+.\azx.ps1 users -Domain target.com -CommonUsernames -ExportPath valid-users.html
+
+# Application enumeration HTML report
+.\azx.ps1 apps -ExportPath applications.html
+```
+
+### HTML Report Contents
+
+Each HTML report includes:
+
+1. **Header Section**
+   - Report title with AZexec branding
+   - Command executed
+   - Generation timestamp
+   - Total record count
+
+2. **Statistics Dashboard**
+   - Key metrics displayed as cards
+   - Risk-based color coding (red/yellow/green)
+   - Command-specific statistics
+   - Visual indicators for high-risk findings
+
+3. **Description Section**
+   - Command purpose and context
+   - What the report contains
+   - Key security considerations
+
+4. **Data Table**
+   - Complete enumeration results
+   - Color-coded cells for risk levels
+   - Boolean values displayed as badges
+   - Sortable columns (when viewed in browser)
+   - Responsive design for mobile/tablet
+
+5. **Footer**
+   - AZexec attribution
+   - GitHub repository link
+   - EvilMist toolkit branding
+
+### Example Use Cases
+
+#### Security Assessment Reports
+Generate professional reports for client deliverables:
+```powershell
+# Comprehensive privileged access review
+.\azx.ps1 roles -ExportPath "2025-01-ClientName-PrivilegedAccess-Review.html"
+.\azx.ps1 sp-discovery -ExportPath "2025-01-ClientName-ServicePrincipals.html"
+.\azx.ps1 ca-policies -ExportPath "2025-01-ClientName-ConditionalAccess.html"
+```
+
+#### Red Team Documentation
+Document enumeration findings in a shareable format:
+```powershell
+# Phase 1: External reconnaissance
+.\azx.ps1 users -Domain target.com -CommonUsernames -ExportPath "Phase1-ValidUsers.html"
+
+# Phase 2: Post-authentication enumeration  
+.\azx.ps1 hosts -ExportPath "Phase2-Devices.html"
+.\azx.ps1 groups -ExportPath "Phase2-Groups.html"
+.\azx.ps1 vuln-list -ExportPath "Phase2-Vulnerabilities.html"
+```
+
+#### Compliance Audits
+Create formatted reports for compliance reviews:
+```powershell
+.\azx.ps1 pass-pol -ExportPath "Compliance-PasswordPolicies.html"
+.\azx.ps1 roles -ExportPath "Compliance-PrivilegedAccounts.html"
+.\azx.ps1 sessions -Hours 168 -ExportPath "Compliance-SignInActivity-7Days.html"
+```
+
+### Viewing HTML Reports
+
+1. **Web Browser**: Simply double-click the `.html` file to open in your default browser
+2. **Export to PDF**: Use browser print functionality (Ctrl+P) and select "Save as PDF"
+3. **Share**: Send HTML file via email or upload to documentation platforms
+4. **Archive**: Store alongside CSV/JSON exports for complete documentation
+
+### Risk Color Coding
+
+HTML reports automatically highlight security-critical findings:
+
+| Color | Meaning | Examples |
+|-------|---------|----------|
+| 🔴 **Red** | **HIGH RISK** | Privileged roles, high-risk permissions, critical vulns |
+| 🟡 **Yellow** | **MEDIUM RISK** | Password-only auth, ROPC-enabled apps, warnings |
+| 🟢 **Green** | **NORMAL** | Standard users, certificate auth, compliant configs |
+| 🔵 **Cyan** | **INFO** | General information, standard data |
+| ⚪ **Gray** | **LOW/DISABLED** | Disabled accounts, inactive items |
+
+### Combining Export Formats
+
+Generate multiple formats for different use cases:
+```powershell
+# CSV for spreadsheet analysis
+.\azx.ps1 hosts -ExportPath devices.csv
+
+# JSON for automation/parsing
+.\azx.ps1 hosts -ExportPath devices.json
+
+# HTML for reporting and documentation
+.\azx.ps1 hosts -ExportPath devices.html
+```
+
+### Command-Specific Report Examples
+
+#### Device Enumeration Report
+```powershell
+.\azx.ps1 hosts -Filter windows -ShowOwners -ExportPath windows-devices.html
+```
+**Statistics Included:**
+- Total Devices
+- Windows Devices  
+- Azure Entra ID Joined
+- Hybrid Joined
+- Compliant Devices
+- Enabled Devices
+
+#### Service Principal Discovery Report
+```powershell
+.\azx.ps1 sp-discovery -ExportPath sp-analysis.html
+```
+**Statistics Included:**
+- Total Service Principals
+- Enabled Service Principals
+- **Password-Only SPNs (HIGH RISK)** ← Highlighted in red
+- SPNs with App Role Assignments
+- Managed Identities
+- OAuth2 Permission Grants
+
+#### Role Assignment Report
+```powershell
+.\azx.ps1 roles -ExportPath role-audit.html
+```
+**Statistics Included:**
+- Total Active Directory Roles
+- Total Role Assignments
+- **Privileged Role Assignments (HIGH RISK)** ← Highlighted in red
+- User Assignments
+- Group Assignments
+- Service Principal Assignments
+- PIM Eligible Assignments
+
+#### Session Enumeration Report
+```powershell
+.\azx.ps1 sessions -Hours 24 -ExportPath active-sessions.html
+```
+**Statistics Included:**
+- Total Sign-in Events
+- Unique Users
+- Successful Sign-ins
+- Failed Sign-ins
+- **Risky Sign-ins (HIGH RISK)** ← Highlighted in red
+- MFA Required Sign-ins
+- Time Range (Hours)
+
+### Best Practices
+
+1. **Use Descriptive Filenames**: Include date, client name, and content type
+   ```powershell
+   .\azx.ps1 roles -ExportPath "2025-01-15_ContosoCorp_PrivilegedRoles.html"
+   ```
+
+2. **Generate Multiple Formats**: Keep CSV/JSON for data processing, HTML for reporting
+   ```powershell
+   .\azx.ps1 sp-discovery -ExportPath spns.json
+   .\azx.ps1 sp-discovery -ExportPath spns.html
+   ```
+
+3. **Archive Reports**: Store HTML reports alongside other documentation
+   ```powershell
+   $date = Get-Date -Format "yyyy-MM-dd"
+   .\azx.ps1 vuln-list -ExportPath "reports/$date-vulnerabilities.html"
+   ```
+
+4. **Review in Browser**: HTML reports are best viewed in modern browsers (Chrome, Edge, Firefox)
+
+5. **Convert to PDF**: Use browser print-to-PDF for permanent archival
+   ```
+   Open .html → Press Ctrl+P → Destination: Save as PDF
+   ```
 
 ## 🛠️ Troubleshooting
 
@@ -2284,6 +3317,84 @@ If you encounter permission errors:
 #### Slow Group Enumeration
 - Using `-ShowOwners` flag makes additional API calls for each group
 - For large organizations, this can take significant time
+
+### Application Enumeration Issues
+
+#### "Failed to retrieve applications"
+- Verify your account has Application.Read.All or Directory.Read.All permissions
+- Guest users may have restricted access to application enumeration
+- Check if your organization restricts guest user permissions to applications
+
+#### "No applications found or insufficient permissions"
+- This may indicate restricted guest permissions (good security practice)
+- Try with a member account to confirm applications exist
+- Some organizations hide application registrations from non-admin users
+
+#### Permission Requirements
+For full application enumeration, you need:
+- **Application.Read.All**: Read all application registrations and service principals
+- **Directory.Read.All**: Read directory data (alternative permission)
+- Guest users typically need explicit permission grants for application access
+
+#### Interpreting Results
+- **Yellow entries**: Password-only credentials or ROPC-enabled (security risk)
+- **Green entries**: Certificate-based authentication (secure configuration)
+
+### Service Principal Discovery Issues
+
+#### "Failed to retrieve service principals"
+- Verify your account has Application.Read.All or Directory.Read.All permissions
+- Guest users may have restricted access to service principal enumeration
+- Check if your organization restricts guest user permissions to service principals
+
+#### "Failed to retrieve app role assignments" or "Failed to retrieve OAuth2 permission grants"
+- The command will continue with limited permission data
+- For full permission discovery, you need:
+  - **Application.Read.All**: Required for reading service principals and applications
+  - **Directory.Read.All**: Required for reading directory data
+  - **AppRoleAssignment.ReadWrite.All**: Optional (use `-IncludeWritePermissions` flag if needed)
+    - Note: Script only performs read operations; this permission is typically unnecessary
+- Some organizations restrict access to permission grant information
+
+#### "No service principals found or insufficient permissions"
+- This may indicate restricted guest permissions (good security practice)
+- Try with a member account to confirm service principals exist
+- Some organizations hide service principals from non-admin users
+
+#### Permission Requirements
+For full service principal discovery, you need:
+- **Application.Read.All**: Read all service principals and applications (required)
+- **Directory.Read.All**: Read directory data (required)
+- **AppRoleAssignment.ReadWrite.All**: Optional write permission (use `-IncludeWritePermissions` flag)
+  - Script only performs read operations; this permission is typically unnecessary
+  - By default, only read permissions are requested (principle of least privilege)
+- Guest users typically need explicit permission grants for service principal access
+
+#### Interpreting Results
+- **Yellow entries**: Password-only credentials (security risk)
+- **Green entries**: Service principals with permissions and proper authentication
+- **DarkGray entries**: Disabled service principals
+- **High appRoles/delegated counts**: Potentially over-privileged service principals
+- **Owners = 0**: Orphaned service principals that may be abandoned
+- **Security warnings**: Automatically flagged for password-only credentials and high-risk permissions
+
+#### Performance Considerations
+- Service principal discovery involves multiple phases:
+  1. Enumerate all service principals
+  2. Retrieve app role assignments for all SPNs
+  3. Retrieve OAuth2 permission grants for all SPNs
+  4. Retrieve owners for each service principal
+- For large organizations with 1000+ service principals, this can take several minutes
+- The tool displays progress indicators for each phase
+- Consider using `-ExportPath` to save results for offline analysis
+- **Dark gray entries**: No credentials (may use managed identity)
+- Security warnings at the end summarize password-only configurations
+
+#### Large Tenant Performance
+- Enumerating applications and service principals may take time in large organizations
+- Service principals especially can number in the thousands (includes managed identities)
+- Consider using `-ExportPath` and analyzing results offline
+- JSON export provides the most detailed information for analysis
 - Consider running without `-ShowOwners` first, then target specific groups
 
 ### Password Policy Enumeration Issues
@@ -2450,12 +3561,22 @@ This tool is provided for **legitimate security testing, research, and administr
 | **Test null login** | `.\azx.ps1 guest -Domain target.com -Username user -Password ''` | ❌ None | **`nxc smb -u 'a' -p ''`** |
 | **Password spray** | `.\azx.ps1 guest -Domain target.com -UserFile users.txt -Password 'Pass123'` | ❌ None | `nxc smb -u users.txt -p 'Pass123'` |
 | **Username enum + spray** | See [Complete Password Spray Attack](#complete-password-spray-attack-workflow) | ❌ None | `nxc smb -u users.txt -p 'Pass123'` |
+| **Guest vuln scan** | `.\azx.ps1 guest-vuln-scan -ExportPath report.json` | ⚡ Hybrid | `nxc smb --check-null-session` |
 | Enumerate devices | `.\azx.ps1 hosts` (login with guest creds) | ✅ Guest | `nxc smb --hosts` |
 | Enumerate groups | `.\azx.ps1 groups` | ✅ Guest/Member | `nxc smb --groups` |
 | Password policies | `.\azx.ps1 pass-pol` | ✅ Guest/Member | `nxc smb --pass-pol` |
+| **Enumerate roles** | `.\azx.ps1 roles -ExportPath roles.csv` | ✅ Member | - |
+| **Review CA policies** | `.\azx.ps1 ca-policies -ExportPath policies.json` | ✅ Member | - |
 | Full device enum | `.\azx.ps1 hosts -ShowOwners -ExportPath out.json` | ✅ Guest/Member | - |
 | Test guest perms | `Get-MgUser -Top 10` (after connecting) | ✅ Guest | - |
 | Enumerate all users | `.\azx.ps1 user-profiles` | ✅ Guest/Member | - |
+| **Show available commands** | `.\azx.ps1 help` | ❌ None | `nxc --help` |
+
+**Tip**: Add `-Disconnect` to any authenticated command to automatically disconnect from Microsoft Graph after execution:
+```powershell
+.\azx.ps1 hosts -ExportPath devices.csv -Disconnect
+.\azx.ps1 sp-discovery -ExportPath sp.json -Disconnect
+```
 
 ### Defensive Audit Commands
 

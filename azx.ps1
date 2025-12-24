@@ -50,17 +50,46 @@
       * Password spray with single password against user list
       * Detect MFA requirements, locked accounts, expired passwords
     - Active session enumeration (mimics nxc smb --qwinsta)
-      * Query Azure AD sign-in logs
+      * Query Azure Entra ID sign-in logs
       * Display active/recent user sessions
       * Show device, location, IP, application details
       * Identify risky sign-ins and MFA status
+    - Guest user vulnerability scanner
+      * Detect if external collaboration is enabled
+      * Test guest permission boundaries
+      * Generate security assessment report
+      * Compare guest vs member access levels
+    - Application enumeration (authentication required)
+      * List registered applications and service principals
+      * Display credential types (password vs certificate)
+      * Identify public client apps (ROPC-enabled)
+      * Security posture assessment
+    - Service Principal Discovery (authentication required)
+      * Enumerate service principals with full permission details
+      * Display app role assignments (application permissions)
+      * Show OAuth2 permission grants (delegated permissions)
+      * Identify service principal owners
+      * Security posture assessment and risk detection
+      * Identify password-only credentials and high-risk permissions
+    - Role Assignments Enumeration (authentication required)
+      * List directory role assignments and privileged accounts
+      * Enumerate active role members (users, groups, service principals)
+      * Display PIM (Privileged Identity Management) eligible assignments
+      * Identify high-risk privileged roles (Global Admin, etc.)
+      * Group-based role assignment detection
+      * Security posture assessment for privileged access
+    - Conditional Access Policy Review (member accounts only)
+      * Detailed conditional access policy enumeration
+      * Policy state tracking (enabled, disabled, report-only)
+      * Conditions analysis (users, apps, locations, platforms, risk levels)
+      * Grant controls (MFA, compliant device, approved app, terms of use)
+      * Session controls (sign-in frequency, persistent browser, app enforced restrictions)
+      * Security posture assessment and risk identification
     - Netexec-style formatted output
     - Filter by OS, trust type, compliance status
     - Device owner enumeration
     
     Future capabilities (planned):
-    - Service principal discovery
-    - Role assignments enumeration
     - Advanced group membership analysis
 
 .PARAMETER Command
@@ -69,11 +98,16 @@
     - tenant: Discover tenant configuration and endpoints
     - users: Enumerate username existence (no authentication required)
     - user-profiles: Enumerate user profiles with authentication (requires User.Read.All)
-    - groups: Enumerate Azure AD groups (authentication required)
+    - groups: Enumerate Azure Entra ID groups (authentication required)
     - pass-pol: Enumerate password policies and security defaults (authentication required)
     - guest: Test guest/external authentication (similar to nxc smb -u 'a' -p '')
     - vuln-list: Enumerate vulnerable targets (similar to nxc smb --gen-relay-list)
     - sessions: Enumerate active Windows sessions (similar to nxc smb --qwinsta)
+    - guest-vuln-scan: Automated guest user vulnerability scanner (guest permission boundaries)
+    - apps: Enumerate registered applications and service principals (authentication required)
+    - sp-discovery: Discover service principals with permissions and role assignments (authentication required)
+    - roles: Enumerate directory role assignments and privileged accounts (authentication required)
+    - ca-policies: Review conditional access policies (member accounts only, requires Policy.Read.All)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -82,7 +116,7 @@
 .PARAMETER Filter
     Optional filter for device enumeration:
     - windows: Only Windows devices
-    - azuread: Only Azure AD joined devices
+    - azuread: Only Azure Entra ID joined devices
     - hybrid: Only Hybrid joined devices
     - compliant: Only compliant devices
     - noncompliant: Only non-compliant devices
@@ -95,7 +129,8 @@
     Display device owners (slower, makes additional API calls).
 
 .PARAMETER ExportPath
-    Optional path to export results to CSV or JSON.
+    Optional path to export results to CSV, JSON, or HTML.
+    HTML exports generate comprehensive, netexec-styled reports with dark theme and risk highlighting.
 
 .PARAMETER Scopes
     Microsoft Graph scopes to request. Default: "Device.Read.All"
@@ -117,8 +152,18 @@
 .PARAMETER Hours
     Number of hours to look back for sign-in events (for 'sessions' command).
     Default: 24 hours
-    Azure AD retention: 7 days (Free), 30 days (Premium P1/P2)
+    Azure Entra ID retention: 7 days (Free), 30 days (Premium P1/P2)
     Examples: 24 (1 day), 168 (7 days), 720 (30 days)
+
+.PARAMETER Disconnect
+    Automatically disconnect from Microsoft Graph at the end of script execution.
+    Useful for security and cleanup purposes to ensure no active sessions remain.
+
+.PARAMETER IncludeWritePermissions
+    Include AppRoleAssignment.ReadWrite.All permission for sp-discovery command.
+    By default, sp-discovery only requests read permissions (Application.Read.All, Directory.Read.All).
+    Use this flag if you need the additional write permission for app role assignments.
+    Note: The script only performs read operations, so this permission is typically unnecessary.
 
 .EXAMPLE
     .\azx.ps1 hosts
@@ -130,7 +175,7 @@
 
 .EXAMPLE
     .\azx.ps1 hosts -Filter azuread -ShowOwners
-    Enumerate Azure AD joined devices with their owners
+    Enumerate Azure Entra ID joined devices with their owners
 
 .EXAMPLE
     .\azx.ps1 hosts -Filter noncompliant -ExportPath devices.csv
@@ -260,20 +305,95 @@
     .\azx.ps1 sessions -Hours 720 -Username alice@example.com
     Enumerate sessions for a specific user over the last 30 days (requires Premium license)
 
+.EXAMPLE
+    .\azx.ps1 guest-vuln-scan
+    Scan for guest user vulnerabilities in the current tenant (domain auto-detected)
+
+.EXAMPLE
+    .\azx.ps1 guest-vuln-scan -Domain example.com
+    Scan guest user security configuration for a specific tenant
+
+.EXAMPLE
+    .\azx.ps1 guest-vuln-scan -ExportPath guest-vuln-report.json
+    Full guest vulnerability scan with JSON export including detailed assessment
+
+.EXAMPLE
+    .\azx.ps1 apps
+    Enumerate all registered applications and service principals in the Azure/Entra tenant
+
+.EXAMPLE
+    .\azx.ps1 apps -ExportPath apps.csv
+    Enumerate applications and service principals, export to CSV
+
+.EXAMPLE
+    .\azx.ps1 apps -ExportPath apps.json
+    Enumerate applications and service principals with full details exported to JSON
+
+.EXAMPLE
+    .\azx.ps1 sp-discovery
+    Discover service principals with their permissions, roles, and ownership information
+
+.EXAMPLE
+    .\azx.ps1 sp-discovery -ExportPath sp-permissions.csv
+    Discover service principals and export detailed permission data to CSV
+
+.EXAMPLE
+    .\azx.ps1 sp-discovery -ExportPath sp-permissions.json
+    Discover service principals with full permission details exported to JSON
+
+.EXAMPLE
+    .\azx.ps1 sp-discovery -IncludeWritePermissions
+    Discover service principals with AppRoleAssignment.ReadWrite.All permission included (reads only, but grants write capability)
+
+.EXAMPLE
+    .\azx.ps1 roles
+    Enumerate directory role assignments and privileged accounts in the Azure/Entra tenant
+
+.EXAMPLE
+    .\azx.ps1 roles -ExportPath roles.csv
+    Enumerate role assignments and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 roles -ExportPath roles.json
+    Enumerate role assignments with full details including PIM eligible assignments exported to JSON
+
+.EXAMPLE
+    .\azx.ps1 hosts -Disconnect
+    Enumerate devices and automatically disconnect from Microsoft Graph when complete
+
+.EXAMPLE
+    .\azx.ps1 sp-discovery -ExportPath sp.json -Disconnect
+    Discover service principals, export results, and disconnect from Graph
+
+.EXAMPLE
+    .\azx.ps1 ca-policies
+    Review all conditional access policies in the Azure/Entra tenant
+
+.EXAMPLE
+    .\azx.ps1 ca-policies -ExportPath policies.csv
+    Review conditional access policies and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 ca-policies -ExportPath policies.json
+    Review conditional access policies with full details exported to JSON
+
 .NOTES
     Requires PowerShell 7+
-    Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'pass-pol', 'sessions', 'vuln-list' commands)
+    Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies' commands)
     Requires appropriate Azure/Entra permissions (for authenticated commands)
     The 'tenant' and 'users' commands do not require authentication
-    The 'vuln-list' command performs unauthenticated checks first, then authenticated checks
+    The 'vuln-list' and 'guest-vuln-scan' commands perform unauthenticated checks first, then authenticated checks
     The 'sessions' command requires AuditLog.Read.All permission
-    Guest users may have limited access to groups, policy information, and audit logs
+    The 'sp-discovery' command requires Application.Read.All and Directory.Read.All permissions (add -IncludeWritePermissions for AppRoleAssignment.ReadWrite.All)
+    The 'roles' command requires RoleManagement.Read.Directory and Directory.Read.All permissions (PIM requires RoleEligibilitySchedule.Read.Directory)
+    The 'ca-policies' command requires Policy.Read.All permission (guest users cannot access conditional access policies)
+    Guest users may have limited access to groups, policy information, audit logs, service principal data, and role assignments
 #>
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "groups", "pass-pol", "guest", "vuln-list", "sessions")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -308,7 +428,13 @@ param(
     [string]$Password,
     
     [Parameter(Mandatory = $false)]
-    [int]$Hours = 24
+    [int]$Hours = 24,
+    
+    [Parameter(Mandatory = $false)]
+    [switch]$Disconnect,
+    
+    [Parameter(Mandatory = $false)]
+    [switch]$IncludeWritePermissions
 )
 
 # Color output functions
@@ -322,6 +448,433 @@ function Write-ColorOutput {
         Write-Host $Message
     } else {
         Write-Host $Message -ForegroundColor $Color
+    }
+}
+
+# HTML Report Generation Function (NetExec Style)
+function Export-HtmlReport {
+    param(
+        [Parameter(Mandatory=$true)]
+        [array]$Data,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$OutputPath,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$Title,
+        
+        [Parameter(Mandatory=$false)]
+        [hashtable]$Statistics = @{},
+        
+        [Parameter(Mandatory=$false)]
+        [string]$CommandName = "",
+        
+        [Parameter(Mandatory=$false)]
+        [string]$Description = ""
+    )
+    
+    # HTML Header with NetExec-style dark theme
+    $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>$Title - AZexec Report</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            background: linear-gradient(135deg, #0d0d0d 0%, #1a1a1a 100%);
+            color: #00ff00;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #00ff00;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+            padding: 30px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #00ff00;
+        }
+        
+        .header h1 {
+            color: #00ff00;
+            font-size: 2.5em;
+            text-shadow: 0 0 10px #00ff00;
+            margin-bottom: 10px;
+            letter-spacing: 3px;
+        }
+        
+        .header .subtitle {
+            color: #00ccff;
+            font-size: 1.2em;
+            margin-top: 10px;
+        }
+        
+        .metadata {
+            background: rgba(0, 50, 0, 0.5);
+            border-left: 4px solid #00ff00;
+            padding: 15px;
+            margin-bottom: 25px;
+            border-radius: 5px;
+        }
+        
+        .metadata p {
+            color: #00ccff;
+            margin: 5px 0;
+            font-size: 0.95em;
+        }
+        
+        .metadata strong {
+            color: #00ff00;
+        }
+        
+        .statistics {
+            background: rgba(0, 50, 50, 0.5);
+            border-left: 4px solid #00ccff;
+            padding: 20px;
+            margin-bottom: 25px;
+            border-radius: 5px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+        
+        .stat-item {
+            background: rgba(0, 0, 0, 0.5);
+            padding: 15px;
+            border-radius: 5px;
+            border: 1px solid #00ccff;
+        }
+        
+        .stat-label {
+            color: #888;
+            font-size: 0.9em;
+            margin-bottom: 5px;
+        }
+        
+        .stat-value {
+            color: #00ff00;
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+        
+        .stat-value.high {
+            color: #ff3333;
+        }
+        
+        .stat-value.medium {
+            color: #ffaa00;
+        }
+        
+        .stat-value.low {
+            color: #888;
+        }
+        
+        .section-title {
+            color: #00ff00;
+            font-size: 1.5em;
+            margin: 30px 0 15px 0;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #00ff00;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        
+        .table-container {
+            overflow-x: auto;
+            margin-bottom: 30px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: rgba(0, 0, 0, 0.6);
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        
+        thead {
+            background: rgba(0, 100, 0, 0.5);
+        }
+        
+        th {
+            color: #00ff00;
+            padding: 15px;
+            text-align: left;
+            font-weight: bold;
+            text-transform: uppercase;
+            font-size: 0.9em;
+            border-bottom: 2px solid #00ff00;
+        }
+        
+        td {
+            color: #00ccff;
+            padding: 12px 15px;
+            border-bottom: 1px solid #333;
+        }
+        
+        tr:hover {
+            background: rgba(0, 100, 0, 0.2);
+        }
+        
+        tr:nth-child(even) {
+            background: rgba(0, 0, 0, 0.3);
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 3px;
+            font-size: 0.85em;
+            font-weight: bold;
+            margin: 2px;
+        }
+        
+        .badge-success {
+            background: rgba(0, 255, 0, 0.2);
+            color: #00ff00;
+            border: 1px solid #00ff00;
+        }
+        
+        .badge-danger {
+            background: rgba(255, 51, 51, 0.2);
+            color: #ff3333;
+            border: 1px solid #ff3333;
+        }
+        
+        .badge-warning {
+            background: rgba(255, 170, 0, 0.2);
+            color: #ffaa00;
+            border: 1px solid #ffaa00;
+        }
+        
+        .badge-info {
+            background: rgba(0, 204, 255, 0.2);
+            color: #00ccff;
+            border: 1px solid #00ccff;
+        }
+        
+        .badge-secondary {
+            background: rgba(136, 136, 136, 0.2);
+            color: #888;
+            border: 1px solid #888;
+        }
+        
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #00ff00;
+            text-align: center;
+            color: #888;
+            font-size: 0.9em;
+        }
+        
+        .footer a {
+            color: #00ccff;
+            text-decoration: none;
+        }
+        
+        .footer a:hover {
+            text-decoration: underline;
+        }
+        
+        .risk-high {
+            color: #ff3333 !important;
+            font-weight: bold;
+        }
+        
+        .risk-medium {
+            color: #ffaa00 !important;
+        }
+        
+        .risk-low {
+            color: #888 !important;
+        }
+        
+        .description {
+            background: rgba(0, 50, 100, 0.3);
+            border-left: 4px solid #00ccff;
+            padding: 15px;
+            margin-bottom: 25px;
+            border-radius: 5px;
+            color: #aaa;
+            font-size: 0.95em;
+        }
+        
+        @media print {
+            body {
+                background: white;
+                color: black;
+            }
+            
+            .container {
+                border: 1px solid black;
+                box-shadow: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚡ AZexec Report ⚡</h1>
+            <div class="subtitle">$Title</div>
+        </div>
+        
+        <div class="metadata">
+            <p><strong>Command:</strong> $CommandName</p>
+            <p><strong>Generated:</strong> $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")</p>
+            <p><strong>Total Records:</strong> $($Data.Count)</p>
+        </div>
+"@
+
+    # Add description if provided
+    if ($Description) {
+        $html += @"
+        <div class="description">
+            $Description
+        </div>
+"@
+    }
+
+    # Add statistics if provided
+    if ($Statistics.Count -gt 0) {
+        $html += @"
+        <div class="statistics">
+"@
+        foreach ($stat in $Statistics.GetEnumerator()) {
+            $valueClass = ""
+            if ($stat.Key -match "High|Critical|Privileged|Risk") {
+                $valueClass = "high"
+            } elseif ($stat.Key -match "Medium|Warning") {
+                $valueClass = "medium"
+            } elseif ($stat.Key -match "Low|Disabled") {
+                $valueClass = "low"
+            }
+            
+            $html += @"
+            <div class="stat-item">
+                <div class="stat-label">$($stat.Key)</div>
+                <div class="stat-value $valueClass">$($stat.Value)</div>
+            </div>
+"@
+        }
+        $html += @"
+        </div>
+"@
+    }
+
+    # Add data table
+    if ($Data.Count -gt 0) {
+        $html += @"
+        <h2 class="section-title">📊 Data</h2>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+"@
+        # Get column headers from first object
+        $properties = $Data[0].PSObject.Properties.Name
+        foreach ($prop in $properties) {
+            $html += "                        <th>$prop</th>`n"
+        }
+        
+        $html += @"
+                    </tr>
+                </thead>
+                <tbody>
+"@
+        
+        # Add data rows
+        foreach ($row in $Data) {
+            $html += "                    <tr>`n"
+            foreach ($prop in $properties) {
+                $value = $row.$prop
+                
+                # Handle null/empty values
+                if ($null -eq $value -or $value -eq "") {
+                    $value = "-"
+                }
+                
+                # Convert boolean values to badges
+                if ($value -is [bool]) {
+                    if ($value) {
+                        $value = "<span class='badge badge-success'>True</span>"
+                    } else {
+                        $value = "<span class='badge badge-secondary'>False</span>"
+                    }
+                }
+                
+                # Apply risk-based coloring for specific columns
+                $cellClass = ""
+                if ($prop -match "Risk|Severity") {
+                    if ($value -match "HIGH|Critical") {
+                        $cellClass = " class='risk-high'"
+                    } elseif ($value -match "MEDIUM|Warning") {
+                        $cellClass = " class='risk-medium'"
+                    } elseif ($value -match "LOW") {
+                        $cellClass = " class='risk-low'"
+                    }
+                }
+                
+                # Handle array values
+                if ($value -is [array]) {
+                    $value = $value -join ", "
+                }
+                
+                # Escape HTML special characters
+                $value = [System.Web.HttpUtility]::HtmlEncode($value.ToString())
+                
+                $html += "                        <td$cellClass>$value</td>`n"
+            }
+            $html += "                    </tr>`n"
+        }
+        
+        $html += @"
+                </tbody>
+            </table>
+        </div>
+"@
+    }
+
+    # Add footer
+    $html += @"
+        <div class="footer">
+            <p>Generated by <strong>AZexec</strong> - Azure/Entra Execution Tool</p>
+            <p><a href="https://github.com/Logisek/AZexec" target="_blank">https://github.com/Logisek/AZexec</a></p>
+            <p>Part of the EvilMist Toolkit | Copyright © 2025 Logisek</p>
+        </div>
+    </div>
+</body>
+</html>
+"@
+
+    # Write HTML to file
+    try {
+        # Add System.Web for HTML encoding
+        Add-Type -AssemblyName System.Web
+        $html | Out-File -FilePath $OutputPath -Encoding UTF8 -Force
+        return $true
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to generate HTML report: $_" -Color "Red"
+        return $false
     }
 }
 
@@ -615,6 +1168,13 @@ function Invoke-HostEnumeration {
         }
     }
     
+    # Calculate summary statistics
+    $windowsCount = ($devices | Where-Object { $_.OperatingSystem -like "Windows*" }).Count
+    $azureAdCount = ($devices | Where-Object { $_.TrustType -eq "AzureAd" }).Count
+    $hybridCount = ($devices | Where-Object { $_.TrustType -eq "ServerAd" }).Count
+    $compliantCount = ($devices | Where-Object { $_.IsCompliant -eq $true }).Count
+    $enabledCount = ($devices | Where-Object { $_.AccountEnabled -eq $true }).Count
+    
     # Export if requested
     if ($ExportPath) {
         try {
@@ -622,14 +1182,32 @@ function Invoke-HostEnumeration {
             
             if ($extension -eq ".csv") {
                 $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
             } elseif ($extension -eq ".json") {
                 $exportData | ConvertTo-Json -Depth 5 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".html") {
+                $stats = [ordered]@{
+                    "Total Devices" = $devices.Count
+                    "Windows Devices" = $windowsCount
+                    "Azure Entra ID Joined" = $azureAdCount
+                    "Hybrid Joined" = $hybridCount
+                    "Compliant Devices" = $compliantCount
+                    "Enabled Devices" = $enabledCount
+                }
+                
+                $description = "Comprehensive device enumeration from Azure/Entra ID. Filter applied: $Filter"
+                
+                $success = Export-HtmlReport -Data $exportData -OutputPath $ExportPath -Title "Device Enumeration Report" -Statistics $stats -CommandName "hosts" -Description $description
+                
+                if ($success) {
+                    Write-ColorOutput -Message "`n[+] HTML report exported to: $ExportPath" -Color "Green"
+                }
             } else {
                 # Default to CSV
                 $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
             }
-            
-            Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
         } catch {
             Write-ColorOutput -Message "`n[!] Failed to export results: $_" -Color "Red"
         }
@@ -640,15 +1218,8 @@ function Invoke-HostEnumeration {
     # Display summary statistics
     Write-ColorOutput -Message "`n[*] Summary:" -Color "Yellow"
     Write-ColorOutput -Message "    Total Devices: $($devices.Count)" -Color "Cyan"
-    
-    $windowsCount = ($devices | Where-Object { $_.OperatingSystem -like "Windows*" }).Count
-    $azureAdCount = ($devices | Where-Object { $_.TrustType -eq "AzureAd" }).Count
-    $hybridCount = ($devices | Where-Object { $_.TrustType -eq "ServerAd" }).Count
-    $compliantCount = ($devices | Where-Object { $_.IsCompliant -eq $true }).Count
-    $enabledCount = ($devices | Where-Object { $_.AccountEnabled -eq $true }).Count
-    
     Write-ColorOutput -Message "    Windows Devices: $windowsCount" -Color "Cyan"
-    Write-ColorOutput -Message "    Azure AD Joined: $azureAdCount" -Color "Cyan"
+    Write-ColorOutput -Message "    Azure Entra ID Joined: $azureAdCount" -Color "Cyan"
     Write-ColorOutput -Message "    Hybrid Joined: $hybridCount" -Color "Cyan"
     Write-ColorOutput -Message "    Compliant: $compliantCount" -Color "Cyan"
     Write-ColorOutput -Message "    Enabled: $enabledCount" -Color "Cyan"
@@ -1041,32 +1612,130 @@ function Invoke-UserEnumeration {
     
     Write-ColorOutput -Message "[*] Checking $($usernames.Count) username(s)...`n" -Color "Yellow"
     
-    # Check each username
+    # Check each username with progress indicator
     $results = @()
     $validUsers = @()
     $checkedCount = 0
+    $failedCount = 0
+    $startTime = Get-Date
     
-    foreach ($user in $usernames) {
-        $result = Test-UsernameExistence -Username $user
-        Format-UsernameOutput -Domain $Domain -Username $user -Result $result
-        
-        if ($result -and $result.Exists) {
-            $validUsers += $result
-        }
-        
-        $results += $result
-        $checkedCount++
-        
-        # Small delay to avoid throttling (50ms)
-        Start-Sleep -Milliseconds 50
+    # Track auth types for statistics
+    $authTypeStats = @{
+        Managed = 0
+        Federated = 0
+        Alternate = 0
+        Unknown = 0
     }
     
-    # Summary
+    foreach ($user in $usernames) {
+        # Show progress for large lists (>10 users)
+        if ($usernames.Count -gt 10) {
+            $percentComplete = [math]::Round(($checkedCount / $usernames.Count) * 100)
+            $elapsed = (Get-Date) - $startTime
+            $estimatedTotal = if ($checkedCount -gt 0) { 
+                $elapsed.TotalSeconds * ($usernames.Count / $checkedCount) 
+            } else { 0 }
+            $remaining = $estimatedTotal - $elapsed.TotalSeconds
+            
+            Write-Progress -Activity "Username Enumeration" `
+                -Status "Checking $($checkedCount + 1)/$($usernames.Count): $user" `
+                -PercentComplete $percentComplete `
+                -SecondsRemaining ([math]::Max(0, $remaining))
+        }
+        
+        # Test username with retry logic
+        $result = $null
+        $maxRetries = 3
+        $retryCount = 0
+        
+        while ($retryCount -lt $maxRetries -and $null -eq $result) {
+            $result = Test-UsernameExistence -Username $user
+            
+            if ($null -eq $result -and $retryCount -lt ($maxRetries - 1)) {
+                # Exponential backoff: 100ms, 200ms, 400ms
+                $backoffMs = 100 * [math]::Pow(2, $retryCount)
+                Start-Sleep -Milliseconds $backoffMs
+                $retryCount++
+            } else {
+                break
+            }
+        }
+        
+        Format-UsernameOutput -Domain $Domain -Username $user -Result $result
+        
+        if ($result) {
+            if ($result.Exists) {
+                $validUsers += $result
+                
+                # Track auth type statistics
+                $authType = switch ($result.IfExistsResult) {
+                    0 { "Managed" }
+                    5 { "Alternate" }
+                    6 { "Federated" }
+                    default { "Unknown" }
+                }
+                $authTypeStats[$authType]++
+            }
+            $results += $result
+        } else {
+            $failedCount++
+            # Still add to results for export
+            $results += [PSCustomObject]@{
+                Username = $user
+                Exists = $false
+                IfExistsResult = $null
+                ThrottleStatus = $null
+                EstsProperties = $null
+                Error = "Failed after $maxRetries retries"
+            }
+        }
+        
+        $checkedCount++
+        
+        # Adaptive delay: faster for small lists, slower for large lists to avoid throttling
+        $delayMs = if ($usernames.Count -lt 50) { 50 } 
+                   elseif ($usernames.Count -lt 200) { 100 }
+                   else { 150 }
+        Start-Sleep -Milliseconds $delayMs
+    }
+    
+    # Clear progress bar
+    if ($usernames.Count -gt 10) {
+        Write-Progress -Activity "Username Enumeration" -Completed
+    }
+    
+    # Calculate duration
+    $duration = (Get-Date) - $startTime
+    $durationStr = "{0:mm}m {0:ss}s" -f $duration
+    
+    # Summary with enhanced statistics
     Write-ColorOutput -Message "`n[*] Username enumeration complete!" -Color "Green"
     Write-ColorOutput -Message "`n[*] Summary:" -Color "Yellow"
-    Write-ColorOutput -Message "    Total Checked: $checkedCount" -Color "Cyan"
-    Write-ColorOutput -Message "    Valid Users:   $($validUsers.Count)" -Color "Green"
-    Write-ColorOutput -Message "    Invalid Users: $($checkedCount - $validUsers.Count)" -Color "DarkGray"
+    Write-ColorOutput -Message "    Total Checked:   $checkedCount" -Color "Cyan"
+    Write-ColorOutput -Message "    Valid Users:     $($validUsers.Count)" -Color "Green"
+    Write-ColorOutput -Message "    Invalid Users:   $($checkedCount - $validUsers.Count - $failedCount)" -Color "DarkGray"
+    if ($failedCount -gt 0) {
+        Write-ColorOutput -Message "    Failed Checks:   $failedCount" -Color "Red"
+    }
+    Write-ColorOutput -Message "    Duration:        $durationStr" -Color "Cyan"
+    Write-ColorOutput -Message "    Rate:            $([math]::Round($checkedCount / $duration.TotalSeconds, 2)) checks/sec" -Color "Cyan"
+    
+    # Auth type breakdown
+    if ($validUsers.Count -gt 0) {
+        Write-ColorOutput -Message "`n[*] Authentication Type Breakdown:" -Color "Yellow"
+        if ($authTypeStats['Managed'] -gt 0) {
+            Write-ColorOutput -Message "    Managed:    $($authTypeStats['Managed'])" -Color "Green"
+        }
+        if ($authTypeStats['Federated'] -gt 0) {
+            Write-ColorOutput -Message "    Federated:  $($authTypeStats['Federated'])" -Color "Green"
+        }
+        if ($authTypeStats['Alternate'] -gt 0) {
+            Write-ColorOutput -Message "    Alternate:  $($authTypeStats['Alternate'])" -Color "Green"
+        }
+        if ($authTypeStats['Unknown'] -gt 0) {
+            Write-ColorOutput -Message "    Unknown:    $($authTypeStats['Unknown'])" -Color "Yellow"
+        }
+    }
     
     # Export if requested
     if ($ExportPath) {
@@ -1087,20 +1756,38 @@ function Invoke-UserEnumeration {
                             default { "Unknown" }
                         }
                         ThrottleStatus = $result.ThrottleStatus
+                        Error = if ($result.PSObject.Properties['Error']) { $result.Error } else { $null }
                     }
                 }
             }
             
             if ($extension -eq ".csv") {
                 $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
             } elseif ($extension -eq ".json") {
                 $exportData | ConvertTo-Json -Depth 5 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".html") {
+                $stats = [ordered]@{
+                    "Total Checked" = $results.Count
+                    "Valid Usernames" = $validUsers.Count
+                    "Managed Auth" = ($validUsers | Where-Object { $_.IfExistsResult -eq 0 }).Count
+                    "Federated Auth" = ($validUsers | Where-Object { $_.IfExistsResult -eq 6 }).Count
+                    "Invalid Usernames" = ($results | Where-Object { $_.Exists -eq $false }).Count
+                }
+                
+                $description = "Username enumeration results for domain: $Domain. This phase validates username existence without authentication."
+                
+                $success = Export-HtmlReport -Data $exportData -OutputPath $ExportPath -Title "Username Enumeration Report" -Statistics $stats -CommandName "users" -Description $description
+                
+                if ($success) {
+                    Write-ColorOutput -Message "`n[+] HTML report exported to: $ExportPath" -Color "Green"
+                }
             } else {
                 # Default to CSV
                 $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
             }
-            
-            Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
         } catch {
             Write-ColorOutput -Message "`n[!] Failed to export results: $_" -Color "Red"
         }
@@ -1117,6 +1804,17 @@ function Invoke-UserEnumeration {
                 default { "Unknown" }
             }
             Write-ColorOutput -Message "    [+] $($validUser.Username) ($authType)" -Color "Green"
+        }
+        
+        # Security tip for password spraying
+        Write-ColorOutput -Message "`n[*] Next Steps:" -Color "Yellow"
+        Write-ColorOutput -Message "    To perform password spraying with these valid users:" -Color "Cyan"
+        if ($ExportPath) {
+            Write-ColorOutput -Message "    1. Extract valid users: `$users = Import-Csv '$ExportPath' | Where { `$_.Exists -eq 'True' } | Select -ExpandProperty Username" -Color "Cyan"
+            Write-ColorOutput -Message "    2. Save to file: `$users | Out-File spray-targets.txt" -Color "Cyan"
+            Write-ColorOutput -Message "    3. Run spray: .\azx.ps1 guest -Domain $Domain -UserFile spray-targets.txt -Password 'YourPassword123!'" -Color "Cyan"
+        } else {
+            Write-ColorOutput -Message "    .\azx.ps1 guest -Domain $Domain -Username <username> -Password 'YourPassword123!'" -Color "Cyan"
         }
     }
 }
@@ -1167,15 +1865,34 @@ function Format-GroupOutput {
         "No description" 
     }
     
+    # Check if this is a privileged/administrative group based on name
+    $privilegedKeywords = @(
+        "admin", "administrator", "admins",
+        "global", "privileged", "security",
+        "domain admins", "enterprise admins",
+        "root", "sudo", "wheel",
+        "helpdesk", "tier", "pim"
+    )
+    
+    $isPrivilegedGroup = $false
+    foreach ($keyword in $privilegedKeywords) {
+        if ($groupName -match $keyword) {
+            $isPrivilegedGroup = $true
+            break
+        }
+    }
+    
     $output = "AZR".PadRight(12) + 
               $groupIdShort.PadRight(17) + 
               "443".PadRight(7) + 
               $displayName.PadRight(38) + 
               "[*] (name:$groupName) (type:$groupTypes) (security:$securityEnabled) (mail:$mailEnabled) (members:$MemberCount) (desc:$description)"
     
-    # Color based on type
+    # Color based on privilege level and type
     $color = "Cyan"
-    if ($Group.SecurityEnabled) {
+    if ($isPrivilegedGroup -and $Group.SecurityEnabled) {
+        $color = "Red"  # Privileged security groups in red (highest priority)
+    } elseif ($Group.SecurityEnabled) {
         $color = "Green"  # Security groups in green
     } elseif ($Group.MailEnabled) {
         $color = "Yellow"  # Mail-enabled groups in yellow
@@ -1262,6 +1979,12 @@ function Invoke-GroupEnumeration {
         }
     }
     
+    # Calculate summary statistics
+    $securityGroups = ($allGroups | Where-Object { $_.SecurityEnabled -eq $true }).Count
+    $mailEnabledGroups = ($allGroups | Where-Object { $_.MailEnabled -eq $true }).Count
+    $unifiedGroups = ($allGroups | Where-Object { $_.GroupTypes -contains "Unified" }).Count
+    $dynamicGroups = ($allGroups | Where-Object { $_.GroupTypes -contains "DynamicMembership" }).Count
+    
     # Export if requested
     if ($ExportPath) {
         try {
@@ -1269,14 +1992,31 @@ function Invoke-GroupEnumeration {
             
             if ($extension -eq ".csv") {
                 $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
             } elseif ($extension -eq ".json") {
                 $exportData | ConvertTo-Json -Depth 5 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".html") {
+                $stats = [ordered]@{
+                    "Total Groups" = $allGroups.Count
+                    "Security Groups" = $securityGroups
+                    "Mail-Enabled Groups" = $mailEnabledGroups
+                    "Microsoft 365 Groups" = $unifiedGroups
+                    "Dynamic Groups" = $dynamicGroups
+                }
+                
+                $description = "Comprehensive group enumeration from Azure/Entra ID including security groups, M365 groups, and distribution lists."
+                
+                $success = Export-HtmlReport -Data $exportData -OutputPath $ExportPath -Title "Group Enumeration Report" -Statistics $stats -CommandName "groups" -Description $description
+                
+                if ($success) {
+                    Write-ColorOutput -Message "`n[+] HTML report exported to: $ExportPath" -Color "Green"
+                }
             } else {
                 # Default to CSV
                 $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
             }
-            
-            Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
         } catch {
             Write-ColorOutput -Message "`n[!] Failed to export results: $_" -Color "Red"
         }
@@ -1287,16 +2027,1294 @@ function Invoke-GroupEnumeration {
     # Display summary statistics
     Write-ColorOutput -Message "`n[*] Summary:" -Color "Yellow"
     Write-ColorOutput -Message "    Total Groups: $($allGroups.Count)" -Color "Cyan"
-    
-    $securityGroups = ($allGroups | Where-Object { $_.SecurityEnabled -eq $true }).Count
-    $mailEnabledGroups = ($allGroups | Where-Object { $_.MailEnabled -eq $true }).Count
-    $unifiedGroups = ($allGroups | Where-Object { $_.GroupTypes -contains "Unified" }).Count
-    $dynamicGroups = ($allGroups | Where-Object { $_.GroupTypes -contains "DynamicMembership" }).Count
-    
     Write-ColorOutput -Message "    Security Groups: $securityGroups" -Color "Cyan"
     Write-ColorOutput -Message "    Mail-Enabled Groups: $mailEnabledGroups" -Color "Cyan"
     Write-ColorOutput -Message "    Microsoft 365 Groups: $unifiedGroups" -Color "Cyan"
     Write-ColorOutput -Message "    Dynamic Groups: $dynamicGroups" -Color "Cyan"
+}
+
+# Format application output like netexec
+function Format-ApplicationOutput {
+    param(
+        [PSCustomObject]$Application,
+        [string]$AppType = "Application",
+        [array]$HighRiskPermissions = @()
+    )
+    
+    # Application name
+    $appName = if ($Application.DisplayName) { $Application.DisplayName } else { "UNKNOWN" }
+    
+    # Truncate long app names for column display
+    $maxNameLength = 35
+    $displayName = if ($appName.Length -gt $maxNameLength) {
+        $appName.Substring(0, $maxNameLength - 3) + "..."
+    } else {
+        $appName
+    }
+    
+    # Use app ID as "IP" equivalent (first 15 chars for alignment)
+    $appIdShort = if ($Application.AppId) { 
+        $Application.AppId.Substring(0, [Math]::Min(15, $Application.AppId.Length))
+    } else { 
+        "UNKNOWN-ID" 
+    }
+    
+    # Credential status - check for password vs certificate credentials
+    $credStatus = "None"
+    $credCount = 0
+    
+    if ($Application.PasswordCredentials -and $Application.PasswordCredentials.Count -gt 0) {
+        $credCount += $Application.PasswordCredentials.Count
+        if ($Application.KeyCredentials -and $Application.KeyCredentials.Count -gt 0) {
+            $credStatus = "Both"
+        } else {
+            $credStatus = "Password"
+        }
+    } elseif ($Application.KeyCredentials -and $Application.KeyCredentials.Count -gt 0) {
+        $credCount += $Application.KeyCredentials.Count
+        $credStatus = "Certificate"
+    }
+    
+    # Sign-in audience
+    $audience = if ($Application.SignInAudience) { 
+        $Application.SignInAudience 
+    } else { 
+        "N/A" 
+    }
+    
+    # Public client status (ROPC vulnerable)
+    $isPublicClient = if ($Application.IsFallbackPublicClient -eq $true) {
+        "True"
+    } elseif ($Application.PublicClient -and $Application.PublicClient.RedirectUris.Count -gt 0) {
+        "True"
+    } else {
+        "False"
+    }
+    
+    # Check for high-risk permissions in requiredResourceAccess
+    $hasHighRiskPermissions = $false
+    if ($HighRiskPermissions.Count -gt 0 -and $Application.RequiredResourceAccess) {
+        foreach ($resource in $Application.RequiredResourceAccess) {
+            if ($resource.ResourceAppId -eq "00000003-0000-0000-c000-000000000000") {  # Microsoft Graph
+                foreach ($access in $resource.ResourceAccess) {
+                    # Get permission value/name from a common mapping
+                    $permId = $access.Id
+                    # Check common high-risk permission IDs
+                    $highRiskPermIds = @(
+                        "19dbc75e-c2e2-444c-a770-ec69d8559fc7",  # Directory.ReadWrite.All
+                        "1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9",  # Application.ReadWrite.All
+                        "06b708a9-e830-4db3-a914-8e69da51d44f",  # AppRoleAssignment.ReadWrite.All
+                        "9e3f62cf-ca93-4989-b6ce-bf83c28f9fe8"   # RoleManagement.ReadWrite.Directory
+                    )
+                    if ($permId -in $highRiskPermIds) {
+                        $hasHighRiskPermissions = $true
+                        break
+                    }
+                }
+            }
+            if ($hasHighRiskPermissions) {
+                break
+            }
+        }
+    }
+    
+    $output = "AZR".PadRight(12) + 
+              $appIdShort.PadRight(17) + 
+              "443".PadRight(7) + 
+              $displayName.PadRight(38) + 
+              "[*] (name:$appName) (type:$AppType) (creds:$credStatus [$credCount]) (audience:$audience) (publicClient:$isPublicClient)"
+    
+    # Color based on security posture
+    $color = "Cyan"
+    if ($hasHighRiskPermissions) {
+        $color = "Red"  # High-risk permissions in red (highest priority)
+    } elseif ($credStatus -eq "Password") {
+        $color = "Yellow"  # Password-only credentials are weaker
+    } elseif ($credStatus -eq "None") {
+        $color = "DarkGray"  # No credentials
+    } elseif ($isPublicClient -eq "True") {
+        $color = "Yellow"  # Public client enabled (ROPC vulnerable)
+    } else {
+        $color = "Green"  # Certificate-based auth
+    }
+    
+    Write-ColorOutput -Message $output -Color $color
+}
+
+# Main application enumeration function
+function Invoke-ApplicationEnumeration {
+    param(
+        [string]$ExportPath
+    )
+    
+    Write-ColorOutput -Message "`n[*] AZX - Azure/Entra Application Enumeration" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Command: Application and Service Principal Enumeration" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Lists registered applications and service principals`n" -Color "Yellow"
+    
+    # Get context to display current user info
+    $context = Get-MgContext
+    if ($context) {
+        Write-ColorOutput -Message "[*] Authenticated as: $($context.Account)" -Color "Cyan"
+        Write-ColorOutput -Message "[*] Tenant: $($context.TenantId)`n" -Color "Cyan"
+    }
+    
+    # Prepare export data
+    $exportData = @()
+    
+    # ===== PHASE 1: ENUMERATE APPLICATIONS =====
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] PHASE 1: Application Registrations" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] Retrieving application registrations from Azure/Entra ID..." -Color "Yellow"
+    
+    try {
+        $allApps = Get-MgApplication -All -Property "id,displayName,appId,signInAudience,passwordCredentials,keyCredentials,isFallbackPublicClient,publicClient,requiredResourceAccess,web,createdDateTime" -ErrorAction Stop
+        Write-ColorOutput -Message "[+] Retrieved $($allApps.Count) application registrations`n" -Color "Green"
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to retrieve applications: $_" -Color "Red"
+        Write-ColorOutput -Message "[!] Ensure you have Application.Read.All or Directory.Read.All permissions" -Color "Red"
+        Write-ColorOutput -Message "[*] Guest users may have restricted access to application enumeration" -Color "Yellow"
+        $allApps = @()
+    }
+    
+    # Define high-risk permission IDs
+    $highRiskPermissions = @(
+        "19dbc75e-c2e2-444c-a770-ec69d8559fc7",  # Directory.ReadWrite.All
+        "1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9",  # Application.ReadWrite.All
+        "06b708a9-e830-4db3-a914-8e69da51d44f",  # AppRoleAssignment.ReadWrite.All
+        "9e3f62cf-ca93-4989-b6ce-bf83c28f9fe8"   # RoleManagement.ReadWrite.Directory
+    )
+    
+    if ($allApps.Count -gt 0) {
+        Write-ColorOutput -Message "[*] Displaying $($allApps.Count) application registrations`n" -Color "Green"
+        
+        # Enumerate applications
+        foreach ($app in $allApps) {
+            Format-ApplicationOutput -Application $app -AppType "App" -HighRiskPermissions $highRiskPermissions
+            
+            # Collect for export
+            if ($ExportPath) {
+                $exportData += [PSCustomObject]@{
+                    Type                  = "Application"
+                    ObjectId              = $app.Id
+                    AppId                 = $app.AppId
+                    DisplayName           = $app.DisplayName
+                    SignInAudience        = $app.SignInAudience
+                    IsFallbackPublicClient = $app.IsFallbackPublicClient
+                    PasswordCredentials   = $app.PasswordCredentials.Count
+                    KeyCredentials        = $app.KeyCredentials.Count
+                    CreatedDateTime       = $app.CreatedDateTime
+                    PublicClientRedirectUris = if ($app.PublicClient) { ($app.PublicClient.RedirectUris -join ";") } else { "" }
+                    WebRedirectUris       = if ($app.Web) { ($app.Web.RedirectUris -join ";") } else { "" }
+                }
+            }
+        }
+    } else {
+        Write-ColorOutput -Message "[!] No applications found or insufficient permissions`n" -Color "Red"
+    }
+    
+    # ===== PHASE 2: ENUMERATE SERVICE PRINCIPALS =====
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] PHASE 2: Service Principals" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] Retrieving service principals from Azure/Entra ID..." -Color "Yellow"
+    Write-ColorOutput -Message "[*] This may take a while for large organizations...`n" -Color "Yellow"
+    
+    try {
+        $allSPNs = Get-MgServicePrincipal -All -Property "id,displayName,appId,servicePrincipalType,passwordCredentials,keyCredentials,signInAudience,tags,accountEnabled,createdDateTime" -ErrorAction Stop
+        Write-ColorOutput -Message "[+] Retrieved $($allSPNs.Count) service principals`n" -Color "Green"
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to retrieve service principals: $_" -Color "Red"
+        Write-ColorOutput -Message "[!] Ensure you have Application.Read.All or Directory.Read.All permissions" -Color "Red"
+        Write-ColorOutput -Message "[*] Guest users may have restricted access to service principal enumeration" -Color "Yellow"
+        $allSPNs = @()
+    }
+    
+    if ($allSPNs.Count -gt 0) {
+        Write-ColorOutput -Message "[*] Displaying $($allSPNs.Count) service principals`n" -Color "Green"
+        
+        # Enumerate service principals
+        foreach ($spn in $allSPNs) {
+            Format-ApplicationOutput -Application $spn -AppType "SPN" -HighRiskPermissions $highRiskPermissions
+            
+            # Collect for export
+            if ($ExportPath) {
+                $exportData += [PSCustomObject]@{
+                    Type                  = "ServicePrincipal"
+                    ObjectId              = $spn.Id
+                    AppId                 = $spn.AppId
+                    DisplayName           = $spn.DisplayName
+                    ServicePrincipalType  = $spn.ServicePrincipalType
+                    AccountEnabled        = $spn.AccountEnabled
+                    SignInAudience        = $spn.SignInAudience
+                    PasswordCredentials   = $spn.PasswordCredentials.Count
+                    KeyCredentials        = $spn.KeyCredentials.Count
+                    Tags                  = ($spn.Tags -join ";")
+                    CreatedDateTime       = $spn.CreatedDateTime
+                    PublicClientRedirectUris = ""
+                    WebRedirectUris       = ""
+                }
+            }
+        }
+    } else {
+        Write-ColorOutput -Message "[!] No service principals found or insufficient permissions`n" -Color "Red"
+    }
+    
+    # Calculate summary statistics
+    $appsWithPasswordCreds = 0
+    $appsWithCertCreds = 0
+    $publicClientApps = 0
+    if ($allApps.Count -gt 0) {
+        $appsWithPasswordCreds = ($allApps | Where-Object { $_.PasswordCredentials.Count -gt 0 }).Count
+        $appsWithCertCreds = ($allApps | Where-Object { $_.KeyCredentials.Count -gt 0 }).Count
+        $publicClientApps = ($allApps | Where-Object { $_.IsFallbackPublicClient -eq $true -or ($_.PublicClient -and $_.PublicClient.RedirectUris.Count -gt 0) }).Count
+    }
+    
+    $spnsWithPasswordCreds = 0
+    $spnsWithCertCreds = 0
+    $enabledSPNs = 0
+    $managedIdentities = 0
+    if ($allSPNs.Count -gt 0) {
+        $spnsWithPasswordCreds = ($allSPNs | Where-Object { $_.PasswordCredentials.Count -gt 0 }).Count
+        $spnsWithCertCreds = ($allSPNs | Where-Object { $_.KeyCredentials.Count -gt 0 }).Count
+        $enabledSPNs = ($allSPNs | Where-Object { $_.AccountEnabled -eq $true }).Count
+        $managedIdentities = ($allSPNs | Where-Object { $_.ServicePrincipalType -eq "ManagedIdentity" }).Count
+    }
+    
+    # Export if requested
+    if ($ExportPath -and $exportData.Count -gt 0) {
+        try {
+            $extension = [System.IO.Path]::GetExtension($ExportPath).ToLower()
+            
+            if ($extension -eq ".csv") {
+                $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".json") {
+                $exportData | ConvertTo-Json -Depth 5 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".html") {
+                $stats = [ordered]@{
+                    "Total Applications" = $allApps.Count
+                    "Total Service Principals" = $allSPNs.Count
+                    "Apps with Password Credentials" = $appsWithPasswordCreds
+                    "Public Client Apps (ROPC-enabled)" = $publicClientApps
+                    "SPNs with Password Credentials" = $spnsWithPasswordCreds
+                    "Enabled Service Principals" = $enabledSPNs
+                    "Managed Identities" = $managedIdentities
+                }
+                
+                $description = "Application and service principal enumeration including credential types and security posture assessment."
+                
+                $success = Export-HtmlReport -Data $exportData -OutputPath $ExportPath -Title "Application Enumeration Report" -Statistics $stats -CommandName "apps" -Description $description
+                
+                if ($success) {
+                    Write-ColorOutput -Message "`n[+] HTML report exported to: $ExportPath" -Color "Green"
+                }
+            } else {
+                # Default to CSV
+                $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            }
+        } catch {
+            Write-ColorOutput -Message "`n[!] Failed to export results: $_" -Color "Red"
+        }
+    }
+    
+    # Display summary statistics
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] Summary Statistics" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] Applications:" -Color "Yellow"
+    Write-ColorOutput -Message "    Total Registered Apps: $($allApps.Count)" -Color "Cyan"
+    
+    if ($allApps.Count -gt 0) {
+        Write-ColorOutput -Message "    Apps with Password Credentials: $appsWithPasswordCreds" -Color "Cyan"
+        Write-ColorOutput -Message "    Apps with Certificate Credentials: $appsWithCertCreds" -Color "Cyan"
+        Write-ColorOutput -Message "    Public Client Apps (ROPC-enabled): $publicClientApps" -Color $(if ($publicClientApps -gt 0) { "Yellow" } else { "Cyan" })
+    }
+    
+    Write-ColorOutput -Message "`n[*] Service Principals:" -Color "Yellow"
+    Write-ColorOutput -Message "    Total Service Principals: $($allSPNs.Count)" -Color "Cyan"
+    
+    if ($allSPNs.Count -gt 0) {
+        Write-ColorOutput -Message "    SPNs with Password Credentials: $spnsWithPasswordCreds" -Color "Cyan"
+        Write-ColorOutput -Message "    SPNs with Certificate Credentials: $spnsWithCertCreds" -Color "Cyan"
+        Write-ColorOutput -Message "    Enabled Service Principals: $enabledSPNs" -Color "Cyan"
+        Write-ColorOutput -Message "    Managed Identities: $managedIdentities" -Color "Cyan"
+    }
+    
+    # Security findings
+    $totalPasswordOnly = 0
+    if ($allApps.Count -gt 0) {
+        $totalPasswordOnly += ($allApps | Where-Object { $_.PasswordCredentials.Count -gt 0 -and $_.KeyCredentials.Count -eq 0 }).Count
+    }
+    if ($allSPNs.Count -gt 0) {
+        $totalPasswordOnly += ($allSPNs | Where-Object { $_.PasswordCredentials.Count -gt 0 -and $_.KeyCredentials.Count -eq 0 }).Count
+    }
+    
+    if ($totalPasswordOnly -gt 0) {
+        Write-ColorOutput -Message "`n[!] Security Warning:" -Color "Yellow"
+        Write-ColorOutput -Message "    [!] Found $totalPasswordOnly applications/SPNs with password-only credentials" -Color "Yellow"
+        Write-ColorOutput -Message "    [*] These are vulnerable to credential theft (similar to SMB without signing)" -Color "DarkGray"
+        Write-ColorOutput -Message "    [*] Recommendation: Use certificate-based authentication instead" -Color "DarkGray"
+    }
+    
+    # Check for high-risk permissions in applications
+    $appsWithHighRiskPerms = 0
+    $highRiskPermIds = @(
+        "19dbc75e-c2e2-444c-a770-ec69d8559fc7",  # Directory.ReadWrite.All
+        "1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9",  # Application.ReadWrite.All
+        "06b708a9-e830-4db3-a914-8e69da51d44f",  # AppRoleAssignment.ReadWrite.All
+        "9e3f62cf-ca93-4989-b6ce-bf83c28f9fe8"   # RoleManagement.ReadWrite.Directory
+    )
+    
+    foreach ($app in $allApps) {
+        if ($app.RequiredResourceAccess) {
+            foreach ($resource in $app.RequiredResourceAccess) {
+                if ($resource.ResourceAppId -eq "00000003-0000-0000-c000-000000000000") {  # Microsoft Graph
+                    foreach ($access in $resource.ResourceAccess) {
+                        if ($access.Id -in $highRiskPermIds) {
+                            $appsWithHighRiskPerms++
+                            break
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    if ($appsWithHighRiskPerms -gt 0) {
+        if ($totalPasswordOnly -eq 0) {
+            Write-ColorOutput -Message "`n[!] Security Warning:" -Color "Yellow"
+        }
+        Write-ColorOutput -Message "    [!] Found $appsWithHighRiskPerms applications requesting high-risk permissions" -Color "Yellow"
+        Write-ColorOutput -Message "    [*] These permissions can modify directory, roles, or applications" -Color "DarkGray"
+        Write-ColorOutput -Message "    [*] Review these applications for potential privilege escalation paths" -Color "DarkGray"
+        Write-ColorOutput -Message "    [*] Use sp-discovery command for detailed permission analysis" -Color "DarkGray"
+    }
+    
+    Write-ColorOutput -Message "`n[*] Application enumeration complete!" -Color "Green"
+}
+
+# Format role assignment output like netexec
+function Format-RoleAssignmentOutput {
+    param(
+        [PSCustomObject]$RoleAssignment,
+        [PSCustomObject]$RoleDefinition,
+        [PSCustomObject]$Principal,
+        [string]$AssignmentType
+    )
+    
+    # Principal display name and UPN (handle both PascalCase and camelCase)
+    $principalName = if ($Principal.DisplayName) { $Principal.DisplayName } elseif ($Principal.displayName) { $Principal.displayName } else { "UNKNOWN" }
+    $principalUPN = if ($Principal.UserPrincipalName) { $Principal.UserPrincipalName } elseif ($Principal.userPrincipalName) { $Principal.userPrincipalName } else { "N/A" }
+    
+    # Truncate long names for column display
+    $maxNameLength = 30
+    $principalNameShort = if ($principalName.Length -gt $maxNameLength) {
+        $principalName.Substring(0, $maxNameLength - 3) + "..."
+    } else {
+        $principalName
+    }
+    
+    # Role display name (handle both PascalCase and camelCase)
+    $roleName = if ($RoleDefinition.DisplayName) { $RoleDefinition.DisplayName } elseif ($RoleDefinition.displayName) { $RoleDefinition.displayName } else { "UNKNOWN" }
+    
+    # Truncate role name if needed
+    $maxRoleLength = 35
+    $roleNameShort = if ($roleName.Length -gt $maxRoleLength) {
+        $roleName.Substring(0, $maxRoleLength - 3) + "..."
+    } else {
+        $roleName
+    }
+    
+    # Principal type
+    $principalType = if ($Principal.'@odata.type') {
+        $Principal.'@odata.type' -replace '#microsoft.graph.', ''
+    } elseif ($Principal.UserPrincipalName) {
+        "user"
+    } elseif ($Principal.ServicePrincipalType) {
+        "servicePrincipal"
+    } elseif ($Principal.GroupTypes) {
+        "group"
+    } else {
+        "unknown"
+    }
+    
+    # Assignment scope (Direct vs PIM eligible)
+    $assignmentScope = $AssignmentType
+    
+    # Get role template ID (for identifying privileged roles) - handle both case formats
+    $roleTemplateId = if ($RoleDefinition.TemplateId) { $RoleDefinition.TemplateId } elseif ($RoleDefinition.templateId) { $RoleDefinition.templateId } elseif ($RoleDefinition.Id) { $RoleDefinition.Id } elseif ($RoleDefinition.id) { $RoleDefinition.id } else { $null }
+    
+    # Determine if this is a privileged/high-risk role
+    $privilegedRoleIds = @(
+        "62e90394-69f5-4237-9190-012177145e10",  # Global Administrator
+        "e8611ab8-c189-46e8-94e1-60213ab1f814",  # Privileged Role Administrator
+        "194ae4cb-b126-40b2-bd5b-6091b380977d",  # Security Administrator
+        "9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3",  # Application Administrator
+        "c4e39bd9-1100-46d3-8c65-fb160da0071f",  # Authentication Administrator
+        "b0f54661-2d74-4c50-afa3-1ec803f12efe",  # Privileged Authentication Administrator
+        "7be44c8a-adaf-4e2a-84d6-ab2649e08a13",  # Helpdesk Administrator
+        "729827e3-9c14-49f7-bb1b-9608f156bbb8",  # User Administrator
+        "fe930be7-5e62-47db-91af-98c3a49a38b1",  # Exchange Administrator
+        "f28a1f50-f6e7-4571-818b-6a12f2af6b6c",  # SharePoint Administrator
+        "29232cdf-9323-42fd-ade2-1d097af3e4de",  # Exchange Recipient Administrator
+        "4ba39ca4-527c-499a-b93d-d9b492c50246",  # Partner Tier1 Support
+        "e00e864a-17c5-4a4b-9c06-f5b95a8d5bd8"   # Partner Tier2 Support
+    )
+    
+    $isPrivileged = $roleTemplateId -in $privilegedRoleIds
+    
+    # Build main output line in netexec style
+    $output = "AZR".PadRight(12) + 
+              $principalUPN.PadRight(35) + 
+              "443".PadRight(7) + 
+              $roleNameShort.PadRight(38) + 
+              "[*] (principal:$principalNameShort) (type:$principalType) (scope:$assignmentScope) (privileged:$isPrivileged)"
+    
+    # Color based on privilege level and principal type
+    $color = "Cyan"
+    if ($isPrivileged) {
+        $color = "Red"  # Privileged roles in red (high security concern)
+    } elseif ($principalType -eq "servicePrincipal") {
+        $color = "Yellow"  # Service principals in yellow
+    } elseif ($principalType -eq "group") {
+        $color = "Magenta"  # Groups in magenta
+    } else {
+        $color = "Green"  # Regular users in green
+    }
+    
+    Write-ColorOutput -Message $output -Color $color
+    
+    # Display role description if available (handle both case formats)
+    $description = if ($RoleDefinition.Description) { $RoleDefinition.Description } elseif ($RoleDefinition.description) { $RoleDefinition.description } else { $null }
+    if ($description) {
+        if ($description.Length -gt 80) {
+            $description = $description.Substring(0, 77) + "..."
+        }
+        Write-ColorOutput -Message "    [+] Description: $description" -Color "DarkCyan"
+    }
+    
+    # Display role permissions count (handle both case formats)
+    $rolePerms = if ($RoleDefinition.RolePermissions) { $RoleDefinition.RolePermissions } elseif ($RoleDefinition.rolePermissions) { $RoleDefinition.rolePermissions } else { $null }
+    if ($rolePerms) {
+        $permCount = $rolePerms.Count
+        Write-ColorOutput -Message "    [+] Role Permissions: $permCount permission set(s)" -Color "DarkCyan"
+    }
+    
+    Write-ColorOutput -Message "" -Color "White"
+}
+
+# Main role assignment enumeration function
+function Invoke-RoleAssignmentEnumeration {
+    param(
+        [string]$ExportPath
+    )
+    
+    Write-ColorOutput -Message "`n[*] AZX - Azure/Entra Role Assignments Enumeration" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Command: Directory Role Assignments and Privileged Accounts" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Enumerates Azure Entra ID role assignments and privileged account access`n" -Color "Yellow"
+    
+    # Get context to display current user info
+    $context = Get-MgContext
+    if ($context) {
+        Write-ColorOutput -Message "[*] Authenticated as: $($context.Account)" -Color "Cyan"
+        Write-ColorOutput -Message "[*] Tenant: $($context.TenantId)" -Color "Cyan"
+        Write-ColorOutput -Message "[*] Requested Scopes: RoleManagement.Read.Directory, Directory.Read.All, RoleEligibilitySchedule.Read.Directory" -Color "Cyan"
+        Write-ColorOutput -Message "[*] Note: PIM data requires RoleEligibilitySchedule.Read.Directory + Azure Entra ID Premium P2`n" -Color "DarkGray"
+    }
+    
+    # Prepare export data
+    $exportData = @()
+    
+    # ===== PHASE 1: ENUMERATE DIRECTORY ROLES =====
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] PHASE 1: Directory Role Enumeration" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] Retrieving directory roles from Azure/Entra ID..." -Color "Yellow"
+    
+    try {
+        # Get all active directory roles (roles that have been activated in the tenant)
+        $activeRoles = Get-MgDirectoryRole -All -ErrorAction Stop
+        Write-ColorOutput -Message "[+] Retrieved $($activeRoles.Count) active directory roles`n" -Color "Green"
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to retrieve directory roles: $_" -Color "Red"
+        Write-ColorOutput -Message "[!] Ensure you have RoleManagement.Read.Directory or Directory.Read.All permissions" -Color "Red"
+        Write-ColorOutput -Message "[*] Guest users may have restricted access to role enumeration" -Color "Yellow"
+        return
+    }
+    
+    # Get all role definitions (templates) using Graph API directly
+    Write-ColorOutput -Message "[*] Retrieving role definitions..." -Color "Yellow"
+    
+    try {
+        $response = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/roleManagement/directory/roleDefinitions" -Method GET -ErrorAction Stop
+        $roleDefinitions = $response.value
+        Write-ColorOutput -Message "[+] Retrieved $($roleDefinitions.Count) role definitions`n" -Color "Green"
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to retrieve role definitions: $_" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Continuing with limited role data...`n" -Color "Yellow"
+        $roleDefinitions = @()
+    }
+    
+    # Build role definition lookup
+    $roleDefLookup = @{}
+    foreach ($roleDef in $roleDefinitions) {
+        # Convert hashtable to PSCustomObject if needed
+        if ($roleDef -is [hashtable]) {
+            $roleDef = [PSCustomObject]$roleDef
+        }
+        
+        if ($roleDef.id) {
+            $roleDefLookup[$roleDef.id] = $roleDef
+        }
+        if ($roleDef.templateId) {
+            $roleDefLookup[$roleDef.templateId] = $roleDef
+        }
+    }
+    
+    # ===== PHASE 2: ENUMERATE ACTIVE ROLE ASSIGNMENTS =====
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] PHASE 2: Active Role Assignments" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] Retrieving role members..." -Color "Yellow"
+    Write-ColorOutput -Message "[*] This may take a while for large organizations...`n" -Color "Yellow"
+    
+    $totalAssignments = 0
+    $privilegedCount = 0
+    $userAssignments = 0
+    $groupAssignments = 0
+    $spnAssignments = 0
+    
+    foreach ($role in $activeRoles) {
+        try {
+            # Get members of this role
+            $members = Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id -All -ErrorAction SilentlyContinue
+            
+            if ($members -and $members.Count -gt 0) {
+                $totalAssignments += $members.Count
+                
+                # Get role definition details
+                $roleDef = $null
+                if ($role.RoleTemplateId -and $roleDefLookup.ContainsKey($role.RoleTemplateId)) {
+                    $roleDef = $roleDefLookup[$role.RoleTemplateId]
+                } elseif ($roleDefLookup.ContainsKey($role.Id)) {
+                    $roleDef = $roleDefLookup[$role.Id]
+                } else {
+                    # Create a minimal role def from the role object
+                    $roleDef = [PSCustomObject]@{
+                        Id = $role.Id
+                        DisplayName = $role.DisplayName
+                        Description = $role.Description
+                        TemplateId = $role.RoleTemplateId
+                        RolePermissions = @()
+                    }
+                }
+                
+                foreach ($member in $members) {
+                    # Resolve principal details
+                    $principal = $null
+                    $principalType = "unknown"
+                    
+                    # Try to get full principal object
+                    try {
+                        $principalId = $member.Id
+                        $odataType = $member.AdditionalProperties['@odata.type']
+                        
+                        if ($odataType -eq '#microsoft.graph.user' -or (-not $odataType -and $member.UserPrincipalName)) {
+                            $principal = Get-MgUser -UserId $principalId -ErrorAction SilentlyContinue
+                            $principalType = "user"
+                            $userAssignments++
+                        } elseif ($odataType -eq '#microsoft.graph.servicePrincipal') {
+                            $principal = Get-MgServicePrincipal -ServicePrincipalId $principalId -ErrorAction SilentlyContinue
+                            $principalType = "servicePrincipal"
+                            $spnAssignments++
+                        } elseif ($odataType -eq '#microsoft.graph.group') {
+                            $principal = Get-MgGroup -GroupId $principalId -ErrorAction SilentlyContinue
+                            $principalType = "group"
+                            $groupAssignments++
+                        }
+                        
+                        # Fallback to member object if we can't get full principal
+                        if (-not $principal) {
+                            $principal = $member
+                        }
+                    } catch {
+                        $principal = $member
+                    }
+                    
+                    # Check if privileged
+                    $privilegedRoleIds = @(
+                        "62e90394-69f5-4237-9190-012177145e10",  # Global Administrator
+                        "e8611ab8-c189-46e8-94e1-60213ab1f814",  # Privileged Role Administrator
+                        "194ae4cb-b126-40b2-bd5b-6091b380977d",  # Security Administrator
+                        "9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3",  # Application Administrator
+                        "c4e39bd9-1100-46d3-8c65-fb160da0071f",  # Authentication Administrator
+                        "b0f54661-2d74-4c50-afa3-1ec803f12efe",  # Privileged Authentication Administrator
+                        "7be44c8a-adaf-4e2a-84d6-ab2649e08a13",  # Helpdesk Administrator
+                        "729827e3-9c14-49f7-bb1b-9608f156bbb8",  # User Administrator
+                        "fe930be7-5e62-47db-91af-98c3a49a38b1",  # Exchange Administrator
+                        "f28a1f50-f6e7-4571-818b-6a12f2af6b6c",  # SharePoint Administrator
+                        "29232cdf-9323-42fd-ade2-1d097af3e4de",  # Exchange Recipient Administrator
+                        "4ba39ca4-527c-499a-b93d-d9b492c50246",  # Partner Tier1 Support
+                        "e00e864a-17c5-4a4b-9c06-f5b95a8d5bd8"   # Partner Tier2 Support
+                    )
+                    
+                    $roleTemplateId = if ($role.RoleTemplateId) { $role.RoleTemplateId } else { $role.Id }
+                    if ($roleTemplateId -in $privilegedRoleIds) {
+                        $privilegedCount++
+                    }
+                    
+                    # Format and display output
+                    Format-RoleAssignmentOutput -RoleAssignment $member -RoleDefinition $roleDef -Principal $principal -AssignmentType "Active"
+                    
+                    # Collect for export
+                    if ($ExportPath) {
+                        $exportData += [PSCustomObject]@{
+                            PrincipalId          = $principal.Id
+                            PrincipalName        = $principal.DisplayName
+                            PrincipalUPN         = if ($principal.UserPrincipalName) { $principal.UserPrincipalName } else { "N/A" }
+                            PrincipalType        = $principalType
+                            RoleId               = $role.Id
+                            RoleName             = $role.DisplayName
+                            RoleDescription      = $roleDef.Description
+                            RoleTemplateId       = $role.RoleTemplateId
+                            AssignmentType       = "Active"
+                            IsPrivileged         = ($roleTemplateId -in $privilegedRoleIds)
+                        }
+                    }
+                }
+            }
+        } catch {
+            Write-ColorOutput -Message "[!] Failed to retrieve members for role $($role.DisplayName): $_" -Color "DarkGray"
+        }
+    }
+    
+    # ===== PHASE 3: PIM ELIGIBLE ASSIGNMENTS (if available) =====
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] PHASE 3: PIM Eligible Assignments" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] Checking for PIM eligible role assignments..." -Color "Yellow"
+    
+    $pimAssignments = 0
+    try {
+        # Try to get role eligibility schedules (PIM) using Graph API directly
+        $response = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilitySchedules?`$expand=principal,roleDefinition" -Method GET -ErrorAction Stop
+        $eligibleAssignments = $response.value
+        
+        if ($eligibleAssignments -and $eligibleAssignments.Count -gt 0) {
+            Write-ColorOutput -Message "[+] Retrieved $($eligibleAssignments.Count) PIM eligible assignments`n" -Color "Green"
+            $pimAssignments = $eligibleAssignments.Count
+            
+            foreach ($assignment in $eligibleAssignments) {
+                # Get role definition (handle both case formats)
+                $roleDef = if ($assignment.RoleDefinition) { $assignment.RoleDefinition } elseif ($assignment.roleDefinition) { $assignment.roleDefinition } else { $null }
+                $roleDefId = if ($assignment.RoleDefinitionId) { $assignment.RoleDefinitionId } elseif ($assignment.roleDefinitionId) { $assignment.roleDefinitionId } else { $null }
+                if (-not $roleDef -and $roleDefId -and $roleDefLookup.ContainsKey($roleDefId)) {
+                    $roleDef = $roleDefLookup[$roleDefId]
+                }
+                
+                # Get principal (handle both case formats)
+                $principal = if ($assignment.Principal) { $assignment.Principal } elseif ($assignment.principal) { $assignment.principal } else { $null }
+                $principalId = if ($assignment.PrincipalId) { $assignment.PrincipalId } elseif ($assignment.principalId) { $assignment.principalId } else { $null }
+                if (-not $principal -and $principalId) {
+                    try {
+                        $principal = Get-MgUser -UserId $principalId -ErrorAction SilentlyContinue
+                        if (-not $principal) {
+                            $principal = Get-MgServicePrincipal -ServicePrincipalId $principalId -ErrorAction SilentlyContinue
+                        }
+                        if (-not $principal) {
+                            $principal = Get-MgGroup -GroupId $principalId -ErrorAction SilentlyContinue
+                        }
+                    } catch {
+                        # Use assignment object if we can't resolve
+                        $principal = [PSCustomObject]@{
+                            Id = $principalId
+                            DisplayName = "Unknown"
+                            UserPrincipalName = "N/A"
+                        }
+                    }
+                }
+                
+                if ($roleDef -and $principal) {
+                    Format-RoleAssignmentOutput -RoleAssignment $assignment -RoleDefinition $roleDef -Principal $principal -AssignmentType "PIM-Eligible"
+                    
+                    # Collect for export (handle both case formats)
+                    if ($ExportPath) {
+                        $exportData += [PSCustomObject]@{
+                            PrincipalId          = if ($principal.Id) { $principal.Id } else { $principal.id }
+                            PrincipalName        = if ($principal.DisplayName) { $principal.DisplayName } else { $principal.displayName }
+                            PrincipalUPN         = if ($principal.UserPrincipalName) { $principal.UserPrincipalName } elseif ($principal.userPrincipalName) { $principal.userPrincipalName } else { "N/A" }
+                            PrincipalType        = if ($principal.'@odata.type') { $principal.'@odata.type' -replace '#microsoft.graph.', '' } else { "unknown" }
+                            RoleId               = if ($roleDef.Id) { $roleDef.Id } elseif ($roleDef.id) { $roleDef.id } else { "N/A" }
+                            RoleName             = if ($roleDef.DisplayName) { $roleDef.DisplayName } elseif ($roleDef.displayName) { $roleDef.displayName } else { "Unknown" }
+                            RoleDescription      = if ($roleDef.Description) { $roleDef.Description } elseif ($roleDef.description) { $roleDef.description } else { "" }
+                            RoleTemplateId       = if ($roleDef.TemplateId) { $roleDef.TemplateId } elseif ($roleDef.templateId) { $roleDef.templateId } else { "" }
+                            AssignmentType       = "PIM-Eligible"
+                            IsPrivileged         = $true  # PIM roles are typically privileged
+                        }
+                    }
+                }
+            }
+        } else {
+            Write-ColorOutput -Message "[*] No PIM eligible assignments found or PIM not configured`n" -Color "DarkGray"
+        }
+    } catch {
+        # Check if it's a permission error (403) - this is expected for most users
+        $errorMessage = $_.Exception.Message
+        if ($errorMessage -match "403" -or $errorMessage -match "Forbidden" -or $errorMessage -match "PermissionScopeNotGranted") {
+            Write-ColorOutput -Message "[*] PIM data not accessible (permission denied)" -Color "DarkGray"
+            Write-ColorOutput -Message "[*] Possible reasons:" -Color "DarkGray"
+            Write-ColorOutput -Message "    - RoleEligibilitySchedule.Read.Directory permission not granted during consent" -Color "DarkGray"
+            Write-ColorOutput -Message "    - Tenant doesn't have Azure Entra ID Premium P2 license" -Color "DarkGray"
+            Write-ColorOutput -Message "    - Your account doesn't have sufficient privileges to read PIM data" -Color "DarkGray"
+            Write-ColorOutput -Message "[*] To enable PIM access: Disconnect and reconnect with admin consent for all requested scopes`n" -Color "DarkGray"
+        } else {
+            # Unexpected error
+            Write-ColorOutput -Message "[!] Failed to retrieve PIM assignments: $errorMessage" -Color "DarkGray"
+            Write-ColorOutput -Message "[*] Continuing without PIM data...`n" -Color "DarkGray"
+        }
+    }
+    
+    # Export if requested
+    if ($ExportPath) {
+        try {
+            $extension = [System.IO.Path]::GetExtension($ExportPath).ToLower()
+            
+            if ($extension -eq ".csv") {
+                $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".json") {
+                $exportData | ConvertTo-Json -Depth 5 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".html") {
+                $stats = [ordered]@{
+                    "Total Active Directory Roles" = $activeRoles.Count
+                    "Total Role Assignments" = $totalAssignments
+                    "Privileged Role Assignments (HIGH RISK)" = $privilegedCount
+                    "User Assignments" = $userAssignments
+                    "Group Assignments" = $groupAssignments
+                    "Service Principal Assignments" = $spnAssignments
+                    "PIM Eligible Assignments" = $pimAssignments
+                }
+                
+                $description = "Directory role assignment enumeration including active and PIM eligible assignments. Highlights privileged accounts and group-based role assignments."
+                
+                $success = Export-HtmlReport -Data $exportData -OutputPath $ExportPath -Title "Role Assignment Enumeration Report" -Statistics $stats -CommandName "roles" -Description $description
+                
+                if ($success) {
+                    Write-ColorOutput -Message "`n[+] HTML report exported to: $ExportPath" -Color "Green"
+                }
+            } else {
+                # Default to CSV
+                $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            }
+        } catch {
+            Write-ColorOutput -Message "`n[!] Failed to export results: $_" -Color "Red"
+        }
+    }
+    
+    Write-ColorOutput -Message "`n[*] Role assignment enumeration complete!" -Color "Green"
+    
+    # Display summary statistics
+    Write-ColorOutput -Message "`n[*] Summary:" -Color "Yellow"
+    Write-ColorOutput -Message "    Total Active Directory Roles: $($activeRoles.Count)" -Color "Cyan"
+    Write-ColorOutput -Message "    Total Role Assignments: $totalAssignments" -Color "Cyan"
+    Write-ColorOutput -Message "    Privileged Role Assignments: $privilegedCount" -Color "Cyan"
+    Write-ColorOutput -Message "    User Assignments: $userAssignments" -Color "Cyan"
+    Write-ColorOutput -Message "    Group Assignments: $groupAssignments" -Color "Cyan"
+    Write-ColorOutput -Message "    Service Principal Assignments: $spnAssignments" -Color "Cyan"
+    if ($pimAssignments -gt 0) {
+        Write-ColorOutput -Message "    PIM Eligible Assignments: $pimAssignments" -Color "Cyan"
+    }
+    
+    # Security warnings
+    if ($privilegedCount -gt 0) {
+        Write-ColorOutput -Message "`n[!] Security Notice:" -Color "Yellow"
+        Write-ColorOutput -Message "    [!] Found $privilegedCount privileged role assignments" -Color "Yellow"
+        Write-ColorOutput -Message "    [*] Review these accounts for security compliance" -Color "DarkGray"
+        Write-ColorOutput -Message "    [*] Ensure MFA is enforced for all privileged accounts" -Color "DarkGray"
+    }
+    
+    if ($groupAssignments -gt 0) {
+        Write-ColorOutput -Message "`n[*] Group-Based Role Assignments:" -Color "Yellow"
+        Write-ColorOutput -Message "    [*] Found $groupAssignments role assignments via groups" -Color "Cyan"
+        Write-ColorOutput -Message "    [*] Review group memberships to understand effective permissions" -Color "DarkGray"
+    }
+    
+    # PIM access guidance
+    if ($pimAssignments -eq 0) {
+        Write-ColorOutput -Message "`n[*] PIM Eligible Assignments:" -Color "Yellow"
+        Write-ColorOutput -Message "    [*] No PIM eligible assignments retrieved" -Color "Cyan"
+        Write-ColorOutput -Message "    [*] To enable PIM enumeration:" -Color "DarkGray"
+        Write-ColorOutput -Message "        1. Ensure tenant has Azure Entra ID Premium P2 license" -Color "DarkGray"
+        Write-ColorOutput -Message "        2. Disconnect: Disconnect-MgGraph" -Color "DarkGray"
+        Write-ColorOutput -Message "        3. Reconnect with admin consent for all scopes" -Color "DarkGray"
+        Write-ColorOutput -Message "        4. Run: .\azx.ps1 roles" -Color "DarkGray"
+    }
+}
+
+# Format service principal discovery output like netexec
+function Format-ServicePrincipalDiscoveryOutput {
+    param(
+        [PSCustomObject]$ServicePrincipal,
+        [array]$AppRoles,
+        [array]$OAuth2Permissions,
+        [array]$Owners,
+        [array]$HighRiskPermissions = @()
+    )
+    
+    # Service Principal display name
+    $displayName = if ($ServicePrincipal.DisplayName) { $ServicePrincipal.DisplayName } else { "UNKNOWN" }
+    
+    # Truncate long names for column display
+    $maxNameLength = 35
+    $displayNameShort = if ($displayName.Length -gt $maxNameLength) {
+        $displayName.Substring(0, $maxNameLength - 3) + "..."
+    } else {
+        $displayName
+    }
+    
+    # Use first 15 chars of SPN ID for alignment
+    $spnIdShort = if ($ServicePrincipal.Id) { 
+        $ServicePrincipal.Id.Substring(0, [Math]::Min(15, $ServicePrincipal.Id.Length))
+    } else { 
+        "UNKNOWN-ID" 
+    }
+    
+    # Service Principal Type
+    $spnType = if ($ServicePrincipal.ServicePrincipalType) { $ServicePrincipal.ServicePrincipalType } else { "Application" }
+    
+    # App ID
+    $appId = if ($ServicePrincipal.AppId) { $ServicePrincipal.AppId } else { "N/A" }
+    
+    # Account status
+    $accountEnabled = if ($ServicePrincipal.AccountEnabled) { "Enabled" } else { "Disabled" }
+    
+    # Count credentials
+    $passwordCreds = if ($ServicePrincipal.PasswordCredentials) { $ServicePrincipal.PasswordCredentials.Count } else { 0 }
+    $certCreds = if ($ServicePrincipal.KeyCredentials) { $ServicePrincipal.KeyCredentials.Count } else { 0 }
+    
+    # Count permissions
+    $appRoleCount = if ($AppRoles) { $AppRoles.Count } else { 0 }
+    $oauth2PermCount = if ($OAuth2Permissions) { $OAuth2Permissions.Count } else { 0 }
+    $ownerCount = if ($Owners) { $Owners.Count } else { 0 }
+    
+    # Check if this SPN has high-risk permissions
+    $hasHighRiskPermissions = $false
+    if ($HighRiskPermissions.Count -gt 0) {
+        # Check OAuth2 permissions for high-risk permissions
+        foreach ($perm in $OAuth2Permissions) {
+            if ($perm.Scope) {
+                $grantedScopes = $perm.Scope -split ' '
+                $hasHighRisk = $grantedScopes | Where-Object { $_ -in $HighRiskPermissions }
+                if ($hasHighRisk) {
+                    $hasHighRiskPermissions = $true
+                    break
+                }
+            }
+        }
+        
+        # Check App Roles for high-risk permissions
+        if (-not $hasHighRiskPermissions) {
+            foreach ($role in $AppRoles) {
+                if ($role.Value -in $HighRiskPermissions) {
+                    $hasHighRiskPermissions = $true
+                    break
+                }
+            }
+        }
+    }
+    
+    # Build main output line
+    $output = "AZR".PadRight(12) + 
+              $spnIdShort.PadRight(17) + 
+              "443".PadRight(7) + 
+              $displayNameShort.PadRight(38) + 
+              "[*] (appId:$appId) (type:$spnType) (status:$accountEnabled) (pwdCreds:$passwordCreds) (certCreds:$certCreds) (appRoles:$appRoleCount) (delegated:$oauth2PermCount) (owners:$ownerCount)"
+    
+    # Color based on status and security posture
+    $color = "Cyan"
+    if ($hasHighRiskPermissions) {
+        $color = "Red"  # High-risk permissions in red - highest priority
+    } elseif ($accountEnabled -eq "Disabled") {
+        $color = "DarkGray"  # Disabled SPNs in gray
+    } elseif ($passwordCreds -gt 0 -and $certCreds -eq 0) {
+        $color = "Yellow"  # Password-only credentials in yellow (security risk)
+    } elseif ($appRoleCount -gt 0 -or $oauth2PermCount -gt 0) {
+        $color = "Green"  # SPNs with permissions in green
+    }
+    
+    Write-ColorOutput -Message $output -Color $color
+    
+    # Display app roles (application permissions)
+    if ($AppRoles -and $AppRoles.Count -gt 0) {
+        Write-ColorOutput -Message "    [+] Application Permissions (App Roles):" -Color "Cyan"
+        foreach ($role in $AppRoles) {
+            $roleName = if ($role.Value) { $role.Value } else { "Unknown" }
+            $roleId = if ($role.Id) { $role.Id } else { "N/A" }
+            $resource = if ($role.ResourceDisplayName) { $role.ResourceDisplayName } else { "Unknown Resource" }
+            
+            # Check if this is a high-risk permission
+            $permColor = "DarkCyan"
+            if ($HighRiskPermissions.Count -gt 0 -and $roleName -in $HighRiskPermissions) {
+                $permColor = "Red"
+            }
+            
+            Write-ColorOutput -Message "        [-] $resource : $roleName (ID: $roleId)" -Color $permColor
+        }
+    }
+    
+    # Display OAuth2 permissions (delegated permissions)
+    if ($OAuth2Permissions -and $OAuth2Permissions.Count -gt 0) {
+        Write-ColorOutput -Message "    [+] Delegated Permissions (OAuth2):" -Color "Cyan"
+        foreach ($perm in $OAuth2Permissions) {
+            $scope = if ($perm.Scope) { $perm.Scope } else { "Unknown" }
+            $consentType = if ($perm.ConsentType) { $perm.ConsentType } else { "Unknown" }
+            $resource = if ($perm.ResourceDisplayName) { $perm.ResourceDisplayName } else { "Unknown Resource" }
+            
+            # Check if any of the scopes are high-risk
+            $permColor = "DarkCyan"
+            if ($HighRiskPermissions.Count -gt 0 -and $scope) {
+                $grantedScopes = $scope -split ' '
+                $hasHighRisk = $grantedScopes | Where-Object { $_ -in $HighRiskPermissions }
+                if ($hasHighRisk) {
+                    $permColor = "Red"
+                }
+            }
+            
+            Write-ColorOutput -Message "        [-] $resource : $scope (ConsentType: $consentType)" -Color $permColor
+        }
+    }
+    
+    # Display owners
+    if ($Owners -and $Owners.Count -gt 0) {
+        Write-ColorOutput -Message "    [+] Owners:" -Color "Cyan"
+        foreach ($owner in $Owners) {
+            $ownerName = if ($owner.DisplayName) { $owner.DisplayName } else { "Unknown" }
+            $ownerType = if ($owner.'@odata.type') { 
+                $owner.'@odata.type' -replace '#microsoft.graph.', '' 
+            } else { 
+                "Unknown" 
+            }
+            $ownerUPN = if ($owner.UserPrincipalName) { " ($($owner.UserPrincipalName))" } else { "" }
+            Write-ColorOutput -Message "        [-] $ownerName [$ownerType]$ownerUPN" -Color "DarkCyan"
+        }
+    }
+    
+    Write-ColorOutput -Message "" -Color "White"
+}
+
+# Main Service Principal Discovery function
+function Invoke-ServicePrincipalDiscovery {
+    param(
+        [string]$ExportPath
+    )
+    
+    Write-ColorOutput -Message "`n[*] AZX - Azure/Entra Service Principal Discovery" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Command: Service Principal Permission and Assignment Enumeration" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Discovers service principals with their permissions, roles, and ownership`n" -Color "Yellow"
+    
+    # Get context to display current user info
+    $context = Get-MgContext
+    if ($context) {
+        Write-ColorOutput -Message "[*] Authenticated as: $($context.Account)" -Color "Cyan"
+        Write-ColorOutput -Message "[*] Tenant: $($context.TenantId)`n" -Color "Cyan"
+    }
+    
+    # Prepare export data
+    $exportData = @()
+    
+    # ===== PHASE 1: ENUMERATE SERVICE PRINCIPALS =====
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] PHASE 1: Service Principal Enumeration" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] Retrieving service principals from Azure/Entra ID..." -Color "Yellow"
+    Write-ColorOutput -Message "[*] This may take a while for large organizations...`n" -Color "Yellow"
+    
+    try {
+        $allSPNs = Get-MgServicePrincipal -All -Property "id,displayName,appId,servicePrincipalType,passwordCredentials,keyCredentials,signInAudience,tags,accountEnabled,createdDateTime,appRoles,oauth2PermissionScopes" -ErrorAction Stop
+        Write-ColorOutput -Message "[+] Retrieved $($allSPNs.Count) service principals`n" -Color "Green"
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to retrieve service principals: $_" -Color "Red"
+        Write-ColorOutput -Message "[!] Ensure you have Application.Read.All or Directory.Read.All permissions" -Color "Red"
+        Write-ColorOutput -Message "[*] Guest users may have restricted access to service principal enumeration" -Color "Yellow"
+        return
+    }
+    
+    if ($allSPNs.Count -eq 0) {
+        Write-ColorOutput -Message "[!] No service principals found or insufficient permissions`n" -Color "Red"
+        return
+    }
+    
+    # ===== PHASE 2: ENUMERATE PERMISSIONS =====
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] PHASE 2: Permission Discovery" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] Retrieving app role assignments (application permissions)..." -Color "Yellow"
+    
+    $appRoleAssignments = @{}
+    try {
+        # Get all app role assignments
+        $allAppRoleAssignments = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/servicePrincipals?`$expand=appRoleAssignedTo" -Method GET -ErrorAction Stop
+        
+        foreach ($spn in $allAppRoleAssignments.value) {
+            if ($spn.appRoleAssignedTo -and $spn.appRoleAssignedTo.Count -gt 0) {
+                $appRoleAssignments[$spn.id] = $spn.appRoleAssignedTo
+            }
+        }
+        
+        Write-ColorOutput -Message "[+] Retrieved app role assignments for $($appRoleAssignments.Count) service principals`n" -Color "Green"
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to retrieve app role assignments: $_" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Continuing with limited permission data...`n" -Color "Yellow"
+    }
+    
+    Write-ColorOutput -Message "[*] Retrieving OAuth2 permission grants (delegated permissions)..." -Color "Yellow"
+    
+    $oauth2Grants = @{}
+    try {
+        $allOAuth2Grants = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/oauth2PermissionGrants" -Method GET -ErrorAction Stop
+        
+        foreach ($grant in $allOAuth2Grants.value) {
+            $clientId = $grant.clientId
+            if (-not $oauth2Grants.ContainsKey($clientId)) {
+                $oauth2Grants[$clientId] = @()
+            }
+            $oauth2Grants[$clientId] += $grant
+        }
+        
+        Write-ColorOutput -Message "[+] Retrieved OAuth2 permission grants for $($oauth2Grants.Count) service principals`n" -Color "Green"
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to retrieve OAuth2 permission grants: $_" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Continuing with limited permission data...`n" -Color "Yellow"
+    }
+    
+    # ===== PHASE 3: ENUMERATE OWNERS =====
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] PHASE 3: Ownership Discovery" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] Retrieving service principal owners..." -Color "Yellow"
+    Write-ColorOutput -Message "[*] This may take a while...`n" -Color "Yellow"
+    
+    $ownershipData = @{}
+    $ownersRetrieved = 0
+    
+    foreach ($spn in $allSPNs) {
+        try {
+            $owners = Get-MgServicePrincipalOwner -ServicePrincipalId $spn.Id -ErrorAction SilentlyContinue
+            if ($owners -and $owners.Count -gt 0) {
+                $ownershipData[$spn.Id] = $owners
+                $ownersRetrieved++
+            }
+        } catch {
+            # Silently continue if we can't get owners for this SPN
+        }
+    }
+    
+    Write-ColorOutput -Message "[+] Retrieved ownership data for $ownersRetrieved service principals`n" -Color "Green"
+    
+    # Define high-risk permissions for highlighting
+    $highRiskPermissions = @(
+        "RoleManagement.ReadWrite.Directory",
+        "AppRoleAssignment.ReadWrite.All",
+        "Application.ReadWrite.All",
+        "Directory.ReadWrite.All"
+    )
+    
+    # ===== PHASE 4: DISPLAY RESULTS =====
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] PHASE 4: Service Principal Details" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] Displaying $($allSPNs.Count) service principals with permissions`n" -Color "Green"
+    
+    # Enumerate service principals with their permissions
+    foreach ($spn in $allSPNs) {
+        # Get app roles for this SPN
+        $spnAppRoles = @()
+        if ($appRoleAssignments.ContainsKey($spn.Id)) {
+            foreach ($assignment in $appRoleAssignments[$spn.Id]) {
+                # Try to resolve the app role name
+                $resourceSPN = $allSPNs | Where-Object { $_.Id -eq $assignment.resourceId } | Select-Object -First 1
+                $appRoleName = "Unknown"
+                if ($resourceSPN -and $resourceSPN.AppRoles) {
+                    $matchingRole = $resourceSPN.AppRoles | Where-Object { $_.Id -eq $assignment.appRoleId } | Select-Object -First 1
+                    if ($matchingRole) {
+                        $appRoleName = $matchingRole.Value
+                    }
+                }
+                
+                $spnAppRoles += [PSCustomObject]@{
+                    Id = $assignment.appRoleId
+                    Value = $appRoleName
+                    ResourceDisplayName = $assignment.resourceDisplayName
+                }
+            }
+        }
+        
+        # Get OAuth2 permissions for this SPN
+        $spnOAuth2Perms = @()
+        if ($oauth2Grants.ContainsKey($spn.Id)) {
+            foreach ($grant in $oauth2Grants[$spn.Id]) {
+                # Try to resolve resource display name
+                $resourceSPN = $allSPNs | Where-Object { $_.Id -eq $grant.resourceId } | Select-Object -First 1
+                $resourceDisplayName = if ($resourceSPN) { $resourceSPN.DisplayName } else { "Unknown" }
+                
+                $spnOAuth2Perms += [PSCustomObject]@{
+                    Scope = $grant.scope
+                    ConsentType = $grant.consentType
+                    ResourceDisplayName = $resourceDisplayName
+                    ResourceId = $grant.resourceId
+                }
+            }
+        }
+        
+        # Get owners for this SPN
+        $spnOwners = @()
+        if ($ownershipData.ContainsKey($spn.Id)) {
+            $spnOwners = $ownershipData[$spn.Id]
+        }
+        
+        # Format and display output
+        Format-ServicePrincipalDiscoveryOutput -ServicePrincipal $spn -AppRoles $spnAppRoles -OAuth2Permissions $spnOAuth2Perms -Owners $spnOwners -HighRiskPermissions $highRiskPermissions
+        
+        # Collect for export
+        if ($ExportPath) {
+            $exportData += [PSCustomObject]@{
+                ObjectId = $spn.Id
+                AppId = $spn.AppId
+                DisplayName = $spn.DisplayName
+                ServicePrincipalType = $spn.ServicePrincipalType
+                AccountEnabled = $spn.AccountEnabled
+                SignInAudience = $spn.SignInAudience
+                PasswordCredentials = $spn.PasswordCredentials.Count
+                KeyCredentials = $spn.KeyCredentials.Count
+                Tags = ($spn.Tags -join ";")
+                CreatedDateTime = $spn.CreatedDateTime
+                AppRoleCount = $spnAppRoles.Count
+                AppRoles = ($spnAppRoles | ForEach-Object { "$($_.ResourceDisplayName):$($_.Value)" }) -join "; "
+                OAuth2PermissionCount = $spnOAuth2Perms.Count
+                OAuth2Permissions = ($spnOAuth2Perms | ForEach-Object { "$($_.ResourceDisplayName):$($_.Scope)" }) -join "; "
+                OwnerCount = $spnOwners.Count
+                Owners = ($spnOwners | ForEach-Object { $_.DisplayName }) -join "; "
+            }
+        }
+    }
+    
+    # Calculate summary statistics
+    $spnsWithPasswordCreds = ($allSPNs | Where-Object { $_.PasswordCredentials.Count -gt 0 }).Count
+    $spnsWithCertCreds = ($allSPNs | Where-Object { $_.KeyCredentials.Count -gt 0 }).Count
+    $enabledSPNs = ($allSPNs | Where-Object { $_.AccountEnabled -eq $true }).Count
+    $managedIdentities = ($allSPNs | Where-Object { $_.ServicePrincipalType -eq "ManagedIdentity" }).Count
+    $passwordOnlySPNs = ($allSPNs | Where-Object { $_.PasswordCredentials.Count -gt 0 -and $_.KeyCredentials.Count -eq 0 }).Count
+    
+    # Export if requested
+    if ($ExportPath -and $exportData.Count -gt 0) {
+        try {
+            $extension = [System.IO.Path]::GetExtension($ExportPath).ToLower()
+            
+            if ($extension -eq ".csv") {
+                $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "[+] Results exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".json") {
+                $exportData | ConvertTo-Json -Depth 5 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "[+] Results exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".html") {
+                $stats = [ordered]@{
+                    "Total Service Principals" = $allSPNs.Count
+                    "Enabled Service Principals" = $enabledSPNs
+                    "Password-Only SPNs (HIGH RISK)" = $passwordOnlySPNs
+                    "SPNs with Password Credentials" = $spnsWithPasswordCreds
+                    "SPNs with Certificate Credentials" = $spnsWithCertCreds
+                    "Managed Identities" = $managedIdentities
+                    "SPNs with App Role Assignments" = $appRoleAssignments.Count
+                    "SPNs with OAuth2 Permission Grants" = $oauth2Grants.Count
+                    "SPNs with Owners" = $ownersRetrieved
+                }
+                
+                $description = "Service principal discovery with detailed permissions, role assignments, and ownership information. Identifies high-risk permissions and password-only credentials."
+                
+                $success = Export-HtmlReport -Data $exportData -OutputPath $ExportPath -Title "Service Principal Discovery Report" -Statistics $stats -CommandName "sp-discovery" -Description $description
+                
+                if ($success) {
+                    Write-ColorOutput -Message "[+] HTML report exported to: $ExportPath" -Color "Green"
+                }
+            } else {
+                # Default to CSV
+                $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "[+] Results exported to: $ExportPath" -Color "Green"
+            }
+        } catch {
+            Write-ColorOutput -Message "[!] Failed to export results: $_" -Color "Red"
+        }
+    }
+    
+    # Display summary statistics
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] Summary Statistics" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] Service Principals:" -Color "Yellow"
+    Write-ColorOutput -Message "    Total Service Principals: $($allSPNs.Count)" -Color "Cyan"
+    Write-ColorOutput -Message "    Enabled Service Principals: $enabledSPNs" -Color "Cyan"
+    Write-ColorOutput -Message "    SPNs with Password Credentials: $spnsWithPasswordCreds" -Color "Cyan"
+    Write-ColorOutput -Message "    SPNs with Certificate Credentials: $spnsWithCertCreds" -Color "Cyan"
+    Write-ColorOutput -Message "    Managed Identities: $managedIdentities" -Color "Cyan"
+    
+    Write-ColorOutput -Message "`n[*] Permissions:" -Color "Yellow"
+    Write-ColorOutput -Message "    SPNs with App Role Assignments: $($appRoleAssignments.Count)" -Color "Cyan"
+    Write-ColorOutput -Message "    SPNs with OAuth2 Permission Grants: $($oauth2Grants.Count)" -Color "Cyan"
+    
+    Write-ColorOutput -Message "`n[*] Ownership:" -Color "Yellow"
+    Write-ColorOutput -Message "    SPNs with Owners: $ownersRetrieved" -Color "Cyan"
+    
+    # Security findings
+    if ($passwordOnlySPNs -gt 0) {
+        Write-ColorOutput -Message "`n[!] Security Warnings:" -Color "Yellow"
+        Write-ColorOutput -Message "    [!] Found $passwordOnlySPNs service principals with password-only credentials" -Color "Yellow"
+        Write-ColorOutput -Message "    [*] These are vulnerable to credential theft (similar to SMB without signing)" -Color "DarkGray"
+        Write-ColorOutput -Message "    [*] Recommendation: Use certificate-based authentication instead" -Color "DarkGray"
+    }
+    
+    # Identify high-risk permissions
+    $highRiskPermissions = @(
+        "RoleManagement.ReadWrite.Directory",
+        "AppRoleAssignment.ReadWrite.All",
+        "Application.ReadWrite.All",
+        "Directory.ReadWrite.All"
+    )
+    
+    $spnsWithHighRiskPerms = 0
+    foreach ($spnId in $oauth2Grants.Keys) {
+        foreach ($grant in $oauth2Grants[$spnId]) {
+            $grantedScopes = $grant.scope -split ' '
+            $hasHighRisk = $grantedScopes | Where-Object { $_ -in $highRiskPermissions }
+            if ($hasHighRisk) {
+                $spnsWithHighRiskPerms++
+                break
+            }
+        }
+    }
+    
+    if ($spnsWithHighRiskPerms -gt 0) {
+        Write-ColorOutput -Message "    [!] Found $spnsWithHighRiskPerms service principals with high-risk permissions" -Color "Yellow"
+        Write-ColorOutput -Message "    [*] These permissions can modify directory, roles, or applications" -Color "DarkGray"
+        Write-ColorOutput -Message "    [*] Review these service principals for potential privilege escalation paths" -Color "DarkGray"
+    }
+    
+    Write-ColorOutput -Message "`n[*] Service Principal discovery complete!" -Color "Green"
 }
 
 # Format user profile output like netexec
@@ -1449,6 +3467,12 @@ function Invoke-UserProfileEnumeration {
         }
     }
     
+    # Calculate summary statistics
+    $memberUsers = ($allUsers | Where-Object { $_.UserType -eq "Member" -or -not $_.UserType }).Count
+    $guestUsers = ($allUsers | Where-Object { $_.UserType -eq "Guest" }).Count
+    $enabledUsers = ($allUsers | Where-Object { $_.AccountEnabled -eq $true }).Count
+    $disabledUsers = ($allUsers | Where-Object { $_.AccountEnabled -eq $false }).Count
+    
     # Export if requested
     if ($ExportPath) {
         try {
@@ -1456,14 +3480,31 @@ function Invoke-UserProfileEnumeration {
             
             if ($extension -eq ".csv") {
                 $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
             } elseif ($extension -eq ".json") {
                 $exportData | ConvertTo-Json -Depth 5 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".html") {
+                $stats = [ordered]@{
+                    "Total Users" = $allUsers.Count
+                    "Member Users" = $memberUsers
+                    "Guest Users" = $guestUsers
+                    "Enabled Accounts" = $enabledUsers
+                    "Disabled Accounts" = $disabledUsers
+                }
+                
+                $description = "Comprehensive user profile enumeration including job titles, departments, and account status. Includes sign-in activity when available."
+                
+                $success = Export-HtmlReport -Data $exportData -OutputPath $ExportPath -Title "User Profile Enumeration Report" -Statistics $stats -CommandName "user-profiles" -Description $description
+                
+                if ($success) {
+                    Write-ColorOutput -Message "`n[+] HTML report exported to: $ExportPath" -Color "Green"
+                }
             } else {
                 # Default to CSV
                 $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
             }
-            
-            Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
         } catch {
             Write-ColorOutput -Message "`n[!] Failed to export results: $_" -Color "Red"
         }
@@ -1474,12 +3515,6 @@ function Invoke-UserProfileEnumeration {
     # Display summary statistics
     Write-ColorOutput -Message "`n[*] Summary:" -Color "Yellow"
     Write-ColorOutput -Message "    Total Users: $($allUsers.Count)" -Color "Cyan"
-    
-    $memberUsers = ($allUsers | Where-Object { $_.UserType -eq "Member" -or -not $_.UserType }).Count
-    $guestUsers = ($allUsers | Where-Object { $_.UserType -eq "Guest" }).Count
-    $enabledUsers = ($allUsers | Where-Object { $_.AccountEnabled -eq $true }).Count
-    $disabledUsers = ($allUsers | Where-Object { $_.AccountEnabled -eq $false }).Count
-    
     Write-ColorOutput -Message "    Member Users: $memberUsers" -Color "Cyan"
     Write-ColorOutput -Message "    Guest Users: $guestUsers" -Color "Cyan"
     Write-ColorOutput -Message "    Enabled Accounts: $enabledUsers" -Color "Cyan"
@@ -1803,14 +3838,55 @@ function Invoke-PasswordPolicyEnumeration {
                     ConditionalAccessPolicyCount = $policyData.ConditionalAccessPolicies.Count
                 }
                 $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Policy information exported to: $ExportPath" -Color "Green"
             } elseif ($extension -eq ".json") {
                 $policyData | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "`n[+] Policy information exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".html") {
+                $stats = [ordered]@{
+                    "Tenant Display Name" = $policyData.TenantDisplayName
+                    "Tenant ID" = $policyData.TenantId
+                    "Password Validity Period (Days)" = $policyData.PasswordPolicies.ValidityPeriodDays
+                    "Password Notification Window (Days)" = $policyData.PasswordPolicies.NotificationWindowDays
+                    "Security Defaults Enabled" = $policyData.SecurityDefaults
+                    "Conditional Access Policies" = $policyData.ConditionalAccessPolicies.Count
+                    "Authentication Methods Configured" = $policyData.AuthenticationMethods.Count
+                }
+                
+                # Create table data for CA policies if available
+                $tableData = @()
+                if ($policyData.ConditionalAccessPolicies.Count -gt 0) {
+                    foreach ($cap in $policyData.ConditionalAccessPolicies) {
+                        $tableData += [PSCustomObject]@{
+                            PolicyName = $cap.DisplayName
+                            State = $cap.State
+                            CreatedDateTime = $cap.CreatedDateTime
+                            ModifiedDateTime = $cap.ModifiedDateTime
+                        }
+                    }
+                } else {
+                    # If no CA policies, export the simple policy data
+                    $tableData = @([PSCustomObject]@{
+                        TenantId = $policyData.TenantId
+                        TenantDisplayName = $policyData.TenantDisplayName
+                        PasswordValidityDays = $policyData.PasswordPolicies.ValidityPeriodDays
+                        PasswordNotificationDays = $policyData.PasswordPolicies.NotificationWindowDays
+                        SecurityDefaultsEnabled = $policyData.SecurityDefaults
+                    })
+                }
+                
+                $description = "Password policy and security configuration enumeration including password expiration policies, security defaults, and conditional access policies."
+                
+                $success = Export-HtmlReport -Data $tableData -OutputPath $ExportPath -Title "Password Policy Enumeration Report" -Statistics $stats -CommandName "pass-pol" -Description $description
+                
+                if ($success) {
+                    Write-ColorOutput -Message "`n[+] HTML report exported to: $ExportPath" -Color "Green"
+                }
             } else {
                 # Default to JSON for complex data
                 $policyData | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "`n[+] Policy information exported to: $ExportPath" -Color "Green"
             }
-            
-            Write-ColorOutput -Message "`n[+] Policy information exported to: $ExportPath" -Color "Green"
         } catch {
             Write-ColorOutput -Message "`n[!] Failed to export results: $_" -Color "Red"
         }
@@ -1859,6 +3935,382 @@ function Invoke-PasswordPolicyEnumeration {
         Write-ColorOutput -Message "    1. Request Policy.Read.All permissions from your admin" -Color "Cyan"
         Write-ColorOutput -Message "    2. Or use a member account with appropriate permissions" -Color "Cyan"
     }
+}
+
+# Format Conditional Access Policy output like netexec
+function Format-ConditionalAccessPolicyOutput {
+    param(
+        [PSCustomObject]$Policy,
+        [int]$Index,
+        [int]$Total
+    )
+    
+    # Policy display name and ID
+    $policyName = if ($Policy.DisplayName) { $Policy.DisplayName } elseif ($Policy.displayName) { $Policy.displayName } else { "UNKNOWN" }
+    $policyId = if ($Policy.Id) { $Policy.Id } elseif ($Policy.id) { $Policy.id } else { "N/A" }
+    
+    # Truncate policy name if too long
+    $maxNameLength = 40
+    $policyNameShort = if ($policyName.Length -gt $maxNameLength) {
+        $policyName.Substring(0, $maxNameLength - 3) + "..."
+    } else {
+        $policyName
+    }
+    
+    # Policy state
+    $state = if ($Policy.State) { $Policy.State } elseif ($Policy.state) { $Policy.state } else { "unknown" }
+    
+    # Determine color based on state and controls
+    $stateColor = switch ($state) {
+        "enabled" { "Green" }
+        "enabledForReportingButNotEnforced" { "Yellow" }
+        "disabled" { "DarkGray" }
+        default { "Cyan" }
+    }
+    
+    # Check for high-risk conditions
+    $isHighRisk = $false
+    $riskIndicators = @()
+    
+    # Check for block access
+    if ($Policy.GrantControls -and $Policy.GrantControls.BuiltInControls -contains "block") {
+        $isHighRisk = $true
+        $riskIndicators += "BLOCK_ACCESS"
+    }
+    
+    # Check for risky sign-in conditions
+    if ($Policy.Conditions -and $Policy.Conditions.SignInRiskLevels) {
+        if ($Policy.Conditions.SignInRiskLevels -contains "high") {
+            $riskIndicators += "HIGH_RISK"
+        }
+    }
+    
+    # Check for user risk conditions
+    if ($Policy.Conditions -and $Policy.Conditions.UserRiskLevels) {
+        if ($Policy.Conditions.UserRiskLevels -contains "high") {
+            $riskIndicators += "USER_RISK"
+        }
+    }
+    
+    # Get grant controls summary
+    $grantControls = @()
+    if ($Policy.GrantControls -and $Policy.GrantControls.BuiltInControls) {
+        foreach ($control in $Policy.GrantControls.BuiltInControls) {
+            switch ($control) {
+                "mfa" { $grantControls += "MFA" }
+                "compliantDevice" { $grantControls += "Compliant Device" }
+                "domainJoinedDevice" { $grantControls += "Domain Joined" }
+                "approvedApplication" { $grantControls += "Approved App" }
+                "compliantApplication" { $grantControls += "Compliant App" }
+                "passwordChange" { $grantControls += "Password Change" }
+                "block" { $grantControls += "BLOCK"; $isHighRisk = $true }
+                default { $grantControls += $control }
+            }
+        }
+    }
+    
+    # Build main output line in netexec style
+    $indexStr = "[$Index/$Total]"
+    $output = "AZR".PadRight(12) + 
+              $policyId.Substring(0, [Math]::Min(15, $policyId.Length)).PadRight(18) + 
+              "443".PadRight(7) + 
+              $policyNameShort.PadRight(43) + 
+              "$indexStr [*] (state:$state)"
+    
+    # Override color for high-risk policies
+    if ($isHighRisk -and $state -eq "enabled") {
+        $stateColor = "Red"
+    }
+    
+    Write-ColorOutput -Message $output -Color $stateColor
+    
+    # Display grant controls if any
+    if ($grantControls.Count -gt 0) {
+        $controlsStr = $grantControls -join ", "
+        Write-ColorOutput -Message "    [+] Grant Controls: $controlsStr" -Color $(if ($isHighRisk) { "Red" } else { "Cyan" })
+    }
+    
+    # Display risk indicators if any
+    if ($riskIndicators.Count -gt 0) {
+        $riskStr = $riskIndicators -join ", "
+        Write-ColorOutput -Message "    [!] Risk Indicators: $riskStr" -Color "Yellow"
+    }
+    
+    # Display conditions summary
+    if ($Policy.Conditions) {
+        # Users/Groups
+        if ($Policy.Conditions.Users) {
+            if ($Policy.Conditions.Users.IncludeUsers -contains "All") {
+                Write-ColorOutput -Message "    [*] Target: All Users" -Color "DarkGray"
+            } elseif ($Policy.Conditions.Users.IncludeUsers -or $Policy.Conditions.Users.IncludeGroups) {
+                $userCount = if ($Policy.Conditions.Users.IncludeUsers) { $Policy.Conditions.Users.IncludeUsers.Count } else { 0 }
+                $groupCount = if ($Policy.Conditions.Users.IncludeGroups) { $Policy.Conditions.Users.IncludeGroups.Count } else { 0 }
+                Write-ColorOutput -Message "    [*] Target: $userCount Users, $groupCount Groups" -Color "DarkGray"
+            }
+            
+            # Exclusions
+            if ($Policy.Conditions.Users.ExcludeUsers -or $Policy.Conditions.Users.ExcludeGroups) {
+                $excludeUserCount = if ($Policy.Conditions.Users.ExcludeUsers) { $Policy.Conditions.Users.ExcludeUsers.Count } else { 0 }
+                $excludeGroupCount = if ($Policy.Conditions.Users.ExcludeGroups) { $Policy.Conditions.Users.ExcludeGroups.Count } else { 0 }
+                Write-ColorOutput -Message "    [*] Exclusions: $excludeUserCount Users, $excludeGroupCount Groups" -Color "DarkGray"
+            }
+        }
+        
+        # Applications
+        if ($Policy.Conditions.Applications) {
+            if ($Policy.Conditions.Applications.IncludeApplications -contains "All") {
+                Write-ColorOutput -Message "    [*] Apps: All Applications" -Color "DarkGray"
+            } elseif ($Policy.Conditions.Applications.IncludeApplications) {
+                Write-ColorOutput -Message "    [*] Apps: $($Policy.Conditions.Applications.IncludeApplications.Count) Applications" -Color "DarkGray"
+            }
+        }
+        
+        # Platforms
+        if ($Policy.Conditions.Platforms -and $Policy.Conditions.Platforms.IncludePlatforms) {
+            $platforms = $Policy.Conditions.Platforms.IncludePlatforms -join ", "
+            Write-ColorOutput -Message "    [*] Platforms: $platforms" -Color "DarkGray"
+        }
+        
+        # Locations
+        if ($Policy.Conditions.Locations) {
+            if ($Policy.Conditions.Locations.IncludeLocations -contains "All") {
+                Write-ColorOutput -Message "    [*] Locations: All" -Color "DarkGray"
+            } elseif ($Policy.Conditions.Locations.IncludeLocations) {
+                Write-ColorOutput -Message "    [*] Locations: $($Policy.Conditions.Locations.IncludeLocations.Count) Named Locations" -Color "DarkGray"
+            }
+        }
+        
+        # Client app types
+        if ($Policy.Conditions.ClientAppTypes) {
+            $clientApps = $Policy.Conditions.ClientAppTypes -join ", "
+            Write-ColorOutput -Message "    [*] Client Apps: $clientApps" -Color "DarkGray"
+        }
+    }
+    
+    # Display session controls if any
+    if ($Policy.SessionControls) {
+        $sessionControls = @()
+        
+        if ($Policy.SessionControls.SignInFrequency) {
+            $frequency = $Policy.SessionControls.SignInFrequency
+            $sessionControls += "Sign-in Frequency: $($frequency.Value) $($frequency.Type)"
+        }
+        
+        if ($Policy.SessionControls.PersistentBrowser) {
+            $sessionControls += "Persistent Browser: $($Policy.SessionControls.PersistentBrowser.Mode)"
+        }
+        
+        if ($Policy.SessionControls.ApplicationEnforcedRestrictions) {
+            $sessionControls += "App Enforced Restrictions"
+        }
+        
+        if ($Policy.SessionControls.CloudAppSecurity) {
+            $sessionControls += "Cloud App Security: $($Policy.SessionControls.CloudAppSecurity.CloudAppSecurityType)"
+        }
+        
+        if ($sessionControls.Count -gt 0) {
+            $sessionStr = $sessionControls -join ", "
+            Write-ColorOutput -Message "    [*] Session Controls: $sessionStr" -Color "Cyan"
+        }
+    }
+    
+    # Display creation and modification dates
+    if ($Policy.CreatedDateTime) {
+        Write-ColorOutput -Message "    [*] Created: $($Policy.CreatedDateTime)" -Color "DarkGray"
+    }
+    if ($Policy.ModifiedDateTime) {
+        Write-ColorOutput -Message "    [*] Modified: $($Policy.ModifiedDateTime)" -Color "DarkGray"
+    }
+}
+
+# Invoke Conditional Access Policy Review enumeration
+function Invoke-ConditionalAccessPolicyReview {
+    param(
+        [string]$ExportPath
+    )
+    
+    Write-ColorOutput -Message "[*] AZexec - Conditional Access Policy Review" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Enumerating Conditional Access Policies...`n" -Color "Cyan"
+    
+    # Check if user is a guest
+    $isGuest = Test-IsGuestUser
+    
+    if ($isGuest) {
+        Write-ColorOutput -Message "[!] WARNING: You are authenticated as a guest user" -Color "Red"
+        Write-ColorOutput -Message "[!] Guest users typically cannot access Conditional Access Policies" -Color "Red"
+        Write-ColorOutput -Message "[!] This command requires a member account with Policy.Read.All permissions`n" -Color "Red"
+    }
+    
+    # Get tenant info
+    $tenantInfo = $null
+    try {
+        $tenantInfo = Get-MgOrganization -ErrorAction Stop | Select-Object -First 1
+        $tenantName = if ($tenantInfo.DisplayName) { $tenantInfo.DisplayName } else { "Unknown" }
+        $tenantId = if ($tenantInfo.Id) { $tenantInfo.Id } else { "Unknown" }
+        Write-ColorOutput -Message "[+] Tenant: $tenantName (ID: $tenantId)" -Color "Green"
+    } catch {
+        Write-ColorOutput -Message "[!] Could not retrieve tenant information" -Color "Yellow"
+    }
+    
+    # Get current user context
+    try {
+        $context = Get-MgContext
+        if ($context) {
+            Write-ColorOutput -Message "[+] Authenticated as: $($context.Account)" -Color "Green"
+            Write-ColorOutput -Message "[+] Required permissions: Policy.Read.All`n" -Color "Cyan"
+        }
+    } catch {
+        Write-ColorOutput -Message "[!] Could not retrieve authentication context`n" -Color "Yellow"
+    }
+    
+    # Initialize data collection
+    $policyData = @{
+        TenantId = $tenantId
+        TenantDisplayName = $tenantName
+        Policies = @()
+        Summary = @{
+            Total = 0
+            Enabled = 0
+            ReportOnly = 0
+            Disabled = 0
+            BlockPolicies = 0
+            MFAPolicies = 0
+        }
+    }
+    
+    # Enumerate Conditional Access Policies
+    try {
+        $policies = Get-MgIdentityConditionalAccessPolicy -All -ErrorAction Stop
+        
+        if ($policies) {
+            $policyCount = ($policies | Measure-Object).Count
+            $policyData.Summary.Total = $policyCount
+            
+            Write-ColorOutput -Message "[+] Found $policyCount Conditional Access Policies`n" -Color "Green"
+            
+            $index = 1
+            foreach ($policy in $policies) {
+                # Update summary counts
+                switch ($policy.State) {
+                    "enabled" { $policyData.Summary.Enabled++ }
+                    "enabledForReportingButNotEnforced" { $policyData.Summary.ReportOnly++ }
+                    "disabled" { $policyData.Summary.Disabled++ }
+                }
+                
+                # Check for block policies
+                if ($policy.GrantControls -and $policy.GrantControls.BuiltInControls -contains "block") {
+                    $policyData.Summary.BlockPolicies++
+                }
+                
+                # Check for MFA policies
+                if ($policy.GrantControls -and $policy.GrantControls.BuiltInControls -contains "mfa") {
+                    $policyData.Summary.MFAPolicies++
+                }
+                
+                # Format and display policy
+                Format-ConditionalAccessPolicyOutput -Policy $policy -Index $index -Total $policyCount
+                
+                # Store policy data for export
+                $policyData.Policies += [PSCustomObject]@{
+                    DisplayName = $policy.DisplayName
+                    Id = $policy.Id
+                    State = $policy.State
+                    CreatedDateTime = $policy.CreatedDateTime
+                    ModifiedDateTime = $policy.ModifiedDateTime
+                    GrantControls = ($policy.GrantControls.BuiltInControls -join ", ")
+                    TargetUsers = if ($policy.Conditions.Users.IncludeUsers -contains "All") { "All" } else { "$($policy.Conditions.Users.IncludeUsers.Count) users" }
+                    TargetApps = if ($policy.Conditions.Applications.IncludeApplications -contains "All") { "All" } else { "$($policy.Conditions.Applications.IncludeApplications.Count) apps" }
+                    Platforms = ($policy.Conditions.Platforms.IncludePlatforms -join ", ")
+                    ClientAppTypes = ($policy.Conditions.ClientAppTypes -join ", ")
+                }
+                
+                $index++
+                Write-Host ""
+            }
+            
+            # Display summary
+            Write-ColorOutput -Message "[*] ========================================" -Color "Yellow"
+            Write-ColorOutput -Message "[*] Conditional Access Policy Summary" -Color "Yellow"
+            Write-ColorOutput -Message "[*] ========================================" -Color "Yellow"
+            Write-ColorOutput -Message "[+] Total Policies: $($policyData.Summary.Total)" -Color "Green"
+            Write-ColorOutput -Message "    [*] Enabled: $($policyData.Summary.Enabled)" -Color "Green"
+            Write-ColorOutput -Message "    [*] Report-Only: $($policyData.Summary.ReportOnly)" -Color "Yellow"
+            Write-ColorOutput -Message "    [*] Disabled: $($policyData.Summary.Disabled)" -Color "DarkGray"
+            Write-ColorOutput -Message "    [*] Block Policies: $($policyData.Summary.BlockPolicies)" -Color $(if ($policyData.Summary.BlockPolicies -gt 0) { "Red" } else { "DarkGray" })
+            Write-ColorOutput -Message "    [*] MFA Policies: $($policyData.Summary.MFAPolicies)" -Color $(if ($policyData.Summary.MFAPolicies -gt 0) { "Green" } else { "Yellow" })
+            
+            # Security recommendations
+            Write-ColorOutput -Message "`n[*] Security Recommendations:" -Color "Yellow"
+            
+            if ($policyData.Summary.Enabled -eq 0) {
+                Write-ColorOutput -Message "    [!] No enabled Conditional Access Policies found - consider enabling policies" -Color "Red"
+            }
+            
+            if ($policyData.Summary.MFAPolicies -eq 0) {
+                Write-ColorOutput -Message "    [!] No MFA enforcement policies found - consider requiring MFA" -Color "Yellow"
+            } else {
+                Write-ColorOutput -Message "    [+] MFA policies are configured" -Color "Green"
+            }
+            
+            if ($policyData.Summary.ReportOnly -gt 0) {
+                Write-ColorOutput -Message "    [*] $($policyData.Summary.ReportOnly) policies in report-only mode - review and enable if appropriate" -Color "Cyan"
+            }
+            
+            if ($policyData.Summary.Disabled -gt 0) {
+                Write-ColorOutput -Message "    [*] $($policyData.Summary.Disabled) policies disabled - review if still needed" -Color "DarkGray"
+            }
+            
+        } else {
+            Write-ColorOutput -Message "[!] No Conditional Access Policies found in this tenant" -Color "Yellow"
+            Write-ColorOutput -Message "[*] Consider implementing Conditional Access for enhanced security" -Color "Cyan"
+        }
+        
+    } catch {
+        # Check for permission errors
+        if ($_.Exception.Response.StatusCode -eq 403 -or 
+            $_.Exception.Message -like "*403*" -or 
+            $_.Exception.Message -like "*Forbidden*" -or 
+            $_.Exception.Message -like "*AccessDenied*" -or 
+            $_.Exception.Message -like "*Unauthorized*") {
+            
+            Write-ColorOutput -Message "[!] Access Denied: Insufficient permissions to read Conditional Access Policies" -Color "Red"
+            Write-ColorOutput -Message "[*] Required permission: Policy.Read.All" -Color "Yellow"
+            Write-ColorOutput -Message "[*] Guest users typically cannot access Conditional Access Policies (expected behavior)" -Color "Cyan"
+            Write-ColorOutput -Message "`n[*] To access this information:" -Color "Yellow"
+            Write-ColorOutput -Message "    1. Use a member account (not a guest user)" -Color "Cyan"
+            Write-ColorOutput -Message "    2. Request Policy.Read.All permissions from your admin" -Color "Cyan"
+            Write-ColorOutput -Message "    3. Ensure your account has appropriate directory roles" -Color "Cyan"
+            
+        } else {
+            Write-ColorOutput -Message "[!] Failed to enumerate Conditional Access Policies" -Color "Red"
+            Write-ColorOutput -Message "[!] Error: $($_.Exception.Message)" -Color "Red"
+        }
+    }
+    
+    # Export if requested
+    if ($ExportPath -and $policyData.Policies.Count -gt 0) {
+        try {
+            $extension = [System.IO.Path]::GetExtension($ExportPath).ToLower()
+            
+            if ($extension -eq ".csv") {
+                # Export policies to CSV
+                $policyData.Policies | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Policies exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".json") {
+                # Export full data to JSON
+                $policyData | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "`n[+] Full policy data exported to: $ExportPath" -Color "Green"
+            } else {
+                # Default to JSON for complex data
+                $policyData | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "`n[+] Full policy data exported to: $ExportPath" -Color "Green"
+            }
+        } catch {
+            Write-ColorOutput -Message "[!] Failed to export policies: $($_.Exception.Message)" -Color "Red"
+        }
+    }
+    
+    Write-ColorOutput -Message "`n[*] Conditional Access Policy review complete!" -Color "Green"
 }
 
 # Test if a tenant allows guest/external authentication (unauthenticated check)
@@ -1992,7 +4444,7 @@ function Test-GuestLoginEnabled {
 #
 # HOW IT WORKS:
 #   - Uses Resource Owner Password Credentials (ROPC) grant type
-#   - Sends username/password directly to Azure AD token endpoint
+#   - Sends username/password directly to Azure Entra ID token endpoint
 #   - Returns detailed authentication result including:
 #     * Success/failure status
 #     * MFA requirements (valid creds even if MFA blocks)
@@ -2001,7 +4453,7 @@ function Test-GuestLoginEnabled {
 #     * Access token (if successful)
 #
 # DETECTION & OPSEC:
-#   - Generates Azure AD sign-in logs (failed authentication events)
+#   - Generates Azure Entra ID sign-in logs (failed authentication events)
 #   - Multiple failed attempts may trigger account lockout
 #   - Use delays between attempts (100ms default)
 #   - Respect lockout thresholds (typically 5-10 failed attempts)
@@ -2208,7 +4660,7 @@ function Invoke-SessionEnumeration {
         }
         
         # Query sign-in logs
-        Write-ColorOutput -Message "[*] Querying Azure AD sign-in logs (this may take a moment)..." -Color "Cyan"
+        Write-ColorOutput -Message "[*] Querying Azure Entra ID sign-in logs (this may take a moment)..." -Color "Cyan"
         
         $uri = "https://graph.microsoft.com/v1.0/auditLogs/signIns?`$filter=$filterQuery&`$top=999&`$orderby=createdDateTime desc"
         
@@ -2405,14 +4857,33 @@ function Invoke-SessionEnumeration {
                 
                 if ($extension -eq ".csv") {
                     $sessions | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                    Write-ColorOutput -Message "`n[+] Session data exported to: $ExportPath" -Color "Green"
                 } elseif ($extension -eq ".json") {
                     $sessions | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -Force
+                    Write-ColorOutput -Message "`n[+] Session data exported to: $ExportPath" -Color "Green"
+                } elseif ($extension -eq ".html") {
+                    $stats = [ordered]@{
+                        "Total Sign-in Events" = $sessions.Count
+                        "Unique Users" = $uniqueUsers.Count
+                        "Successful Sign-ins" = $successCount
+                        "Failed Sign-ins" = $failedCount
+                        "Risky Sign-ins (HIGH RISK)" = $riskyCount
+                        "MFA Required Sign-ins" = $mfaCount
+                        "Time Range (Hours)" = $Hours
+                    }
+                    
+                    $description = "Active sign-in session enumeration from Azure/Entra ID audit logs. Shows recent authentication events, device details, locations, and security risk levels."
+                    
+                    $success = Export-HtmlReport -Data $sessions -OutputPath $ExportPath -Title "Active Session Enumeration Report" -Statistics $stats -CommandName "sessions" -Description $description
+                    
+                    if ($success) {
+                        Write-ColorOutput -Message "`n[+] HTML report exported to: $ExportPath" -Color "Green"
+                    }
                 } else {
                     # Default to JSON
                     $sessions | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -Force
+                    Write-ColorOutput -Message "`n[+] Session data exported to: $ExportPath" -Color "Green"
                 }
-                
-                Write-ColorOutput -Message "`n[+] Session data exported to: $ExportPath" -Color "Green"
             } catch {
                 Write-ColorOutput -Message "`n[!] Failed to export results: $_" -Color "Red"
             }
@@ -2717,6 +5188,482 @@ function Invoke-GuestEnumeration {
     }
     
     Write-ColorOutput -Message "[*] Guest enumeration complete!" -Color "Green"
+}
+
+# Helper function to test guest user permissions
+function Test-GuestUserPermissions {
+    param(
+        [string]$TestType  # "Users", "Groups", "Devices", "Applications", "DirectoryRoles"
+    )
+    
+    $result = [PSCustomObject]@{
+        TestType = $TestType
+        Accessible = $false
+        ItemCount = 0
+        Error = $null
+        PermissionLevel = "None"
+    }
+    
+    try {
+        switch ($TestType) {
+            "Users" {
+                $users = Get-MgUser -Top 10 -ErrorAction Stop
+                $result.Accessible = $true
+                $result.ItemCount = ($users | Measure-Object).Count
+                $result.PermissionLevel = "Read"
+            }
+            "Groups" {
+                $groups = Get-MgGroup -Top 10 -ErrorAction Stop
+                $result.Accessible = $true
+                $result.ItemCount = ($groups | Measure-Object).Count
+                $result.PermissionLevel = "Read"
+            }
+            "Devices" {
+                $devices = Get-MgDevice -Top 10 -ErrorAction Stop
+                $result.Accessible = $true
+                $result.ItemCount = ($devices | Measure-Object).Count
+                $result.PermissionLevel = "Read"
+            }
+            "Applications" {
+                $apps = Get-MgApplication -Top 10 -ErrorAction Stop
+                $result.Accessible = $true
+                $result.ItemCount = ($apps | Measure-Object).Count
+                $result.PermissionLevel = "Read"
+            }
+            "DirectoryRoles" {
+                $roles = Get-MgDirectoryRole -Top 10 -ErrorAction Stop
+                $result.Accessible = $true
+                $result.ItemCount = ($roles | Measure-Object).Count
+                $result.PermissionLevel = "Read"
+            }
+        }
+    } catch {
+        $result.Error = $_.Exception.Message
+        $result.Accessible = $false
+    }
+    
+    return $result
+}
+
+# Helper function to get guest permission level from policy
+function Get-GuestPermissionLevel {
+    try {
+        $authPolicy = Get-MgPolicyAuthorizationPolicy -ErrorAction Stop
+        $guestRoleId = $authPolicy.GuestUserRoleId
+        
+        # Map GuestUserRoleId to permission level
+        # a0b1b346-4d3e-4e8b-98f8-753987be4970 = Guest user access (most permissive - default before 2018)
+        # 10dae51f-b6af-4016-8d66-8c2a99b929b3 = Guest users have limited access to properties and memberships of directory objects (default 2018-2021)
+        # 2af84b1e-32c8-42b7-82bc-daa82404023b = Guest user access is restricted to properties and memberships of their own directory objects (most restrictive - recommended)
+        
+        $permissionLevel = switch ($guestRoleId) {
+            "a0b1b346-4d3e-4e8b-98f8-753987be4970" { "Same as member users (CRITICAL)" }
+            "10dae51f-b6af-4016-8d66-8c2a99b929b3" { "Limited (MEDIUM)" }
+            "2af84b1e-32c8-42b7-82bc-daa82404023b" { "Restricted (GOOD)" }
+            default { "Unknown ($guestRoleId)" }
+        }
+        
+        return [PSCustomObject]@{
+            GuestUserRoleId = $guestRoleId
+            PermissionLevel = $permissionLevel
+            IsVulnerable = ($guestRoleId -eq "a0b1b346-4d3e-4e8b-98f8-753987be4970")
+            IsRestricted = ($guestRoleId -eq "2af84b1e-32c8-42b7-82bc-daa82404023b")
+            Success = $true
+        }
+    } catch {
+        return [PSCustomObject]@{
+            GuestUserRoleId = $null
+            PermissionLevel = "Unknown"
+            IsVulnerable = $false
+            IsRestricted = $false
+            Success = $false
+            Error = $_.Exception.Message
+        }
+    }
+}
+
+# Helper function to check external collaboration settings
+function Get-ExternalCollaborationSettings {
+    try {
+        $authPolicy = Get-MgPolicyAuthorizationPolicy -ErrorAction Stop
+        
+        # Check if external users can be invited
+        $allowInvites = $authPolicy.AllowInvitesFrom
+        $allowedToInvite = $authPolicy.AllowedToSignUpEmailBasedSubscriptions
+        
+        return [PSCustomObject]@{
+            AllowInvitesFrom = $allowInvites
+            AllowEmailSubscriptions = $allowedToInvite
+            BlockMsolPowerShell = $authPolicy.BlockMsolPowerShell
+            DefaultUserRolePermissions = $authPolicy.DefaultUserRolePermissions
+            Success = $true
+        }
+    } catch {
+        return [PSCustomObject]@{
+            AllowInvitesFrom = "Unknown"
+            AllowEmailSubscriptions = $null
+            BlockMsolPowerShell = $null
+            DefaultUserRolePermissions = $null
+            Success = $false
+            Error = $_.Exception.Message
+        }
+    }
+}
+
+# Main guest vulnerability scanner function
+function Invoke-GuestVulnScanEnumeration {
+    param(
+        [string]$Domain,
+        [string]$ExportPath
+    )
+    
+    Write-ColorOutput -Message "`n[*] AZX - Guest User Vulnerability Scanner" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Command: Guest-Vuln-Scan (Azure Null Session Security Assessment)" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Similar to: nxc smb --check-null-session + security audit`n" -Color "Yellow"
+    
+    $scanResults = [PSCustomObject]@{
+        Domain = $Domain
+        ScanDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        Phase1_Unauthenticated = @{}
+        Phase2_Authenticated = @{}
+        Vulnerabilities = @()
+        RiskScore = 0
+        Summary = @{}
+    }
+    
+    # ============================================
+    # PHASE 1: UNAUTHENTICATED CHECKS
+    # ============================================
+    Write-ColorOutput -Message "[*] PHASE 1: Unauthenticated Enumeration" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    # Auto-detect domain if not provided
+    if (-not $Domain) {
+        Write-ColorOutput -Message "[*] No domain specified, attempting to auto-detect..." -Color "Yellow"
+        
+        $detectedDomain = $null
+        
+        try {
+            # Try to get UPN from whoami command (Windows)
+            if ($IsWindows -or $PSVersionTable.PSVersion.Major -le 5) {
+                $upn = whoami /upn 2>$null
+                if ($upn -and $upn -match '@(.+)$') {
+                    $detectedDomain = $matches[1]
+                    Write-ColorOutput -Message "[+] Detected domain from UPN: $detectedDomain" -Color "Green"
+                }
+            }
+            
+            # Try environment variable
+            if (-not $detectedDomain) {
+                $envDomain = [System.Environment]::GetEnvironmentVariable("USERDNSDOMAIN")
+                if ($envDomain) {
+                    $detectedDomain = $envDomain
+                    Write-ColorOutput -Message "[+] Detected domain from environment: $detectedDomain" -Color "Green"
+                }
+            }
+            
+            # Try Graph context
+            if (-not $detectedDomain) {
+                try {
+                    $context = Get-MgContext -ErrorAction SilentlyContinue
+                    if ($context -and $context.Account -match '@(.+)$') {
+                        $detectedDomain = $matches[1]
+                        Write-ColorOutput -Message "[+] Detected domain from Graph context: $detectedDomain" -Color "Green"
+                    }
+                } catch {
+                    # Silent
+                }
+            }
+        } catch {
+            # Silent catch
+        }
+        
+        if ($detectedDomain) {
+            $Domain = $detectedDomain
+            Write-ColorOutput -Message "[+] Using auto-detected domain: $Domain`n" -Color "Green"
+        } else {
+            Write-ColorOutput -Message "[!] Could not auto-detect domain" -Color "Yellow"
+            Write-ColorOutput -Message "[*] Skipping domain-specific unauthenticated checks" -Color "Yellow"
+            Write-ColorOutput -Message "[*] Use -Domain parameter for full enumeration`n" -Color "DarkGray"
+        }
+    }
+    
+    $scanResults.Domain = $Domain
+    
+    # 1.1 Check if external collaboration is enabled (unauthenticated)
+    if ($Domain) {
+        Write-ColorOutput -Message "[*] Testing external collaboration configuration..." -Color "Yellow"
+        
+        $guestConfig = Test-GuestLoginEnabled -Domain $Domain
+        $scanResults.Phase1_Unauthenticated.GuestConfiguration = $guestConfig
+        
+        if ($guestConfig.TenantExists) {
+            Write-ColorOutput -Message "AZR".PadRight(12) + $Domain.PadRight(35) + "443".PadRight(7) + "[+] Tenant exists" -Color "Green"
+            
+            if ($guestConfig.AcceptsExternalUsers) {
+                Write-ColorOutput -Message "AZR".PadRight(12) + $Domain.PadRight(35) + "443".PadRight(7) + "[!] External collaboration: ENABLED" -Color "Yellow"
+                $scanResults.Vulnerabilities += [PSCustomObject]@{
+                    Type = "ExternalCollaboration"
+                    Risk = "MEDIUM"
+                    Description = "Tenant accepts external/guest users (B2B collaboration enabled)"
+                    Recommendation = "Review guest user access policies and implement conditional access"
+                }
+                $scanResults.RiskScore += 30
+            } else {
+                Write-ColorOutput -Message "AZR".PadRight(12) + $Domain.PadRight(35) + "443".PadRight(7) + "[+] External collaboration: Appears restricted" -Color "Green"
+            }
+            
+            if ($guestConfig.IsFederated) {
+                Write-ColorOutput -Message "AZR".PadRight(12) + $Domain.PadRight(35) + "443".PadRight(7) + "[*] Federation: $($guestConfig.FederationType)" -Color "Cyan"
+            }
+        } else {
+            Write-ColorOutput -Message "AZR".PadRight(12) + $Domain.PadRight(35) + "443".PadRight(7) + "[-] Tenant not found" -Color "Red"
+            return
+        }
+        
+        Write-ColorOutput -Message ""
+    }
+    
+    # ============================================
+    # PHASE 2: AUTHENTICATED CHECKS (GUEST PERMISSIONS)
+    # ============================================
+    Write-ColorOutput -Message "[*] PHASE 2: Authenticated Enumeration (Guest Permission Testing)" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    # Check if we can connect to Graph
+    $graphConnected = $false
+    $isGuest = $false
+    $currentUser = $null
+    
+    try {
+        $context = Get-MgContext -ErrorAction SilentlyContinue
+        if ($context) {
+            $graphConnected = $true
+            $currentUser = $context.Account
+            Write-ColorOutput -Message "[+] Using existing Graph connection: $currentUser" -Color "Green"
+        }
+    } catch {
+        # Not connected yet
+    }
+    
+    if (-not $graphConnected) {
+        Write-ColorOutput -Message "[*] Attempting to connect to Microsoft Graph..." -Color "Yellow"
+        try {
+            # Request scopes needed for guest permission testing
+            Connect-MgGraph -Scopes "User.Read.All","Group.Read.All","Device.Read.All","Application.Read.All","Directory.Read.All","Policy.Read.All" -ErrorAction Stop
+            $context = Get-MgContext
+            $graphConnected = $true
+            $currentUser = $context.Account
+            Write-ColorOutput -Message "[+] Connected as: $currentUser" -Color "Green"
+        } catch {
+            Write-ColorOutput -Message "[!] Could not connect to Microsoft Graph" -Color "Yellow"
+            Write-ColorOutput -Message "[*] Authenticated checks will be skipped" -Color "DarkGray"
+            Write-ColorOutput -Message "[*] Error: $($_.Exception.Message)" -Color "DarkGray"
+        }
+    }
+    
+    if ($graphConnected) {
+        # Check if current user is a guest
+        $isGuest = Test-IsGuestUser -UserPrincipalName $currentUser
+        
+        if ($isGuest) {
+            Write-ColorOutput -Message "[!] GUEST USER DETECTED - Testing guest permission boundaries" -Color "Yellow"
+            Write-ColorOutput -Message "[*] This simulates the 'Azure Null Session' attack scenario`n" -Color "Yellow"
+        } else {
+            Write-ColorOutput -Message "[*] MEMBER USER - Testing what guests could access" -Color "Cyan"
+            Write-ColorOutput -Message "[*] Results show potential guest enumeration capabilities`n" -Color "Cyan"
+        }
+        
+        $scanResults.Phase2_Authenticated.IsGuest = $isGuest
+        $scanResults.Phase2_Authenticated.CurrentUser = $currentUser
+        
+        # 2.1 Get guest permission policy
+        Write-ColorOutput -Message "[*] Checking guest permission policy..." -Color "Yellow"
+        
+        $guestPermPolicy = Get-GuestPermissionLevel
+        $scanResults.Phase2_Authenticated.GuestPermissionPolicy = $guestPermPolicy
+        
+        if ($guestPermPolicy.Success) {
+            $policyColor = if ($guestPermPolicy.IsVulnerable) { "Red" } elseif ($guestPermPolicy.IsRestricted) { "Green" } else { "Yellow" }
+            Write-ColorOutput -Message "    [*] Guest Permission Level: $($guestPermPolicy.PermissionLevel)" -Color $policyColor
+            
+            if ($guestPermPolicy.IsVulnerable) {
+                Write-ColorOutput -Message "    [!] CRITICAL: Guests have SAME permissions as members!" -Color "Red"
+                $scanResults.Vulnerabilities += [PSCustomObject]@{
+                    Type = "GuestPermissions"
+                    Risk = "CRITICAL"
+                    Description = "Guest users have same permissions as member users (GuestUserRoleId: a0b1b346-4d3e-4e8b-98f8-753987be4970)"
+                    Recommendation = "Change to restricted mode: Set-MgPolicyAuthorizationPolicy -GuestUserRoleId '2af84b1e-32c8-42b7-82bc-daa82404023b'"
+                }
+                $scanResults.RiskScore += 50
+            } elseif (-not $guestPermPolicy.IsRestricted) {
+                Write-ColorOutput -Message "    [!] WARNING: Guest permissions are not fully restricted" -Color "Yellow"
+                $scanResults.Vulnerabilities += [PSCustomObject]@{
+                    Type = "GuestPermissions"
+                    Risk = "MEDIUM"
+                    Description = "Guest users have limited but not fully restricted permissions"
+                    Recommendation = "Consider restricting guest access to most restrictive level"
+                }
+                $scanResults.RiskScore += 20
+            } else {
+                Write-ColorOutput -Message "    [+] Guest permissions are properly restricted" -Color "Green"
+            }
+        } else {
+            Write-ColorOutput -Message "    [!] Could not retrieve guest permission policy" -Color "Red"
+        }
+        
+        # 2.2 Get external collaboration settings
+        Write-ColorOutput -Message "`n[*] Checking external collaboration settings..." -Color "Yellow"
+        
+        $collabSettings = Get-ExternalCollaborationSettings
+        $scanResults.Phase2_Authenticated.CollaborationSettings = $collabSettings
+        
+        if ($collabSettings.Success) {
+            Write-ColorOutput -Message "    [*] Guest invitations allowed from: $($collabSettings.AllowInvitesFrom)" -Color "Cyan"
+            
+            if ($collabSettings.AllowInvitesFrom -eq "everyone") {
+                Write-ColorOutput -Message "    [!] WARNING: All users can invite guests" -Color "Yellow"
+                $scanResults.Vulnerabilities += [PSCustomObject]@{
+                    Type = "GuestInvitations"
+                    Risk = "LOW"
+                    Description = "All users in the organization can invite guest users"
+                    Recommendation = "Restrict guest invitations to admins only"
+                }
+                $scanResults.RiskScore += 10
+            }
+        }
+        
+        # 2.3 Test actual guest permissions by attempting to enumerate resources
+        Write-ColorOutput -Message "`n[*] Testing guest access to directory resources..." -Color "Yellow"
+        
+        $permissionTests = @("Users", "Groups", "Devices", "Applications", "DirectoryRoles")
+        $accessibleResources = @()
+        
+        foreach ($testType in $permissionTests) {
+            Write-ColorOutput -Message "    [*] Testing access to: $testType..." -Color "DarkGray"
+            $testResult = Test-GuestUserPermissions -TestType $testType
+            
+            if ($testResult.Accessible) {
+                Write-ColorOutput -Message "    [+] $testType : ACCESSIBLE (Found $($testResult.ItemCount) items)" -Color "Green"
+                $accessibleResources += $testType
+                
+                # This is a vulnerability if user is a guest
+                if ($isGuest) {
+                    $scanResults.Vulnerabilities += [PSCustomObject]@{
+                        Type = "GuestEnumeration"
+                        Risk = "HIGH"
+                        Description = "Guest user can enumerate $testType - Azure Null Session equivalent"
+                        Recommendation = "Review and restrict guest access to $testType"
+                        ResourceType = $testType
+                        ItemCount = $testResult.ItemCount
+                    }
+                    $scanResults.RiskScore += 15
+                }
+            } else {
+                Write-ColorOutput -Message "    [-] $testType : BLOCKED" -Color "DarkGray"
+            }
+        }
+        
+        $scanResults.Phase2_Authenticated.AccessibleResources = $accessibleResources
+        $scanResults.Phase2_Authenticated.PermissionTests = $permissionTests
+        
+        # 2.4 Compare guest vs member access
+        Write-ColorOutput -Message "`n[*] Access Level Summary:" -Color "Yellow"
+        Write-ColorOutput -Message "    Current User Type: $(if ($isGuest) { 'GUEST' } else { 'MEMBER' })" -Color $(if ($isGuest) { "Yellow" } else { "Cyan" })
+        Write-ColorOutput -Message "    Accessible Resources: $($accessibleResources.Count) / $($permissionTests.Count)" -Color "Cyan"
+        
+        if ($isGuest -and $accessibleResources.Count -gt 0) {
+            Write-ColorOutput -Message "    [!] VULNERABILITY: Guest can enumerate $($accessibleResources.Count) resource type(s)" -Color "Red"
+        }
+    }
+    
+    # ============================================
+    # PHASE 3: SECURITY ASSESSMENT REPORT
+    # ============================================
+    Write-ColorOutput -Message "`n[*] PHASE 3: Security Assessment Report" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    # Calculate final risk score and rating
+    $riskRating = if ($scanResults.RiskScore -ge 70) { "CRITICAL" }
+                  elseif ($scanResults.RiskScore -ge 40) { "HIGH" }
+                  elseif ($scanResults.RiskScore -ge 20) { "MEDIUM" }
+                  else { "LOW" }
+    
+    $riskColor = switch ($riskRating) {
+        "CRITICAL" { "Red" }
+        "HIGH" { "Yellow" }
+        "MEDIUM" { "Yellow" }
+        "LOW" { "Green" }
+    }
+    
+    Write-ColorOutput -Message "[*] Overall Risk Score: $($scanResults.RiskScore) / 100" -Color $riskColor
+    Write-ColorOutput -Message "[*] Risk Rating: $riskRating" -Color $riskColor
+    Write-ColorOutput -Message "[*] Vulnerabilities Found: $($scanResults.Vulnerabilities.Count)" -Color $(if ($scanResults.Vulnerabilities.Count -gt 0) { "Yellow" } else { "Green" })
+    
+    if ($scanResults.Vulnerabilities.Count -gt 0) {
+        Write-ColorOutput -Message "`n[*] Vulnerability Details:" -Color "Yellow"
+        
+        foreach ($vuln in $scanResults.Vulnerabilities) {
+            $vulnColor = switch ($vuln.Risk) {
+                "CRITICAL" { "Red" }
+                "HIGH" { "Red" }
+                "MEDIUM" { "Yellow" }
+                "LOW" { "DarkGray" }
+            }
+            
+            Write-ColorOutput -Message "`n    [$($vuln.Risk)] $($vuln.Type)" -Color $vulnColor
+            Write-ColorOutput -Message "    Description: $($vuln.Description)" -Color "DarkGray"
+            Write-ColorOutput -Message "    Recommendation: $($vuln.Recommendation)" -Color "Cyan"
+        }
+    }
+    
+    # Summary
+    $scanResults.Summary = @{
+        RiskScore = $scanResults.RiskScore
+        RiskRating = $riskRating
+        VulnerabilityCount = $scanResults.Vulnerabilities.Count
+        CriticalCount = ($scanResults.Vulnerabilities | Where-Object { $_.Risk -eq "CRITICAL" }).Count
+        HighCount = ($scanResults.Vulnerabilities | Where-Object { $_.Risk -eq "HIGH" }).Count
+        MediumCount = ($scanResults.Vulnerabilities | Where-Object { $_.Risk -eq "MEDIUM" }).Count
+        LowCount = ($scanResults.Vulnerabilities | Where-Object { $_.Risk -eq "LOW" }).Count
+    }
+    
+    Write-ColorOutput -Message "`n[*] Scan Complete!" -Color "Green"
+    
+    # Export if requested
+    if ($ExportPath) {
+        try {
+            $extension = [System.IO.Path]::GetExtension($ExportPath).ToLower()
+            
+            if ($extension -eq ".json") {
+                $scanResults | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "[+] Full report exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".csv") {
+                $scanResults.Vulnerabilities | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "[+] Vulnerabilities exported to: $ExportPath" -Color "Green"
+            } else {
+                $scanResults | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "[+] Report exported to: $ExportPath" -Color "Green"
+            }
+        } catch {
+            Write-ColorOutput -Message "[!] Failed to export results: $_" -Color "Red"
+        }
+    }
+    
+    # Recommendations
+    Write-ColorOutput -Message "`n[*] Next Steps:" -Color "Yellow"
+    if ($scanResults.RiskScore -ge 40) {
+        Write-ColorOutput -Message "    1. Review and restrict guest user permissions immediately" -Color "Cyan"
+        Write-ColorOutput -Message "    2. Implement Conditional Access policies for guest users" -Color "Cyan"
+        Write-ColorOutput -Message "    3. Audit existing guest accounts and remove unnecessary ones" -Color "Cyan"
+        Write-ColorOutput -Message "    4. Enable guest access reviews in Azure Entra ID" -Color "Cyan"
+    } else {
+        Write-ColorOutput -Message "    1. Continue monitoring guest user activity" -Color "Cyan"
+        Write-ColorOutput -Message "    2. Review guest access policies periodically" -Color "Cyan"
+        Write-ColorOutput -Message "    3. Implement logging and alerting for guest enumeration" -Color "Cyan"
+    }
+    
+    Write-ColorOutput -Message ""
 }
 
 # Tenant discovery function
@@ -3813,12 +6760,12 @@ function Show-LogisekBanner {
     Write-Host ""
     
     $asciiArt = @"
-                                                                      
-         _____   ______ _____ _______ _______ _     _
- |      |     | |  ____   |   |______ |______ |____/ 
- |_____ |_____| |_____| __|__ ______| |______ |    \_
-                                                                  
-                                                                      
+ █████╗ ███████╗███████╗██╗  ██╗███████╗ ██████╗
+██╔══██╗╚══███╔╝██╔════╝╚██╗██╔╝██╔════╝██╔════╝
+███████║  ███╔╝ █████╗   ╚███╔╝ █████╗  ██║     
+██╔══██║ ███╔╝  ██╔══╝   ██╔██╗ ██╔══╝  ██║     
+██║  ██║███████╗███████╗██╔╝ ██╗███████╗╚██████╗
+╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝ ╚═════╝
 "@
     
     # Try to use colors if available (PowerShell supports ANSI by default on modern systems)
@@ -3831,24 +6778,77 @@ function Show-LogisekBanner {
             $reset = "`e[0m"
             
             Write-Host "${magenta}${asciiArt}${reset}"
-            Write-Host "${yellow}  AZexec - Azure Execution Tool v1.0${reset}"
+            Write-Host "${yellow}    The Azure Execution Tool${reset}"
         }
         else {
             # Fallback to PowerShell colors
             Write-Host $asciiArt -ForegroundColor Magenta
-            Write-Host "  AZexec - Azure Execution Tool v1.0" -ForegroundColor Yellow
+            Write-Host "    The Azure Execution Tool" -ForegroundColor Yellow
         }
     }
     catch {
         # Fallback without colors
         Write-Host $asciiArt
-        Write-Host "  AZexec - Azure Execution Tool v1.0"
+        Write-Host "    The Azure Execution Tool"
     }
     
-    Write-Host "  GNU General Public License v3.0"
-    Write-Host "  https://logisek.com"
-    Write-Host "  info@logisek.com"
+    Write-Host "    https://logisek.com | info@logisek.com"
+    Write-Host "    AZexec | github.com/Logisek/AZexec"
     Write-Host ""
+    Write-Host ""
+}
+
+function Show-Help {
+    Write-ColorOutput -Message "`n[*] AZX - Azure/Entra Enumeration Tool - Available Commands`n" -Color "Yellow"
+    
+    $commands = @(
+        @{Name="hosts"; Auth="Required"; Description="Enumerate devices from Azure/Entra ID (mimics nxc smb --hosts)"}
+        @{Name="tenant"; Auth="Not Required"; Description="Discover tenant configuration and endpoints"}
+        @{Name="users"; Auth="Not Required"; Description="Enumerate username existence (no authentication)"}
+        @{Name="user-profiles"; Auth="Required"; Description="Enumerate user profiles with full details"}
+        @{Name="groups"; Auth="Required"; Description="Enumerate Azure Entra ID groups"}
+        @{Name="pass-pol"; Auth="Required"; Description="Enumerate password policies and security defaults"}
+        @{Name="guest"; Auth="Not Required"; Description="Test guest/external authentication (mimics nxc smb -u 'a' -p '')"}
+        @{Name="vuln-list"; Auth="Hybrid"; Description="Enumerate vulnerable targets (mimics nxc smb --gen-relay-list)"}
+        @{Name="sessions"; Auth="Required"; Description="Enumerate active sessions (mimics nxc smb --qwinsta)"}
+        @{Name="guest-vuln-scan"; Auth="Hybrid"; Description="Automated guest user vulnerability scanner"}
+        @{Name="apps"; Auth="Required"; Description="Enumerate registered applications and service principals"}
+        @{Name="sp-discovery"; Auth="Required"; Description="Discover service principals with permissions and roles"}
+        @{Name="roles"; Auth="Required"; Description="Enumerate directory role assignments and privileged accounts"}
+        @{Name="ca-policies"; Auth="Required"; Description="Review conditional access policies (member accounts only)"}
+        @{Name="help"; Auth="N/A"; Description="Display this help message"}
+    )
+    
+    Write-ColorOutput -Message "Command".PadRight(20) + "Auth".PadRight(15) + "Description" -Color "Cyan"
+    Write-ColorOutput -Message ("-" * 80) -Color "DarkGray"
+    
+    foreach ($cmd in $commands) {
+        $authColor = switch ($cmd.Auth) {
+            "Required" { "Yellow" }
+            "Not Required" { "Green" }
+            "Hybrid" { "Cyan" }
+            default { "White" }
+        }
+        
+        Write-Host $cmd.Name.PadRight(20) -NoNewline
+        if ($NoColor) {
+            Write-Host $cmd.Auth.PadRight(15) -NoNewline
+        } else {
+            Write-Host $cmd.Auth.PadRight(15) -ForegroundColor $authColor -NoNewline
+        }
+        Write-Host $cmd.Description
+    }
+    
+    Write-ColorOutput -Message "`n[*] Examples:" -Color "Yellow"
+    Write-Host "    .\azx.ps1 hosts                          - Enumerate all devices"
+    Write-Host "    .\azx.ps1 tenant -Domain example.com     - Discover tenant configuration"
+    Write-Host "    .\azx.ps1 users -CommonUsernames         - Check common usernames"
+    Write-Host "    .\azx.ps1 groups -ExportPath groups.csv  - Export groups to CSV"
+    Write-Host "    .\azx.ps1 sp-discovery                   - Discover service principals"
+    Write-Host "    .\azx.ps1 roles -ExportPath roles.json   - Export role assignments to JSON"
+    Write-Host "    .\azx.ps1 ca-policies                    - Review conditional access policies"
+    
+    Write-ColorOutput -Message "`n[*] For detailed help and more examples, see README.md or use Get-Help .\azx.ps1" -Color "Cyan"
     Write-Host ""
 }
 
@@ -3858,7 +6858,7 @@ Show-LogisekBanner
 # For tenant discovery and user enumeration, we don't need Graph module
 # For authenticated commands (hosts, groups, pass-pol, sessions), we need Graph module
 # vuln-list handles authentication internally (hybrid unauthenticated + authenticated)
-if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles")) {
+if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "roles", "apps", "sp-discovery", "ca-policies")) {
     Initialize-GraphModule
     
     # Determine required scopes based on command
@@ -3868,14 +6868,25 @@ if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles")) 
         "groups" { "Group.Read.All,Directory.Read.All" }
         "pass-pol" { "Organization.Read.All,Directory.Read.All,Policy.Read.All" }
         "sessions" { "AuditLog.Read.All,Directory.Read.All" }
+        "roles" { "RoleManagement.Read.Directory,Directory.Read.All,RoleEligibilitySchedule.Read.Directory" }
+        "guest-vuln-scan" { "User.Read.All,Group.Read.All,Device.Read.All,Application.Read.All,Directory.Read.All,Policy.Read.All" }
+        "apps" { "Application.Read.All,Directory.Read.All" }
+        "ca-policies" { "Policy.Read.All,Directory.Read.All" }
+        "sp-discovery" { 
+            if ($IncludeWritePermissions) {
+                "Application.Read.All,Directory.Read.All,AppRoleAssignment.ReadWrite.All"
+            } else {
+                "Application.Read.All,Directory.Read.All"
+            }
+        }
         default { $Scopes }
     }
     
     Connect-GraphAPI -Scopes $requiredScopes
 }
 
-# vuln-list requires Graph module but handles connection internally
-if ($Command -eq "vuln-list") {
+# vuln-list and guest-vuln-scan require Graph module but handle connection internally
+if ($Command -eq "vuln-list" -or $Command -eq "guest-vuln-scan") {
     Initialize-GraphModule
 }
 
@@ -3907,8 +6918,40 @@ switch ($Command) {
     "sessions" {
         Invoke-SessionEnumeration -Username $Username -ExportPath $ExportPath -Hours $Hours
     }
+    "guest-vuln-scan" {
+        Invoke-GuestVulnScanEnumeration -Domain $Domain -ExportPath $ExportPath
+    }
+    "apps" {
+        Invoke-ApplicationEnumeration -ExportPath $ExportPath
+    }
+    "sp-discovery" {
+        Invoke-ServicePrincipalDiscovery -ExportPath $ExportPath
+    }
+    "roles" {
+        Invoke-RoleAssignmentEnumeration -ExportPath $ExportPath
+    }
+    "ca-policies" {
+        Invoke-ConditionalAccessPolicyReview -ExportPath $ExportPath
+    }
+    "help" {
+        Show-Help
+    }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, groups, pass-pol, guest, vuln-list, sessions" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, help" -Color "Yellow"
+    }
+}
+
+# Disconnect from Microsoft Graph if requested
+if ($Disconnect) {
+    try {
+        $context = Get-MgContext -ErrorAction SilentlyContinue
+        if ($context) {
+            Write-ColorOutput -Message "`n[*] Disconnecting from Microsoft Graph..." -Color "Yellow"
+            Disconnect-MgGraph -ErrorAction Stop
+            Write-ColorOutput -Message "[+] Successfully disconnected from Microsoft Graph" -Color "Green"
+        }
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to disconnect from Microsoft Graph: $($_.Exception.Message)" -Color "Red"
     }
 }
