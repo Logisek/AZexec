@@ -6756,7 +6756,7 @@ function Invoke-VulnListEnumeration {
     return $vulnTargets
 }
 
-function Show-LogisekBanner {
+function Show-Banner {
     Write-Host ""
     
     $asciiArt = @"
@@ -6772,8 +6772,8 @@ function Show-LogisekBanner {
     try {
         # Check if ANSI escape sequences are supported
         if ($Host.UI.SupportsVirtualTerminal) {
-            # ANSI color codes: Magenta for ASCII art, Yellow for title
-            $magenta = "`e[35m"
+            # ANSI color codes: Bright Magenta for ASCII art, Yellow for title
+            $magenta = "`e[95m"
             $yellow = "`e[33m"
             $reset = "`e[0m"
             
@@ -6852,7 +6852,7 @@ function Show-Help {
     Write-Host ""
 }
 
-Show-LogisekBanner
+Show-Banner
 
 # Main execution
 # For tenant discovery and user enumeration, we don't need Graph module
