@@ -46,6 +46,7 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb --groups` | `.\azx.ps1 groups` | ✅ Required | Enumerate groups |
 | `nxc smb --pass-pol` | `.\azx.ps1 pass-pol` | ✅ Required | Display password policies |
 | `nxc smb --qwinsta` | `.\azx.ps1 sessions` | ✅ Required | **Enumerate active sign-in sessions** |
+| `nxc smb --logged-on-users` | `.\azx.ps1 vm-loggedon` | ✅ Required | **Enumerate logged-on users on Azure VMs** (Remote Registry equivalent) |
 | `nxc smb 10.10.10.161` | `.\azx.ps1 hosts` | ✅ Required | Enumerate devices (hosts) |
 | `nxc smb --gen-relay-list` | `.\azx.ps1 vuln-list` | ⚡ Hybrid | **Enumerate vulnerable targets** (relay equivalent) |
 | `nxc smb --check-null-session` | `.\azx.ps1 guest-vuln-scan` | ⚡ Hybrid | **Guest user vulnerability scanner** (null session audit) |
@@ -109,6 +110,13 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
   - Show device information, location, IP address, and application used
   - Identify MFA status and risky sign-ins
   - Filter by username and export results
+- **Azure VM Logged-On Users Enumeration**: Query logged-on users on Azure VMs (mimics `nxc smb --logged-on-users` / Remote Registry Service)
+  - Azure equivalent of Remote Registry Service enumeration
+  - Query logged-on users on Windows and Linux Azure VMs
+  - Uses Azure VM Run Command to execute queries remotely
+  - Display username, session state, idle time, and connection source
+  - Filter by resource group, subscription, and VM power state
+  - Requires VM Contributor or VM Command Executor role
 - **Vulnerable Target Enumeration**: Enumerate weak authentication configurations (mimics `nxc smb --gen-relay-list`)
   - Service principals with password-only credentials (like SMB hosts without signing)
   - Applications with public client flows enabled (ROPC vulnerable)
@@ -387,6 +395,23 @@ If you prefer plain text output (for scripting or logging), colors respect Power
 - **Note**: Guest users typically cannot access audit logs (expected behavior)
 - Queries sign-in logs from the last 24 hours by default
 
+### For Azure VM Logged-On Users Enumeration (vm-loggedon command):
+- **Authentication required** - Uses Azure Management API
+- **Az PowerShell Module** (automatically installed if missing)
+  - `Az.Accounts` - Azure authentication
+  - `Az.Compute` - VM management and Run Command
+  - `Az.Resources` - Resource group enumeration
+- **Automatically connects if disconnected** (requires Azure authentication)
+- **Azure Permissions**:
+  - `Virtual Machine Contributor` role (full VM access) OR
+  - `Reader` role + `Virtual Machine Command Executor` role (minimal permissions)
+  - Requires permissions on subscription or resource group level
+- **VM Requirements**:
+  - VMs must be in 'running' state to query logged-on users
+  - VM Guest Agent must be installed and running
+  - Works with both Windows and Linux VMs
+- **Note**: This is the Azure equivalent of Remote Registry Service enumeration for on-premises environments
+
 ### For Vulnerable Target Enumeration (vuln-list command):
 - **Hybrid approach**: Performs unauthenticated checks first, then authenticated enumeration
 - **Microsoft.Graph PowerShell Module** (automatically installed if missing)
@@ -556,6 +581,23 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 .\azx.ps1 sessions -Hours 720 -ExportPath audit.csv  # 30-day audit (requires Premium)
 ```
 
+**Scenario 5b: Azure VM Logged-On Users Enumeration (Like nxc smb --logged-on-users / Remote Registry)**
+```powershell
+# Enumerate logged-on users on Azure VMs - the Azure equivalent of Remote Registry Service
+.\azx.ps1 vm-loggedon                        # All VMs in current subscription
+.\azx.ps1 vm-loggedon -ResourceGroup Prod-RG # Specific resource group
+.\azx.ps1 vm-loggedon -VMFilter running      # Only running VMs
+.\azx.ps1 vm-loggedon -SubscriptionId "12345678-1234-1234-1234-123456789012"  # Specific subscription
+.\azx.ps1 vm-loggedon -ResourceGroup Prod-RG -ExportPath loggedon.csv  # Export to CSV
+.\azx.ps1 vm-loggedon -ExportPath users.json # Full details as JSON
+
+# This command performs:
+# - Enumerates Azure VMs (like nxc smb 10.10.10.0/24)
+# - Queries logged-on users via VM Run Command (like Remote Registry Service)
+# - Shows username, session state, idle time, and connection source
+# - Works with both Windows and Linux VMs
+```
+
 **Scenario 6: Service Principal Permission Discovery**
 ```powershell
 # Discover service principals with their permissions and ownership
@@ -613,6 +655,9 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 
 # Active session enumeration (like nxc smb --qwinsta) - authentication required
 .\azx.ps1 sessions [-Username <User>] [-Hours <Hours>] [-NoColor] [-ExportPath <Path>]
+
+# Azure VM logged-on users (like nxc smb --logged-on-users / Remote Registry Service) - Azure authentication required
+.\azx.ps1 vm-loggedon [-ResourceGroup <RGName>] [-SubscriptionId <SubId>] [-VMFilter <all|running|stopped>] [-NoColor] [-ExportPath <Path>]
 
 # Vulnerable target enumeration (like nxc smb --gen-relay-list) - domain auto-detected if not specified
 .\azx.ps1 vuln-list [-Domain <DomainName>] [-NoColor] [-ExportPath <Path>]
@@ -1671,6 +1716,146 @@ Traditional `qwinsta` shows who's logged into a Windows machine locally. In Azur
 - `-Hours 24` - Last day (default)
 - `-Hours 168` - Last week (7 days)
 - `-Hours 720` - Last 30 days (requires Premium)
+
+---
+
+### Azure VM Logged-On Users Enumeration Examples (like nxc smb --logged-on-users / Remote Registry Service)
+
+**Overview:**  
+This command is the Azure equivalent of enumerating logged-on users via Remote Registry Service or using `nxc smb --logged-on-users`. It queries Azure VMs directly using VM Run Command to identify currently logged-on users, their session states, and connection details.
+
+### Example 30-vm-loggedon-a: Enumerate All VMs in Current Subscription
+Query all Azure VMs for logged-on users:
+```powershell
+.\azx.ps1 vm-loggedon
+```
+
+**What It Does:**
+- Enumerates all VMs in the current Azure subscription
+- Queries logged-on users on running VMs
+- Displays username, session type, state, and idle time
+- Works with both Windows and Linux VMs
+
+### Example 30-vm-loggedon-b: Target Specific Resource Group
+Query VMs in a specific resource group:
+```powershell
+.\azx.ps1 vm-loggedon -ResourceGroup Production-RG
+```
+
+**Use Case**: Focus on production systems or specific environments to reduce scope and noise.
+
+### Example 30-vm-loggedon-c: Query Only Running VMs
+Filter to only running VMs:
+```powershell
+.\azx.ps1 vm-loggedon -VMFilter running
+```
+
+**Use Case**: Skip stopped VMs to speed up enumeration and focus on active systems.
+
+### Example 30-vm-loggedon-d: Export Results to CSV
+Export logged-on users to CSV for analysis:
+```powershell
+.\azx.ps1 vm-loggedon -ResourceGroup Prod-RG -ExportPath loggedon-users.csv
+```
+
+**Use Case**: Create reports for security audits or compliance documentation.
+
+### Example 30-vm-loggedon-e: Query Specific Subscription
+Switch to a different subscription:
+```powershell
+.\azx.ps1 vm-loggedon -SubscriptionId "12345678-1234-1234-1234-123456789012" -ExportPath users.json
+```
+
+**Use Case**: Multi-subscription environments or when you don't have access to the default subscription.
+
+### Example 30-vm-loggedon-f: Comprehensive Audit with HTML Report
+Generate a full HTML report:
+```powershell
+.\azx.ps1 vm-loggedon -ExportPath vm-users-report.html
+```
+
+**Use Case**: Create visually formatted reports for management or security teams.
+
+**What VM-LoggedOn Shows:**
+
+| Information | Windows VMs | Linux VMs | Security Value |
+|------------|-------------|-----------|----------------|
+| **VM Name** | Yes | Yes | Identify target machines |
+| **Username** | Yes (via quser) | Yes (via who) | Identify active accounts |
+| **Session Type** | Console/RDP | TTY/PTS | Determine connection method |
+| **Session State** | Active/Disconnected | Active | Current session status |
+| **Idle Time** | Yes | Limited | Detect stale sessions |
+| **Source IP/Host** | Limited | Yes (via who) | Track connection origin |
+| **Resource Group** | Yes | Yes | Group by environment |
+| **Power State** | Yes | Yes | Filter running vs stopped |
+
+**Azure Equivalent to Remote Registry Service:**
+
+Traditional Remote Registry enumeration (`nxc smb --logged-on-users`) queries the registry to find logged-on users. In Azure, this translates to:
+- **VM Run Command** = Remote execution capability (like PsExec or RPC)
+- **quser (Windows)** = Query user sessions (same as Local Terminal Services API)
+- **who (Linux)** = Query logged-on users (equivalent to wtmp/utmp)
+- **Session details** = Username, session type, idle time, connection source
+
+**Key Differences from On-Premises:**
+
+| On-Premises (netexec) | Azure (AZexec) |
+|----------------------|----------------|
+| Queries via SMB/RPC | Queries via Azure Run Command |
+| Requires network access | Requires Azure RBAC permissions |
+| Instant (network speed) | ~5-30 seconds per VM (API latency) |
+| No authentication (null session) | Requires Azure authentication |
+| Registry enumeration | Direct OS query (quser/who) |
+
+**Permission Requirements:**
+- **Virtual Machine Contributor** role (full VM access) OR
+- **Reader** role + **Virtual Machine Command Executor** role (minimal)
+- VMs must have Guest Agent installed and running
+- VMs must be in 'running' state to query users
+
+**Common Use Cases:**
+
+| Scenario | What to Look For | Command |
+|----------|-----------------|---------|
+| **Privileged Session Discovery** | Domain admins, local admins logged on | `.\azx.ps1 vm-loggedon -ExportPath users.csv` (filter in Excel) |
+| **Stale Session Detection** | High idle times, disconnected sessions | Review idle time column in output |
+| **Lateral Movement Tracking** | Same user on multiple VMs | Export and correlate usernames |
+| **Incident Response** | Active sessions during compromise window | Cross-reference with sign-in logs (`sessions` command) |
+| **Compliance Audit** | Who has access to production systems | `.\azx.ps1 vm-loggedon -ResourceGroup Prod-RG -ExportPath audit.html` |
+
+**Troubleshooting Common Issues:**
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| **Authorization failed** | Missing permissions | Grant 'Virtual Machine Contributor' or 'VM Command Executor' role |
+| **VM agent not running** | Guest Agent not installed | Install Azure VM Agent on the VM |
+| **Query timeout** | VM unresponsive or network issues | Check VM status and network connectivity |
+| **No users logged on** | VM running but no active sessions | Normal - VM has no interactive users |
+
+**Integration with Other Commands:**
+
+```powershell
+# Step 1: Find VMs with logged-on users
+.\azx.ps1 vm-loggedon -ExportPath vm-users.csv
+
+# Step 2: Correlate with Azure AD sign-in logs
+.\azx.ps1 sessions -Hours 24 -ExportPath signin-logs.csv
+
+# Step 3: Check for privileged accounts
+.\azx.ps1 roles -ExportPath roles.csv
+
+# Step 4: Cross-reference to find privileged users with active VM sessions
+# (Analyze CSV files to correlate data)
+```
+
+**Security Value:**
+- **Attack Surface Mapping**: Identify where privileged accounts are logged in
+- **Lateral Movement Detection**: Track account usage across VMs
+- **Incident Response**: Quickly identify active sessions during investigation
+- **Compliance**: Document who has access to sensitive systems
+- **Session Hygiene**: Find and terminate stale or unauthorized sessions
+
+---
 
 ### Vulnerable Target Enumeration Examples (like nxc smb --gen-relay-list)
 

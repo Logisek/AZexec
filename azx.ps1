@@ -85,6 +85,13 @@
       * Grant controls (MFA, compliant device, approved app, terms of use)
       * Session controls (sign-in frequency, persistent browser, app enforced restrictions)
       * Security posture assessment and risk identification
+    - Azure VM Logged-On Users Enumeration (mimics nxc smb --logged-on-users / Remote Registry Service)
+      * Query logged-on users on Azure VMs using VM Run Command
+      * Support for both Windows and Linux VMs
+      * Display username, session state, idle time, and connection source
+      * Filter by resource group, subscription, and VM power state
+      * Azure equivalent of Remote Registry Service enumeration
+      * Requires VM Contributor role or VM Command Executor role
     - Netexec-style formatted output
     - Filter by OS, trust type, compliance status
     - Device owner enumeration
@@ -108,6 +115,7 @@
     - sp-discovery: Discover service principals with permissions and role assignments (authentication required)
     - roles: Enumerate directory role assignments and privileged accounts (authentication required)
     - ca-policies: Review conditional access policies (member accounts only, requires Policy.Read.All)
+    - vm-loggedon: Enumerate logged-on users on Azure VMs (similar to nxc smb --logged-on-users or Remote Registry Service)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -164,6 +172,22 @@
     By default, sp-discovery only requests read permissions (Application.Read.All, Directory.Read.All).
     Use this flag if you need the additional write permission for app role assignments.
     Note: The script only performs read operations, so this permission is typically unnecessary.
+
+.PARAMETER ResourceGroup
+    Optional resource group filter for vm-loggedon command.
+    If specified, only VMs in this resource group will be queried.
+    If not specified, all VMs in the subscription will be enumerated.
+
+.PARAMETER SubscriptionId
+    Optional subscription ID for vm-loggedon command.
+    If specified, the tool will switch to this subscription before enumerating VMs.
+    If not specified, the current subscription context will be used.
+
+.PARAMETER VMFilter
+    Optional filter for VM power state (for vm-loggedon command).
+    - all: Query all VMs regardless of power state (default)
+    - running: Only query running VMs
+    - stopped: Only show stopped VMs (will not query them)
 
 .EXAMPLE
     .\azx.ps1 hosts
@@ -377,9 +401,30 @@
     .\azx.ps1 ca-policies -ExportPath policies.json
     Review conditional access policies with full details exported to JSON
 
+.EXAMPLE
+    .\azx.ps1 vm-loggedon
+    Enumerate logged-on users on all Azure VMs in the current subscription
+
+.EXAMPLE
+    .\azx.ps1 vm-loggedon -ResourceGroup Production-RG
+    Enumerate logged-on users on VMs in a specific resource group
+
+.EXAMPLE
+    .\azx.ps1 vm-loggedon -VMFilter running
+    Enumerate logged-on users only on running VMs
+
+.EXAMPLE
+    .\azx.ps1 vm-loggedon -ResourceGroup Prod-RG -ExportPath loggedon-users.csv
+    Enumerate logged-on users and export results to CSV
+
+.EXAMPLE
+    .\azx.ps1 vm-loggedon -SubscriptionId "12345678-1234-1234-1234-123456789012" -ExportPath users.json
+    Enumerate logged-on users in a specific subscription and export to JSON
+
 .NOTES
     Requires PowerShell 7+
     Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies' commands)
+    Requires Az PowerShell module (for 'vm-loggedon' command - Az.Accounts, Az.Compute, Az.Resources)
     Requires appropriate Azure/Entra permissions (for authenticated commands)
     The 'tenant' and 'users' commands do not require authentication
     The 'vuln-list' and 'guest-vuln-scan' commands perform unauthenticated checks first, then authenticated checks
@@ -387,13 +432,14 @@
     The 'sp-discovery' command requires Application.Read.All and Directory.Read.All permissions (add -IncludeWritePermissions for AppRoleAssignment.ReadWrite.All)
     The 'roles' command requires RoleManagement.Read.Directory and Directory.Read.All permissions (PIM requires RoleEligibilitySchedule.Read.Directory)
     The 'ca-policies' command requires Policy.Read.All permission (guest users cannot access conditional access policies)
+    The 'vm-loggedon' command requires Azure authentication and 'Virtual Machine Contributor' role or 'Reader' + 'Virtual Machine Command Executor' role
     Guest users may have limited access to groups, policy information, audit logs, service principal data, and role assignments
 #>
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -434,7 +480,17 @@ param(
     [switch]$Disconnect,
     
     [Parameter(Mandatory = $false)]
-    [switch]$IncludeWritePermissions
+    [switch]$IncludeWritePermissions,
+    
+    [Parameter(Mandatory = $false)]
+    [string]$ResourceGroup,
+    
+    [Parameter(Mandatory = $false)]
+    [string]$SubscriptionId,
+    
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("all", "running", "stopped")]
+    [string]$VMFilter = "all"
 )
 
 # Color output functions
@@ -4906,6 +4962,457 @@ function Invoke-SessionEnumeration {
     return $sessions
 }
 
+# Enumerate logged-on users on Azure VMs (similar to nxc smb --logged-on-users or Remote Registry Service)
+function Invoke-VMLoggedOnUsersEnumeration {
+    param(
+        [string]$ResourceGroup,
+        [string]$SubscriptionId,
+        [string]$VMFilter,
+        [string]$ExportPath
+    )
+    
+    Write-ColorOutput -Message "`n[*] AZX - Azure VM Logged-On Users Enumeration" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Command: VM-LoggedOn (Similar to: nxc smb --logged-on-users)" -Color "Yellow"
+    Write-ColorOutput -Message "[*] This is the Azure equivalent of Remote Registry Service enumeration`n" -Color "Cyan"
+    
+    # Check if Az.Compute module is installed
+    Write-ColorOutput -Message "[*] Checking Az.Compute module..." -Color "Yellow"
+    
+    if (-not (Get-Module -ListAvailable -Name Az.Compute)) {
+        Write-ColorOutput -Message "[!] Az.Compute module not found. Installing..." -Color "Yellow"
+        try {
+            Install-Module Az.Compute -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+            Write-ColorOutput -Message "[+] Az.Compute module installed successfully" -Color "Green"
+        } catch {
+            Write-ColorOutput -Message "[!] Failed to install Az.Compute module: $_" -Color "Red"
+            Write-ColorOutput -Message "[*] Please install manually: Install-Module Az.Compute -Scope CurrentUser" -Color "Yellow"
+            return
+        }
+    }
+    
+    # Import Az modules
+    try {
+        Import-Module Az.Accounts -ErrorAction Stop
+        Import-Module Az.Compute -ErrorAction Stop
+        Import-Module Az.Resources -ErrorAction Stop
+        Write-ColorOutput -Message "[+] Az modules imported successfully`n" -Color "Green"
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to import Az modules: $_" -Color "Red"
+        Write-ColorOutput -Message "[*] Please ensure Az.Accounts, Az.Compute, and Az.Resources are installed" -Color "Yellow"
+        return
+    }
+    
+    # Check if authenticated to Azure
+    try {
+        $azContext = Get-AzContext -ErrorAction Stop
+        
+        if (-not $azContext) {
+            Write-ColorOutput -Message "[!] Not authenticated to Azure" -Color "Red"
+            Write-ColorOutput -Message "[*] Attempting authentication..." -Color "Yellow"
+            
+            Connect-AzAccount -ErrorAction Stop
+            $azContext = Get-AzContext
+        }
+        
+        if ($azContext) {
+            Write-ColorOutput -Message "[+] Authenticated as: $($azContext.Account.Id)" -Color "Green"
+            Write-ColorOutput -Message "[+] Subscription: $($azContext.Subscription.Name) ($($azContext.Subscription.Id))" -Color "Green"
+            
+            # Check user's RBAC roles
+            Write-ColorOutput -Message "[*] Checking Azure RBAC permissions..." -Color "Yellow"
+            try {
+                $roleAssignments = Get-AzRoleAssignment -SignInName $azContext.Account.Id -ErrorAction SilentlyContinue
+                
+                if ($roleAssignments) {
+                    $relevantRoles = $roleAssignments | Where-Object { 
+                        $_.RoleDefinitionName -match "Reader|Contributor|Virtual Machine" 
+                    }
+                    
+                    if ($relevantRoles.Count -gt 0) {
+                        Write-ColorOutput -Message "[+] Found relevant RBAC roles:" -Color "Green"
+                        foreach ($role in $relevantRoles) {
+                            $scopeType = if ($role.Scope -match "/subscriptions/[^/]+$") { "Subscription" } 
+                                        elseif ($role.Scope -match "/resourceGroups/") { "Resource Group" }
+                                        else { "Other" }
+                            Write-ColorOutput -Message "    • $($role.RoleDefinitionName) ($scopeType)" -Color "Gray"
+                        }
+                        
+                        # Check if user has sufficient permissions for VM enumeration
+                        $hasReader = $relevantRoles | Where-Object { $_.RoleDefinitionName -match "Reader|Contributor" }
+                        $hasVMAccess = $relevantRoles | Where-Object { $_.RoleDefinitionName -match "Virtual Machine|Contributor" }
+                        
+                        if (-not $hasReader) {
+                            Write-ColorOutput -Message "[!] WARNING: No 'Reader' or 'Contributor' role found - VM enumeration may fail" -Color "Yellow"
+                        }
+                        if (-not $hasVMAccess) {
+                            Write-ColorOutput -Message "[!] WARNING: No VM-related roles found - VM Run Command will fail" -Color "Yellow"
+                            Write-ColorOutput -Message "[*] You need: 'Virtual Machine Contributor' or 'Virtual Machine Command Executor' role" -Color "Yellow"
+                        }
+                    } else {
+                        Write-ColorOutput -Message "[!] No relevant RBAC roles found for this subscription" -Color "Yellow"
+                        Write-ColorOutput -Message "[!] VM enumeration will likely fail due to insufficient permissions" -Color "Yellow"
+                    }
+                } else {
+                    Write-ColorOutput -Message "[!] Could not retrieve RBAC role assignments" -Color "Yellow"
+                    Write-ColorOutput -Message "[*] Proceeding anyway - errors will be shown if permissions are insufficient" -Color "Yellow"
+                }
+            } catch {
+                Write-ColorOutput -Message "[!] Could not check RBAC permissions: $($_.Exception.Message)" -Color "Yellow"
+            }
+            
+            Write-Host ""
+        }
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to get Azure context: $($_.Exception.Message)" -Color "Red"
+        Write-ColorOutput -Message "[*] Please authenticate using: Connect-AzAccount" -Color "Yellow"
+        return
+    }
+    
+    # Set subscription if specified
+    if ($SubscriptionId) {
+        try {
+            Set-AzContext -SubscriptionId $SubscriptionId -ErrorAction Stop | Out-Null
+            Write-ColorOutput -Message "[+] Switched to subscription: $SubscriptionId`n" -Color "Green"
+        } catch {
+            Write-ColorOutput -Message "[!] Failed to switch subscription: $SubscriptionId" -Color "Red"
+            Write-ColorOutput -Message "[*] Error: $($_.Exception.Message)" -Color "Red"
+            Write-ColorOutput -Message "`n[*] List available subscriptions:" -Color "Yellow"
+            Write-ColorOutput -Message "    Get-AzSubscription | Format-Table Name, Id, State`n" -Color "Gray"
+            return
+        }
+    }
+    
+    # Get VMs
+    Write-ColorOutput -Message "[*] Retrieving Azure VMs..." -Color "Yellow"
+    
+    try {
+        if ($ResourceGroup) {
+            $vms = Get-AzVM -ResourceGroupName $ResourceGroup -Status -ErrorAction Stop
+            Write-ColorOutput -Message "[+] Retrieved $($vms.Count) VMs from resource group: $ResourceGroup" -Color "Green"
+        } else {
+            $vms = Get-AzVM -Status -ErrorAction Stop
+            Write-ColorOutput -Message "[+] Retrieved $($vms.Count) total VMs across all resource groups" -Color "Green"
+        }
+    } catch {
+        $errorMessage = $_.Exception.Message
+        
+        # Parse Azure authorization error for cleaner display
+        if ($errorMessage -like "*AuthorizationFailed*" -or $errorMessage -like "*does not have authorization*") {
+            Write-ColorOutput -Message "`n[!] ========================================" -Color "Red"
+            Write-ColorOutput -Message "[!] AUTHORIZATION FAILED" -Color "Red"
+            Write-ColorOutput -Message "[!] ========================================`n" -Color "Red"
+            
+            # Extract key details from error
+            if ($errorMessage -match "client '([^']+)'") {
+                $user = $matches[1]
+                Write-ColorOutput -Message "[*] User: $user" -Color "Yellow"
+            }
+            
+            if ($errorMessage -match "action '([^']+)'") {
+                $permission = $matches[1]
+                Write-ColorOutput -Message "[*] Missing Permission: $permission" -Color "Yellow"
+            }
+            
+            if ($errorMessage -match "scope '([^']+)'") {
+                $scope = $matches[1]
+                $scopeParts = $scope -split '/'
+                if ($scopeParts.Count -ge 3 -and $scopeParts[1] -eq 'subscriptions') {
+                    $subId = $scopeParts[2]
+                    Write-ColorOutput -Message "[*] Subscription: $subId" -Color "Yellow"
+                }
+            }
+            
+            Write-ColorOutput -Message "`n[!] Required Azure RBAC Roles (choose one):" -Color "Cyan"
+            Write-ColorOutput -Message "    1. Reader role (to list VMs)" -Color "White"
+            Write-ColorOutput -Message "       + Virtual Machine Contributor role (to run commands)" -Color "White"
+            Write-ColorOutput -Message "    2. Virtual Machine Contributor role (full access)" -Color "White"
+            Write-ColorOutput -Message "    3. Contributor role (full subscription access)" -Color "White"
+            
+            Write-ColorOutput -Message "`n[*] How to fix:" -Color "Cyan"
+            Write-ColorOutput -Message "    1. Go to Azure Portal > Subscriptions" -Color "White"
+            Write-ColorOutput -Message "    2. Select your subscription > Access Control (IAM)" -Color "White"
+            Write-ColorOutput -Message "    3. Click 'Add role assignment'" -Color "White"
+            Write-ColorOutput -Message "    4. Select 'Reader' role and assign to your account" -Color "White"
+            Write-ColorOutput -Message "    5. Optionally add 'Virtual Machine Contributor' for run commands" -Color "White"
+            
+            Write-ColorOutput -Message "`n[*] PowerShell command to check your current permissions:" -Color "Cyan"
+            Write-ColorOutput -Message "    Get-AzRoleAssignment -SignInName $($azContext.Account.Id)" -Color "Gray"
+            
+            Write-ColorOutput -Message "`n[*] TIP: If you have access to other subscriptions, try:" -Color "Yellow"
+            Write-ColorOutput -Message "    Get-AzSubscription | Format-Table Name, Id, State" -Color "Gray"
+            Write-ColorOutput -Message "    .\azx.ps1 vm-loggedon -SubscriptionId <subscription-id>`n" -Color "Gray"
+            
+        } else {
+            # Generic error handling
+            Write-ColorOutput -Message "[!] Failed to retrieve VMs" -Color "Red"
+            Write-ColorOutput -Message "[!] Error: $errorMessage" -Color "Red"
+        }
+        
+        return
+    }
+    
+    if ($vms.Count -eq 0) {
+        Write-ColorOutput -Message "[!] No VMs found" -Color "Red"
+        return
+    }
+    
+    # Apply VM filter
+    $filteredVMs = $vms
+    if ($VMFilter -ne "all") {
+        $filteredVMs = $vms | Where-Object {
+            $powerState = ($_.PowerState -split ' ')[-1]
+            if ($VMFilter -eq "running") {
+                $powerState -eq "running"
+            } elseif ($VMFilter -eq "stopped") {
+                $powerState -ne "running"
+            } else {
+                $true
+            }
+        }
+        Write-ColorOutput -Message "[*] Filtered to $($filteredVMs.Count) VMs with status: $VMFilter`n" -Color "Cyan"
+    }
+    
+    if ($filteredVMs.Count -eq 0) {
+        Write-ColorOutput -Message "[!] No VMs found matching filter: $VMFilter" -Color "Red"
+        return
+    }
+    
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] LOGGED-ON USERS ENUMERATION" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    # Prepare export data
+    $exportData = @()
+    $totalLoggedOnUsers = 0
+    $successfulQueries = 0
+    $failedQueries = 0
+    
+    foreach ($vm in $filteredVMs) {
+        $vmName = $vm.Name
+        $vmResourceGroup = $vm.ResourceGroupName
+        $powerState = ($vm.PowerState -split ' ')[-1]
+        $osType = $vm.StorageProfile.OsDisk.OsType
+        
+        # Color based on power state
+        $stateColor = if ($powerState -eq "running") { "Green" } else { "Yellow" }
+        
+        Write-ColorOutput -Message "[*] VM: $vmName" -Color "White"
+        Write-ColorOutput -Message "    Resource Group: $vmResourceGroup" -Color "Gray"
+        Write-ColorOutput -Message "    OS Type: $osType" -Color "Gray"
+        Write-ColorOutput -Message "    Power State: $powerState" -Color $stateColor
+        
+        # Only query running VMs
+        if ($powerState -ne "running") {
+            Write-ColorOutput -Message "    [!] VM is not running - skipping query" -Color "Yellow"
+            $failedQueries++
+            Write-Host ""
+            continue
+        }
+        
+        # Prepare script based on OS type
+        $scriptContent = ""
+        $scriptId = ""
+        
+        if ($osType -eq "Windows") {
+            $scriptContent = @"
+# Query logged-on users using quser (same as Remote Registry Service would show)
+try {
+    `$users = quser 2>&1 | Select-Object -Skip 1
+    if (`$users) {
+        `$users | ForEach-Object {
+            if (`$_ -match '^\s*(\S+)\s+(\S*)\s+(\d+)\s+(\S+)\s+(.+)$') {
+                `$username = `$matches[1]
+                `$sessionName = `$matches[2]
+                `$id = `$matches[3]
+                `$state = `$matches[4]
+                `$idleTime = `$matches[5]
+                Write-Output "USER:`$username|SESSION:`$sessionName|ID:`$id|STATE:`$state|IDLE:`$idleTime"
+            }
+        }
+    } else {
+        Write-Output "NO_USERS_LOGGED_ON"
+    }
+} catch {
+    Write-Output "ERROR:`$(`$_.Exception.Message)"
+}
+"@
+            $scriptId = "RunPowerShellScript"
+        } else {
+            # Linux
+            $scriptContent = @"
+#!/bin/bash
+# Query logged-on users (equivalent to Windows Remote Registry Service)
+users_output=`$(who 2>&1)
+if [ `$? -eq 0 ] && [ -n "`$users_output" ]; then
+    echo "`$users_output" | awk '{print "USER:" `$1 "|TTY:" `$2 "|LOGIN:" `$3 " " `$4 "|FROM:" `$5}'
+else
+    echo "NO_USERS_LOGGED_ON"
+fi
+"@
+            $scriptId = "RunShellScript"
+        }
+        
+        # Execute Run Command
+        Write-ColorOutput -Message "    [*] Querying logged-on users..." -Color "Yellow"
+        
+        try {
+            $result = Invoke-AzVMRunCommand -ResourceGroupName $vmResourceGroup -VMName $vmName -CommandId $scriptId -ScriptString $scriptContent -ErrorAction Stop
+            
+            $output = $result.Value[0].Message
+            
+            if ($output -match "NO_USERS_LOGGED_ON") {
+                Write-ColorOutput -Message "    [+] Query successful - No users currently logged on" -Color "Cyan"
+                $successfulQueries++
+            } elseif ($output -match "ERROR:") {
+                $errorMsg = ($output -split "ERROR:")[1]
+                Write-ColorOutput -Message "    [!] Error querying users: $errorMsg" -Color "Red"
+                $failedQueries++
+            } else {
+                $loggedOnUsers = @()
+                $lines = $output -split "`n" | Where-Object { $_.Trim() -ne "" }
+                
+                foreach ($line in $lines) {
+                    if ($osType -eq "Windows") {
+                        if ($line -match "USER:([^|]+)\|SESSION:([^|]*)\|ID:([^|]+)\|STATE:([^|]+)\|IDLE:(.+)") {
+                            $loggedOnUsers += [PSCustomObject]@{
+                                VM = $vmName
+                                ResourceGroup = $vmResourceGroup
+                                OSType = $osType
+                                Username = $matches[1].Trim()
+                                SessionName = $matches[2].Trim()
+                                SessionID = $matches[3].Trim()
+                                State = $matches[4].Trim()
+                                IdleTime = $matches[5].Trim()
+                                Location = ""
+                            }
+                        }
+                    } else {
+                        # Linux
+                        if ($line -match "USER:([^|]+)\|TTY:([^|]*)\|LOGIN:([^|]+)\|FROM:(.+)") {
+                            $loggedOnUsers += [PSCustomObject]@{
+                                VM = $vmName
+                                ResourceGroup = $vmResourceGroup
+                                OSType = $osType
+                                Username = $matches[1].Trim()
+                                SessionName = $matches[2].Trim()
+                                SessionID = "-"
+                                State = "Active"
+                                IdleTime = "-"
+                                Location = $matches[4].Trim()
+                            }
+                        }
+                    }
+                }
+                
+                if ($loggedOnUsers.Count -gt 0) {
+                    Write-ColorOutput -Message "    [+] Found $($loggedOnUsers.Count) logged-on user(s):" -Color "Green"
+                    
+                    foreach ($user in $loggedOnUsers) {
+                        $displayName = $user.Username
+                        $displayState = $user.State
+                        $displaySession = if ($user.SessionName) { $user.SessionName } else { "console" }
+                        
+                        # NetExec style output
+                        Write-ColorOutput -Message "        [*] $displayName" -Color "Cyan"
+                        Write-ColorOutput -Message "            Session: $displaySession | State: $displayState | Idle: $($user.IdleTime)" -Color "Gray"
+                        if ($user.Location) {
+                            Write-ColorOutput -Message "            From: $($user.Location)" -Color "Gray"
+                        }
+                    }
+                    
+                    $exportData += $loggedOnUsers
+                    $totalLoggedOnUsers += $loggedOnUsers.Count
+                    $successfulQueries++
+                } else {
+                    Write-ColorOutput -Message "    [!] Query returned data but could not parse users" -Color "Yellow"
+                    Write-ColorOutput -Message "    [*] Raw output: $output" -Color "Gray"
+                    $failedQueries++
+                }
+            }
+        } catch {
+            $errorMessage = $_.Exception.Message
+            
+            # Check for common permission issues
+            if ($errorMessage -like "*AuthorizationFailed*" -or $errorMessage -like "*Microsoft.Compute/virtualMachines/runCommand/action*") {
+                Write-ColorOutput -Message "    [!] Authorization failed - Missing 'Virtual Machine Contributor' role or 'runCommand' permission" -Color "Red"
+            } elseif ($errorMessage -like "*VM agent*" -or $errorMessage -like "*GuestAgent*") {
+                Write-ColorOutput -Message "    [!] VM Guest Agent is not running or not installed" -Color "Red"
+            } elseif ($errorMessage -like "*timeout*") {
+                Write-ColorOutput -Message "    [!] Query timed out - VM may be unresponsive" -Color "Red"
+            } else {
+                Write-ColorOutput -Message "    [!] Failed to query users: $errorMessage" -Color "Red"
+            }
+            
+            $failedQueries++
+        }
+        
+        Write-Host ""
+    }
+    
+    # Summary
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ENUMERATION SUMMARY" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] Total VMs: $($filteredVMs.Count)" -Color "White"
+    Write-ColorOutput -Message "[*] Successful Queries: $successfulQueries" -Color "Green"
+    Write-ColorOutput -Message "[*] Failed Queries: $failedQueries" -Color "Red"
+    Write-ColorOutput -Message "[*] Total Logged-On Users Found: $totalLoggedOnUsers" -Color "Cyan"
+    
+    # Export if requested
+    if ($ExportPath -and $exportData.Count -gt 0) {
+        try {
+            $extension = [System.IO.Path]::GetExtension($ExportPath).ToLower()
+            
+            switch ($extension) {
+                ".csv" {
+                    $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -ErrorAction Stop
+                    Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+                }
+                ".json" {
+                    $exportData | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -ErrorAction Stop
+                    Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+                }
+                ".html" {
+                    $stats = @{
+                        "Total VMs" = $filteredVMs.Count
+                        "Successful Queries" = $successfulQueries
+                        "Failed Queries" = $failedQueries
+                        "Total Logged-On Users" = $totalLoggedOnUsers
+                    }
+                    
+                    Export-HtmlReport -Data $exportData -OutputPath $ExportPath -Title "Azure VM Logged-On Users" -Statistics $stats -CommandName "vm-loggedon" -Description "Enumeration of logged-on users on Azure VMs (equivalent to Remote Registry Service)"
+                    Write-ColorOutput -Message "`n[+] HTML report exported to: $ExportPath" -Color "Green"
+                }
+                default {
+                    Write-ColorOutput -Message "`n[!] Unsupported export format. Use .csv, .json, or .html" -Color "Red"
+                }
+            }
+        } catch {
+            Write-ColorOutput -Message "`n[!] Failed to export results: $_" -Color "Red"
+        }
+    } elseif ($ExportPath -and $exportData.Count -eq 0) {
+        Write-ColorOutput -Message "`n[!] No data to export" -Color "Yellow"
+    }
+    
+    # Helpful tips
+    if ($failedQueries -gt 0) {
+        Write-ColorOutput -Message "`n[*] TIP: To query VMs, you need:" -Color "Yellow"
+        Write-ColorOutput -Message "    - 'Virtual Machine Contributor' role OR 'Reader' + 'Virtual Machine Command Executor' role" -Color "Yellow"
+        Write-ColorOutput -Message "    - VM Guest Agent must be running on each VM" -Color "Yellow"
+        Write-ColorOutput -Message "    - VMs must be in 'running' state" -Color "Yellow"
+    }
+    
+    if ($totalLoggedOnUsers -gt 0) {
+        Write-ColorOutput -Message "`n[*] NEXT STEPS:" -Color "Cyan"
+        Write-ColorOutput -Message "    - Investigate logged-on users for privileged accounts" -Color "Cyan"
+        Write-ColorOutput -Message "    - Correlate with Azure AD sign-in logs: .\azx.ps1 sessions" -Color "Cyan"
+        Write-ColorOutput -Message "    - Check for stale sessions or suspicious activity" -Color "Cyan"
+    }
+    
+    return $exportData
+}
+
 # Main guest enumeration function
 function Invoke-GuestEnumeration {
     param(
@@ -6890,6 +7397,32 @@ if ($Command -eq "vuln-list" -or $Command -eq "guest-vuln-scan") {
     Initialize-GraphModule
 }
 
+# vm-loggedon uses Azure Resource Manager (Az modules) with RBAC, not Graph API
+if ($Command -eq "vm-loggedon") {
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] AZURE VM ENUMERATION - RBAC REQUIREMENTS" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] This command uses Azure Resource Manager API (not Microsoft Graph)" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Required Azure RBAC Roles (you need ONE of these):`n" -Color "Yellow"
+    
+    Write-ColorOutput -Message "    Option 1 (Recommended - Minimal Permissions):" -Color "White"
+    Write-ColorOutput -Message "      • Reader role (to list VMs)" -Color "Gray"
+    Write-ColorOutput -Message "      • Virtual Machine Command Executor role (to query logged-on users)`n" -Color "Gray"
+    
+    Write-ColorOutput -Message "    Option 2 (Common - Full VM Access):" -Color "White"
+    Write-ColorOutput -Message "      • Virtual Machine Contributor role`n" -Color "Gray"
+    
+    Write-ColorOutput -Message "    Option 3 (Maximum - Subscription Access):" -Color "White"
+    Write-ColorOutput -Message "      • Contributor role (full subscription access)`n" -Color "Gray"
+    
+    Write-ColorOutput -Message "[*] Role assignment scope: Subscription or Resource Group level" -Color "Yellow"
+    Write-ColorOutput -Message "[*] If you lack permissions, the authentication will succeed but queries will fail`n" -Color "Yellow"
+    
+    Write-ColorOutput -Message "[*] To check your current Azure permissions:" -Color "Cyan"
+    Write-ColorOutput -Message "    Get-AzRoleAssignment -SignInName <your-email>`n" -Color "Gray"
+}
+
 switch ($Command) {
     "hosts" {
         Invoke-HostEnumeration -Filter $Filter -ShowOwners $ShowOwners -ExportPath $ExportPath
@@ -6933,12 +7466,15 @@ switch ($Command) {
     "ca-policies" {
         Invoke-ConditionalAccessPolicyReview -ExportPath $ExportPath
     }
+    "vm-loggedon" {
+        Invoke-VMLoggedOnUsersEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -VMFilter $VMFilter -ExportPath $ExportPath
+    }
     "help" {
         Show-Help
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, help" -Color "Yellow"
     }
 }
 
