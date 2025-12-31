@@ -45,8 +45,8 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb -u 'a' -p ''` | `.\azx.ps1 guest -Domain example.com -Username user -Password ''` | ❌ None | **Test guest/null login** |
 | `nxc smb --groups` | `.\azx.ps1 groups` | ✅ Required | Enumerate groups |
 | `nxc smb --pass-pol` | `.\azx.ps1 pass-pol` | ✅ Required | Display password policies |
-| `nxc smb --qwinsta` | `.\azx.ps1 sessions` | ✅ Required | **Enumerate active sign-in sessions** |
-| `nxc smb --logged-on-users` | `.\azx.ps1 vm-loggedon` | ✅ Required | **Enumerate logged-on users on Azure VMs** (Remote Registry equivalent) |
+| `nxc smb --qwinsta` | `.\azx.ps1 sessions` | ✅ Required | **Enumerate active sign-in sessions** (cloud-level audit logs) |
+| `nxc smb --logged-on-users` | `.\azx.ps1 vm-loggedon` | ✅ Required | **Enumerate logged-on users on Azure VMs** (Workstation Service / Remote Registry equivalent) |
 | `nxc smb 10.10.10.161` | `.\azx.ps1 hosts` | ✅ Required | Enumerate devices (hosts) |
 | `nxc smb --gen-relay-list` | `.\azx.ps1 vuln-list` | ⚡ Hybrid | **Enumerate vulnerable targets** (relay equivalent) |
 | `nxc smb --check-null-session` | `.\azx.ps1 guest-vuln-scan` | ⚡ Hybrid | **Guest user vulnerability scanner** (null session audit) |
@@ -58,6 +58,142 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb --shares` | *(N/A for Azure)* | - | Azure doesn't have SMB shares |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
+
+---
+
+## 🔌 Workstation Service (wkssvc) Equivalent: `vm-loggedon` Command
+
+For penetration testers familiar with NetExec's `--loggedon-users` flag, the `vm-loggedon` command provides the **Azure cloud equivalent** of Workstation Service (wkssvc) enumeration.
+
+### On-Premises vs Azure: Technical Comparison
+
+| Aspect | On-Premises (NetExec) | Azure (AZexec) |
+|--------|----------------------|----------------|
+| **Command** | `nxc smb 192.168.1.0/24 -u User -p Pass --loggedon-users` | `.\azx.ps1 vm-loggedon` |
+| **Protocol** | SMB/RPC (port 445) | Azure Management API (HTTPS/443) |
+| **RPC Interface** | Workstation Service (wkssvc) | Azure VM Run Command API |
+| **API Call** | `NetWkstaUserEnum` | `Invoke-AzVMRunCommand` |
+| **Query Method** | Remote registry / RPC enumeration | Direct OS query via Run Command |
+| **Windows Query** | Registry keys / RPC calls | `quser` command (Terminal Services) |
+| **Linux Query** | N/A (Windows-only) | `who` command (wtmp/utmp) |
+| **Authentication** | Domain/local credentials | Azure RBAC (OAuth2 token) |
+| **Permissions** | Local admin or specific RPC rights | VM Contributor or VM Command Executor role |
+| **Network Access** | Direct network connectivity required | No network access needed (cloud API) |
+| **Speed** | Instant (network latency only) | 5-30 seconds per VM (API processing) |
+| **Stealth** | Medium (SMB/RPC traffic) | Low (legitimate Azure API calls) |
+
+### What Information Is Retrieved?
+
+Both methods enumerate the same core information about logged-on users:
+
+| Information | On-Premises (wkssvc) | Azure (vm-loggedon) | Security Value |
+|-------------|---------------------|---------------------|----------------|
+| **Username** | ✅ Via NetWkstaUserEnum | ✅ Via quser/who | Identify active accounts |
+| **Session Type** | ✅ Console/RDP/Network | ✅ Console/RDP/TTY/PTS | Determine connection method |
+| **Session State** | ✅ Active/Disconnected | ✅ Active/Disconnected/Idle | Current session status |
+| **Idle Time** | ✅ Via registry | ✅ Via quser (Windows) | Detect stale sessions |
+| **Logon Time** | ✅ Via registry | ⚠️ Limited | Session duration |
+| **Source IP/Host** | ⚠️ Limited | ✅ Via who (Linux) | Track connection origin |
+| **VM/Host Name** | ✅ Target hostname | ✅ Azure VM name | Identify target system |
+| **Resource Group** | ❌ N/A | ✅ Azure resource group | Cloud organization |
+| **Subscription** | ❌ N/A | ✅ Azure subscription | Multi-tenant support |
+
+### Usage Examples
+
+**On-Premises with NetExec:**
+```bash
+# Enumerate logged-on users on a subnet
+nxc smb 192.168.1.0/24 -u Administrator -p 'Password123!' --loggedon-users
+
+# Target specific host
+nxc smb 192.168.1.50 -u UserName -p 'PASSWORDHERE' --loggedon-users username
+```
+
+**Azure with AZexec:**
+```powershell
+# Enumerate logged-on users across all VMs
+.\azx.ps1 vm-loggedon
+
+# Target specific resource group (like targeting a subnet)
+.\azx.ps1 vm-loggedon -ResourceGroup Production-RG
+
+# Filter to running VMs only (like filtering responsive hosts)
+.\azx.ps1 vm-loggedon -VMFilter running
+
+# Multi-subscription enumeration (like scanning multiple networks)
+.\azx.ps1 vm-loggedon  # Automatically scans all accessible subscriptions
+```
+
+### Attack Scenarios
+
+**Scenario 1: Privileged Account Discovery**
+```powershell
+# Find where domain admins or privileged accounts are logged in
+.\azx.ps1 vm-loggedon -ExportPath loggedon.csv
+# Then filter CSV for admin accounts: admin, administrator, root, etc.
+```
+
+**Scenario 2: Lateral Movement Planning**
+```powershell
+# Identify users logged into multiple VMs (potential lateral movement targets)
+.\azx.ps1 vm-loggedon -ExportPath users.json
+# Analyze JSON to find users with sessions on multiple systems
+```
+
+**Scenario 3: Session Hijacking Preparation**
+```powershell
+# Find disconnected RDP sessions (potential targets for session hijacking)
+.\azx.ps1 vm-loggedon | Where-Object { $_.State -eq "Disconnected" }
+```
+
+**Scenario 4: Incident Response**
+```powershell
+# During IR, quickly identify all active sessions across the environment
+.\azx.ps1 vm-loggedon -VMFilter running -ExportPath incident-sessions.csv
+
+# Cross-reference with Azure AD sign-in logs
+.\azx.ps1 sessions -Hours 24 -ExportPath signin-logs.csv
+```
+
+### Why Use VM Run Command Instead of wkssvc?
+
+Azure doesn't expose traditional Windows RPC interfaces like wkssvc to the internet. Instead, Azure provides the **VM Run Command** feature, which:
+
+1. **More Powerful**: Can execute arbitrary commands, not just enumerate users
+2. **Cross-Platform**: Works on both Windows and Linux VMs
+3. **Cloud-Native**: Designed for Azure's security model (RBAC instead of NTLM)
+4. **Auditable**: All Run Command executions are logged in Azure Activity Logs
+5. **No Network Access Required**: Works even if VMs are in private VNets
+
+### Limitations Compared to On-Premises
+
+| Limitation | Impact | Workaround |
+|------------|--------|------------|
+| **Slower** | 5-30 seconds per VM vs instant | Use `-VMFilter running` to skip stopped VMs |
+| **Requires Azure Auth** | Can't do anonymous enumeration | Must have valid Azure credentials |
+| **VM Agent Required** | VMs without agent can't be queried | Ensure Azure VM Agent is installed |
+| **API Rate Limits** | May hit throttling on large environments | Process in batches or add delays |
+| **No Stealth** | All actions logged in Azure Activity Logs | This is a feature, not a bug (compliance) |
+
+### Integration with Other AZexec Commands
+
+The `vm-loggedon` command works best when combined with other enumeration commands:
+
+```powershell
+# Step 1: Enumerate directory roles to identify privileged accounts
+.\azx.ps1 roles -ExportPath roles.csv
+
+# Step 2: Find where those privileged accounts are logged in
+.\azx.ps1 vm-loggedon -ExportPath vm-sessions.csv
+
+# Step 3: Check Azure AD sign-in logs for those accounts
+.\azx.ps1 sessions -Hours 24 -ExportPath signin-logs.csv
+
+# Step 4: Correlate data to map privileged account activity
+# (Analyze CSV files to find privileged users with active VM sessions)
+```
+
+---
 
 ## 🎯 Features
 
@@ -110,12 +246,13 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
   - Show device information, location, IP address, and application used
   - Identify MFA status and risky sign-ins
   - Filter by username and export results
-- **Azure VM Logged-On Users Enumeration**: Query logged-on users on Azure VMs (mimics `nxc smb --logged-on-users` / Remote Registry Service)
-  - Azure equivalent of Remote Registry Service enumeration
+- **Azure VM Logged-On Users Enumeration**: Query logged-on users on Azure VMs (mimics `nxc smb --logged-on-users`)
+  - Azure equivalent of Workstation Service (wkssvc) and Remote Registry Service enumeration
   - Query logged-on users on Windows and Linux Azure VMs
-  - Uses Azure VM Run Command to execute queries remotely
+  - Uses Azure VM Run Command to execute queries remotely (similar to RPC/PsExec)
   - Display username, session state, idle time, and connection source
   - Filter by resource group, subscription, and VM power state
+  - Multi-subscription support with automatic enumeration
   - Requires VM Contributor or VM Command Executor role
 - **Vulnerable Target Enumeration**: Enumerate weak authentication configurations (mimics `nxc smb --gen-relay-list`)
   - Service principals with password-only credentials (like SMB hosts without signing)
@@ -517,7 +654,6 @@ AZexec/
 ├── test-commands.ps1                # Automated test suite for all commands
 ├── README.md                        # This file
 └── LICENSE                          # GPL v3 license
-
 ```
 
 ### Command to Function Mapping
@@ -715,9 +851,9 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 .\azx.ps1 sessions -Hours 720 -ExportPath audit.csv  # 30-day audit (requires Premium)
 ```
 
-**Scenario 5b: Azure VM Logged-On Users Enumeration (Like nxc smb --logged-on-users / Remote Registry)**
+**Scenario 5b: Azure VM Logged-On Users Enumeration (Like nxc smb --logged-on-users)**
 ```powershell
-# Enumerate logged-on users on Azure VMs - the Azure equivalent of Remote Registry Service
+# Enumerate logged-on users on Azure VMs - the Azure equivalent of Workstation Service (wkssvc)
 .\azx.ps1 vm-loggedon                        # All VMs in current subscription
 .\azx.ps1 vm-loggedon -ResourceGroup Prod-RG # Specific resource group
 .\azx.ps1 vm-loggedon -VMFilter running      # Only running VMs
@@ -725,11 +861,15 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 .\azx.ps1 vm-loggedon -ResourceGroup Prod-RG -ExportPath loggedon.csv  # Export to CSV
 .\azx.ps1 vm-loggedon -ExportPath users.json # Full details as JSON
 
-# This command performs:
+# This command is the Azure equivalent of:
+# nxc smb 192.168.1.0/24 -u UserName -p 'PASSWORDHERE' --loggedon-users
+#
+# What it does:
 # - Enumerates Azure VMs (like nxc smb 10.10.10.0/24)
-# - Queries logged-on users via VM Run Command (like Remote Registry Service)
+# - Queries logged-on users via VM Run Command (like Workstation Service wkssvc)
 # - Shows username, session state, idle time, and connection source
 # - Works with both Windows and Linux VMs
+# - Multi-subscription support with automatic enumeration
 ```
 
 **Scenario 6: Service Principal Permission Discovery**
@@ -1853,10 +1993,22 @@ Traditional `qwinsta` shows who's logged into a Windows machine locally. In Azur
 
 ---
 
-### Azure VM Logged-On Users Enumeration Examples (like nxc smb --logged-on-users / Remote Registry Service)
+### Azure VM Logged-On Users Enumeration Examples (like nxc smb --logged-on-users)
 
 **Overview:**  
-This command is the Azure equivalent of enumerating logged-on users via Remote Registry Service or using `nxc smb --logged-on-users`. It queries Azure VMs directly using VM Run Command to identify currently logged-on users, their session states, and connection details.
+This command is the Azure equivalent of enumerating logged-on users using NetExec's `--logged-on-users` flag, which leverages the **Workstation Service (wkssvc)** RPC interface on Windows. In Azure, AZexec achieves the same result by querying Azure VMs directly using VM Run Command to identify currently logged-on users, their session states, and connection details.
+
+**NetExec Workstation Service Equivalent:**
+- **On-Premises**: `nxc smb 192.168.1.0/24 -u UserName -p 'PASSWORDHERE' --loggedon-users`
+  - Uses Workstation Service (wkssvc) RPC calls via SMB
+  - Enumerates logged-on users through Windows RPC interface
+  - Requires network access and valid credentials
+  
+- **Azure Cloud**: `.\azx.ps1 vm-loggedon`
+  - Uses Azure VM Run Command API (similar to PsExec/RPC)
+  - Executes `quser` (Windows) or `who` (Linux) directly on VMs
+  - Requires Azure RBAC permissions (VM Contributor or VM Command Executor)
+  - Works across subscriptions and resource groups
 
 ### Example 30-vm-loggedon-a: Enumerate All VMs in Current Subscription
 Query all Azure VMs for logged-on users:
@@ -1923,13 +2075,23 @@ Generate a full HTML report:
 | **Resource Group** | Yes | Yes | Group by environment |
 | **Power State** | Yes | Yes | Filter running vs stopped |
 
-**Azure Equivalent to Remote Registry Service:**
+**Azure Equivalent to Workstation Service (wkssvc) Enumeration:**
 
-Traditional Remote Registry enumeration (`nxc smb --logged-on-users`) queries the registry to find logged-on users. In Azure, this translates to:
-- **VM Run Command** = Remote execution capability (like PsExec or RPC)
-- **quser (Windows)** = Query user sessions (same as Local Terminal Services API)
-- **who (Linux)** = Query logged-on users (equivalent to wtmp/utmp)
-- **Session details** = Username, session type, idle time, connection source
+NetExec's `--logged-on-users` uses the Workstation Service (wkssvc) RPC interface to enumerate logged-on users. In Azure, this translates to:
+
+| On-Premises Method | Azure Equivalent | How It Works |
+|-------------------|------------------|--------------|
+| **Workstation Service (wkssvc)** | Azure VM Run Command | Remote execution via Azure Management API |
+| **RPC over SMB (port 445)** | HTTPS API calls (port 443) | Azure REST API instead of SMB/RPC |
+| **NetWkstaUserEnum** | `quser` (Windows) / `who` (Linux) | Direct OS-level query via Run Command |
+| **Instant results** | 5-30 seconds per VM | API latency vs network speed |
+| **Network-based** | Cloud API-based | No direct network access needed |
+
+**Technical Implementation:**
+- **VM Run Command** = Remote execution capability (similar to PsExec or WinRM)
+- **quser (Windows)** = Query user sessions (same as Terminal Services API)
+- **who (Linux)** = Query logged-on users (reads wtmp/utmp)
+- **Session details** = Username, session type, state, idle time, connection source
 
 **Key Differences from On-Premises:**
 

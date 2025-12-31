@@ -303,7 +303,21 @@ function Invoke-SessionEnumeration {
     return $sessions
 }
 
-# Enumerate logged-on users on Azure VMs (similar to nxc smb --logged-on-users or Remote Registry Service)
+# Enumerate logged-on users on Azure VMs
+# This is the Azure equivalent of NetExec's Workstation Service (wkssvc) enumeration
+# 
+# On-Premises: nxc smb 192.168.1.0/24 -u User -p Pass --loggedon-users
+#   - Uses Workstation Service (wkssvc) RPC interface over SMB
+#   - Calls NetWkstaUserEnum to enumerate logged-on users
+#   - Requires network access and valid credentials
+#
+# Azure Cloud: .\azx.ps1 vm-loggedon
+#   - Uses Azure VM Run Command API (similar to PsExec/WinRM)
+#   - Executes 'quser' (Windows) or 'who' (Linux) directly on VMs
+#   - Requires Azure RBAC permissions (VM Contributor or VM Command Executor)
+#   - Works across subscriptions and resource groups
+#
+# Both methods enumerate: username, session type, state, idle time, connection source
 
 function Invoke-VMLoggedOnUsersEnumeration {
     param(
@@ -315,7 +329,8 @@ function Invoke-VMLoggedOnUsersEnumeration {
     
     Write-ColorOutput -Message "`n[*] AZX - Azure VM Logged-On Users Enumeration" -Color "Yellow"
     Write-ColorOutput -Message "[*] Command: VM-LoggedOn (Similar to: nxc smb --logged-on-users)" -Color "Yellow"
-    Write-ColorOutput -Message "[*] This is the Azure equivalent of Remote Registry Service enumeration`n" -Color "Cyan"
+    Write-ColorOutput -Message "[*] Azure equivalent of Workstation Service (wkssvc) enumeration" -Color "Cyan"
+    Write-ColorOutput -Message "[*] Uses Azure VM Run Command instead of RPC/SMB`n" -Color "Cyan"
     
     # Check and install required Az modules
     Write-ColorOutput -Message "[*] Checking required Az PowerShell modules..." -Color "Yellow"

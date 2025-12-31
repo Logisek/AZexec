@@ -85,12 +85,13 @@
       * Grant controls (MFA, compliant device, approved app, terms of use)
       * Session controls (sign-in frequency, persistent browser, app enforced restrictions)
       * Security posture assessment and risk identification
-    - Azure VM Logged-On Users Enumeration (mimics nxc smb --logged-on-users / Remote Registry Service)
+    - Azure VM Logged-On Users Enumeration (mimics nxc smb --logged-on-users)
+      * Azure equivalent of Workstation Service (wkssvc) enumeration
       * Query logged-on users on Azure VMs using VM Run Command
       * Support for both Windows and Linux VMs
       * Display username, session state, idle time, and connection source
       * Filter by resource group, subscription, and VM power state
-      * Azure equivalent of Remote Registry Service enumeration
+      * Multi-subscription support with automatic enumeration
       * Requires VM Contributor role or VM Command Executor role
     - Netexec-style formatted output
     - Filter by OS, trust type, compliance status
@@ -115,7 +116,7 @@
     - sp-discovery: Discover service principals with permissions and role assignments (authentication required)
     - roles: Enumerate directory role assignments and privileged accounts (authentication required)
     - ca-policies: Review conditional access policies (member accounts only, requires Policy.Read.All)
-    - vm-loggedon: Enumerate logged-on users on Azure VMs (similar to nxc smb --logged-on-users or Remote Registry Service)
+    - vm-loggedon: Enumerate logged-on users on Azure VMs (similar to nxc smb --logged-on-users / Workstation Service wkssvc)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -433,6 +434,7 @@
     The 'roles' command requires RoleManagement.Read.Directory and Directory.Read.All permissions (PIM requires RoleEligibilitySchedule.Read.Directory)
     The 'ca-policies' command requires Policy.Read.All permission (guest users cannot access conditional access policies)
     The 'vm-loggedon' command requires Azure authentication and 'Virtual Machine Contributor' role or 'Reader' + 'Virtual Machine Command Executor' role
+    The 'vm-loggedon' command is the Azure equivalent of NetExec's Workstation Service (wkssvc) enumeration
     Guest users may have limited access to groups, policy information, audit logs, service principal data, and role assignments
 #>
 
