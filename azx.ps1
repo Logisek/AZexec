@@ -93,6 +93,21 @@
       * Filter by resource group, subscription, and VM power state
       * Multi-subscription support with automatic enumeration
       * Requires VM Contributor role or VM Command Executor role
+    - Azure Storage Account Enumeration (authentication required)
+      * Discover storage accounts across subscriptions
+      * Security analysis: public access, HTTPS-only, TLS version, network rules
+      * Identify misconfigured blob public access and shared key access
+      * Multi-subscription support with automatic enumeration
+    - Azure Key Vault Enumeration (authentication required)
+      * Discover Key Vaults across subscriptions
+      * Security analysis: soft delete, purge protection, RBAC authorization
+      * Identify access policy configurations and network exposure
+      * Multi-subscription support with automatic enumeration
+    - Azure Network Resource Enumeration (authentication required)
+      * Discover VNets, NSGs, Public IPs, and Load Balancers
+      * Identify risky NSG inbound rules (open ports from internet)
+      * Detect unassociated public IPs
+      * Multi-subscription support with automatic enumeration
     - Netexec-style formatted output
     - Filter by OS, trust type, compliance status
     - Device owner enumeration
@@ -117,6 +132,9 @@
     - roles: Enumerate directory role assignments and privileged accounts (authentication required)
     - ca-policies: Review conditional access policies (member accounts only, requires Policy.Read.All)
     - vm-loggedon: Enumerate logged-on users on Azure VMs (similar to nxc smb --logged-on-users / Workstation Service wkssvc)
+    - storage-enum: Enumerate Azure Storage Accounts with security configurations (multi-subscription support)
+    - keyvault-enum: Enumerate Azure Key Vaults with security configurations (multi-subscription support)
+    - network-enum: Enumerate Azure Network resources (VNets, NSGs, Public IPs, Load Balancers) (multi-subscription support)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -422,10 +440,46 @@
     .\azx.ps1 vm-loggedon -SubscriptionId "12345678-1234-1234-1234-123456789012" -ExportPath users.json
     Enumerate logged-on users in a specific subscription and export to JSON
 
+.EXAMPLE
+    .\azx.ps1 storage-enum
+    Enumerate Azure Storage Accounts across all accessible subscriptions
+
+.EXAMPLE
+    .\azx.ps1 storage-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+    Enumerate Storage Accounts in a specific subscription
+
+.EXAMPLE
+    .\azx.ps1 storage-enum -ResourceGroup Production-RG -ExportPath storage.csv
+    Enumerate Storage Accounts in a specific resource group and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 keyvault-enum
+    Enumerate Azure Key Vaults across all accessible subscriptions
+
+.EXAMPLE
+    .\azx.ps1 keyvault-enum -SubscriptionId "12345678-1234-1234-1234-123456789012" -ExportPath keyvaults.json
+    Enumerate Key Vaults in a specific subscription and export to JSON
+
+.EXAMPLE
+    .\azx.ps1 keyvault-enum -ExportPath keyvaults.html
+    Enumerate Key Vaults across all subscriptions and export HTML report
+
+.EXAMPLE
+    .\azx.ps1 network-enum
+    Enumerate Azure Network resources (VNets, NSGs, Public IPs, Load Balancers) across all subscriptions
+
+.EXAMPLE
+    .\azx.ps1 network-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+    Enumerate Network resources in a specific subscription
+
+.EXAMPLE
+    .\azx.ps1 network-enum -ResourceGroup Production-RG -ExportPath network.csv
+    Enumerate Network resources in a specific resource group and export to CSV
+
 .NOTES
     Requires PowerShell 7+
     Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies' commands)
-    Requires Az PowerShell module (for 'vm-loggedon' command - Az.Accounts, Az.Compute, Az.Resources)
+    Requires Az PowerShell module (for ARM-based commands: 'vm-loggedon', 'storage-enum', 'keyvault-enum', 'network-enum')
     Requires appropriate Azure/Entra permissions (for authenticated commands)
     The 'tenant' and 'users' commands do not require authentication
     The 'vuln-list' and 'guest-vuln-scan' commands perform unauthenticated checks first, then authenticated checks
@@ -435,13 +489,25 @@
     The 'ca-policies' command requires Policy.Read.All permission (guest users cannot access conditional access policies)
     The 'vm-loggedon' command requires Azure authentication and 'Virtual Machine Contributor' role or 'Reader' + 'Virtual Machine Command Executor' role
     The 'vm-loggedon' command is the Azure equivalent of NetExec's Workstation Service (wkssvc) enumeration
+    
+    ARM-based commands with multi-subscription support:
+    - 'vm-loggedon': Requires Az.Accounts, Az.Compute, Az.Resources
+    - 'storage-enum': Requires Az.Accounts, Az.Resources, Az.Storage (Reader role required, Storage Account Contributor for full details)
+    - 'keyvault-enum': Requires Az.Accounts, Az.Resources, Az.KeyVault (Reader role required, Key Vault Reader for full details)
+    - 'network-enum': Requires Az.Accounts, Az.Resources, Az.Network (Reader role required)
+    
+    All ARM-based commands support multi-subscription enumeration:
+    - By default, all accessible subscriptions are enumerated automatically
+    - Use -SubscriptionId to target a specific subscription
+    - Use -ResourceGroup to filter by resource group within subscriptions
+    
     Guest users may have limited access to groups, policy information, audit logs, service principal data, and role assignments
 #>
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -518,6 +584,7 @@ $FunctionsPath = Join-Path $PSScriptRoot "Functions"
 . "$FunctionsPath\Sessions.ps1"
 . "$FunctionsPath\Tenant.ps1"
 . "$FunctionsPath\Vulnerabilities.ps1"
+. "$FunctionsPath\AzureRM.ps1"
 
 # ============================================
 # MAIN EXECUTION
@@ -560,27 +627,43 @@ if ($Command -eq "vuln-list" -or $Command -eq "guest-vuln-scan") {
     Initialize-GraphModule
 }
 
-# vm-loggedon uses Azure Resource Manager (Az modules) with RBAC, not Graph API
-if ($Command -eq "vm-loggedon") {
+# ARM-based commands use Azure Resource Manager (Az modules) with RBAC, not Graph API
+if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum")) {
     Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
-    Write-ColorOutput -Message "[*] AZURE VM ENUMERATION - RBAC REQUIREMENTS" -Color "Cyan"
+    Write-ColorOutput -Message "[*] AZURE RESOURCE MANAGER - RBAC REQUIREMENTS" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
     
     Write-ColorOutput -Message "[*] This command uses Azure Resource Manager API (not Microsoft Graph)" -Color "Yellow"
-    Write-ColorOutput -Message "[*] Required Azure RBAC Roles (you need ONE of these):`n" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Multi-subscription support: All accessible subscriptions will be enumerated`n" -Color "Cyan"
     
-    Write-ColorOutput -Message "    Option 1 (Recommended - Minimal Permissions):" -Color "White"
-    Write-ColorOutput -Message "      • Reader role (to list VMs)" -Color "Gray"
-    Write-ColorOutput -Message "      • Virtual Machine Command Executor role (to query logged-on users)`n" -Color "Gray"
-    
-    Write-ColorOutput -Message "    Option 2 (Common - Full VM Access):" -Color "White"
-    Write-ColorOutput -Message "      • Virtual Machine Contributor role`n" -Color "Gray"
-    
-    Write-ColorOutput -Message "    Option 3 (Maximum - Subscription Access):" -Color "White"
-    Write-ColorOutput -Message "      • Contributor role (full subscription access)`n" -Color "Gray"
+    switch ($Command) {
+        "vm-loggedon" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for VM Enumeration:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Option 1 (Recommended - Minimal Permissions):" -Color "White"
+            Write-ColorOutput -Message "      • Reader role (to list VMs)" -Color "Gray"
+            Write-ColorOutput -Message "      • Virtual Machine Command Executor role (to query logged-on users)`n" -Color "Gray"
+            Write-ColorOutput -Message "    Option 2 (Common - Full VM Access):" -Color "White"
+            Write-ColorOutput -Message "      • Virtual Machine Contributor role`n" -Color "Gray"
+        }
+        "storage-enum" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Storage Enumeration:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Minimum: Reader role (to list storage accounts)" -Color "Gray"
+            Write-ColorOutput -Message "    Recommended: Storage Account Contributor (for full details)`n" -Color "Gray"
+        }
+        "keyvault-enum" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Key Vault Enumeration:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Minimum: Reader role (to list Key Vaults)" -Color "Gray"
+            Write-ColorOutput -Message "    Recommended: Key Vault Reader (for security configurations)`n" -Color "Gray"
+        }
+        "network-enum" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Network Enumeration:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Minimum: Reader role (to list network resources)" -Color "Gray"
+            Write-ColorOutput -Message "    Recommended: Network Contributor (for full details)`n" -Color "Gray"
+        }
+    }
     
     Write-ColorOutput -Message "[*] Role assignment scope: Subscription or Resource Group level" -Color "Yellow"
-    Write-ColorOutput -Message "[*] If you lack permissions, the authentication will succeed but queries will fail`n" -Color "Yellow"
+    Write-ColorOutput -Message "[*] If you lack permissions, the authentication will succeed but enumeration may fail`n" -Color "Yellow"
     
     Write-ColorOutput -Message "[*] To check your current Azure permissions:" -Color "Cyan"
     Write-ColorOutput -Message "    Get-AzRoleAssignment -SignInName <your-email>`n" -Color "Gray"
@@ -632,12 +715,21 @@ switch ($Command) {
     "vm-loggedon" {
         Invoke-VMLoggedOnUsersEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -VMFilter $VMFilter -ExportPath $ExportPath
     }
+    "storage-enum" {
+        Invoke-StorageEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -ExportPath $ExportPath
+    }
+    "keyvault-enum" {
+        Invoke-KeyVaultEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -ExportPath $ExportPath
+    }
+    "network-enum" {
+        Invoke-NetworkEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -ExportPath $ExportPath
+    }
     "help" {
         Show-Help
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, help" -Color "Yellow"
     }
 }
 

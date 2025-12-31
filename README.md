@@ -54,6 +54,9 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | *N/A* | `.\azx.ps1 sp-discovery` | ✅ Required | **Discover service principals with permissions** |
 | *N/A* | `.\azx.ps1 roles` | ✅ Required | **Enumerate directory role assignments and privileged accounts** |
 | *N/A* | `.\azx.ps1 ca-policies` | ✅ Required | **Review conditional access policies** (member accounts only) |
+| *N/A* | `.\azx.ps1 storage-enum` | ✅ Required | **Enumerate Azure Storage Accounts** (multi-subscription) |
+| *N/A* | `.\azx.ps1 keyvault-enum` | ✅ Required | **Enumerate Azure Key Vaults** (multi-subscription) |
+| *N/A* | `.\azx.ps1 network-enum` | ✅ Required | **Enumerate Azure Network resources** (multi-subscription) |
 | *N/A* | `.\azx.ps1 help` | ❌ None | **Display available commands and usage** |
 | `nxc smb --shares` | *(N/A for Azure)* | - | Azure doesn't have SMB shares |
 
@@ -192,6 +195,114 @@ The `vm-loggedon` command works best when combined with other enumeration comman
 # Step 4: Correlate data to map privileged account activity
 # (Analyze CSV files to find privileged users with active VM sessions)
 ```
+
+---
+
+## ☁️ Azure Resource Manager Enumeration (Multi-Subscription)
+
+AZexec includes ARM-based enumeration commands that support **automatic multi-subscription discovery**. These commands use Azure Resource Manager API instead of Microsoft Graph.
+
+### Storage Account Enumeration: `storage-enum`
+
+Discover Azure Storage Accounts with security analysis across all subscriptions:
+
+```powershell
+# Enumerate storage accounts across ALL accessible subscriptions
+.\azx.ps1 storage-enum
+
+# Target a specific subscription
+.\azx.ps1 storage-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+
+# Filter by resource group
+.\azx.ps1 storage-enum -ResourceGroup Production-RG
+
+# Export to CSV/JSON/HTML
+.\azx.ps1 storage-enum -ExportPath storage-audit.html
+```
+
+**Security Analysis Includes**:
+| Check | Risk Level | Description |
+|-------|-----------|-------------|
+| Blob Public Access | HIGH | Identifies storage accounts allowing public blob access |
+| HTTPS-Only | MEDIUM | Detects storage accounts not requiring HTTPS |
+| TLS Version | LOW | Checks for TLS < 1.2 |
+| Network Default Action | MEDIUM | Identifies storage accounts allowing all network access |
+| Shared Key Access | LOW | Detects shared key access (vs Azure AD auth) |
+
+### Key Vault Enumeration: `keyvault-enum`
+
+Discover Azure Key Vaults with security configuration analysis:
+
+```powershell
+# Enumerate Key Vaults across ALL accessible subscriptions
+.\azx.ps1 keyvault-enum
+
+# Target specific subscription with JSON export
+.\azx.ps1 keyvault-enum -SubscriptionId "12345678-1234-1234-1234-123456789012" -ExportPath keyvaults.json
+
+# Filter by resource group with HTML report
+.\azx.ps1 keyvault-enum -ResourceGroup Security-RG -ExportPath keyvault-audit.html
+```
+
+**Security Analysis Includes**:
+| Check | Risk Level | Description |
+|-------|-----------|-------------|
+| Soft Delete | MEDIUM | Identifies Key Vaults without soft delete protection |
+| Purge Protection | LOW | Detects Key Vaults without purge protection |
+| RBAC Authorization | LOW | Identifies Key Vaults using access policies instead of RBAC |
+| Network Default Action | MEDIUM | Detects Key Vaults allowing public network access |
+| Access Policy Count | INFO | Flags Key Vaults with many access policies (>10) |
+
+### Network Resource Enumeration: `network-enum`
+
+Discover Azure Network resources with security analysis:
+
+```powershell
+# Enumerate network resources across ALL accessible subscriptions
+.\azx.ps1 network-enum
+
+# Target specific subscription
+.\azx.ps1 network-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+
+# Filter by resource group with CSV export
+.\azx.ps1 network-enum -ResourceGroup Prod-RG -ExportPath network-audit.csv
+```
+
+**Resources Enumerated**:
+- **Virtual Networks (VNets)**: Address spaces, subnets, peerings
+- **Network Security Groups (NSGs)**: Security rules, risky inbound rules
+- **Public IP Addresses**: Allocation, association status
+- **Load Balancers**: Frontend IPs, backend pools, rules
+
+**Security Analysis Includes**:
+| Check | Risk Level | Description |
+|-------|-----------|-------------|
+| Risky NSG Inbound Rules | HIGH | Open ports (22, 3389, 445, etc.) from Internet/Any |
+| Unassociated Public IPs | MEDIUM | Public IPs not associated with any resource |
+
+### Multi-Subscription Pattern
+
+All ARM commands share a common multi-subscription enumeration pattern:
+
+```powershell
+# Automatic - Enumerate ALL accessible subscriptions
+.\azx.ps1 storage-enum       # Scans all subscriptions automatically
+
+# Targeted - Specific subscription
+.\azx.ps1 keyvault-enum -SubscriptionId "12345678-..."
+
+# Filtered - Specific resource group (applies within each subscription)
+.\azx.ps1 network-enum -ResourceGroup Production-RG
+
+# Combined - All options work together
+.\azx.ps1 storage-enum -SubscriptionId "12345678-..." -ResourceGroup Prod-RG -ExportPath report.html
+```
+
+**Output Includes**:
+- Subscription name and ID for each resource
+- Resource group and location
+- Security risk assessment
+- Detailed security issues list
 
 ---
 
@@ -650,7 +761,8 @@ AZexec/
 │   ├── Guest.ps1                    # guest command - guest authentication testing
 │   ├── Sessions.ps1                 # sessions & vm-loggedon commands
 │   ├── Tenant.ps1                   # tenant command - tenant discovery
-│   └── Vulnerabilities.ps1          # vuln-list & guest-vuln-scan commands
+│   ├── Vulnerabilities.ps1          # vuln-list & guest-vuln-scan commands
+│   └── AzureRM.ps1                  # Azure Resource Manager commands (storage-enum, keyvault-enum, network-enum)
 ├── test-commands.ps1                # Automated test suite for all commands
 ├── README.md                        # This file
 └── LICENSE                          # GPL v3 license
@@ -677,9 +789,25 @@ Each command in `azx.ps1` is implemented in a dedicated function file:
 | `roles` | `Roles.ps1` | `Invoke-RoleAssignmentEnumeration` |
 | `ca-policies` | `Policies.ps1` | `Invoke-ConditionalAccessPolicyReview` |
 | `vm-loggedon` | `Sessions.ps1` | `Invoke-VMLoggedOnUsersEnumeration` |
+| `storage-enum` | `AzureRM.ps1` | `Invoke-StorageEnumeration` |
+| `keyvault-enum` | `AzureRM.ps1` | `Invoke-KeyVaultEnumeration` |
+| `network-enum` | `AzureRM.ps1` | `Invoke-NetworkEnumeration` |
 | `help` | `UI.ps1` | `Show-Help` |
 
 This modular design makes the codebase easier to maintain, test, and extend with new commands.
+
+### Azure Resource Manager (ARM) Commands
+
+The following commands use Azure Resource Manager API (Az PowerShell modules) instead of Microsoft Graph. They all support **multi-subscription enumeration** by default:
+
+| Command | Description | Required Modules | RBAC Role |
+|---------|-------------|------------------|-----------|
+| `vm-loggedon` | Enumerate logged-on users on Azure VMs | Az.Accounts, Az.Compute, Az.Resources | VM Contributor or Reader + VM Command Executor |
+| `storage-enum` | Enumerate Storage Accounts with security analysis | Az.Accounts, Az.Resources, Az.Storage | Reader (Storage Account Contributor for full details) |
+| `keyvault-enum` | Enumerate Key Vaults with security analysis | Az.Accounts, Az.Resources, Az.KeyVault | Reader (Key Vault Reader for full details) |
+| `network-enum` | Enumerate VNets, NSGs, Public IPs, Load Balancers | Az.Accounts, Az.Resources, Az.Network | Reader |
+
+**Multi-Subscription Support**: All ARM commands automatically enumerate all accessible subscriptions. Use `-SubscriptionId` to target a specific subscription, or `-ResourceGroup` to filter within subscriptions.
 
 ## 🧪 Testing
 
@@ -722,6 +850,9 @@ The test script will:
 [*] Testing command: roles ... PASS (Auth Required)
 [*] Testing command: ca-policies ... PASS (Auth Required)
 [*] Testing command: vm-loggedon ... PASS (Auth Required)
+[*] Testing command: storage-enum ... PASS (Auth Required)
+[*] Testing command: keyvault-enum ... PASS (Auth Required)
+[*] Testing command: network-enum ... PASS (Auth Required)
 [*] Testing command: help ... PASS
 
 ========================================
@@ -745,9 +876,12 @@ sp-discovery    PASS (Auth) 30.21s
 roles           PASS        20.24s
 ca-policies     PASS        5.20s
 vm-loggedon     PASS (Auth) 54.46s
+storage-enum    PASS (Auth) 32.15s
+keyvault-enum   PASS (Auth) 28.92s
+network-enum    PASS (Auth) 35.67s
 help            PASS        0.49s
 
-Total: 16 | Passed: 16 | Failed: 0
+Total: 19 | Passed: 19 | Failed: 0
 
 All commands executed successfully!
 ```
@@ -872,6 +1006,57 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 # - Multi-subscription support with automatic enumeration
 ```
 
+**Scenario 5c: Azure Storage Account Security Audit (Multi-Subscription)**
+```powershell
+# Enumerate storage accounts across ALL accessible subscriptions
+.\azx.ps1 storage-enum                        # Auto-enumerate all subscriptions
+.\azx.ps1 storage-enum -ResourceGroup Prod-RG # Filter by resource group
+.\azx.ps1 storage-enum -SubscriptionId "12345678-..."  # Target specific subscription
+.\azx.ps1 storage-enum -ExportPath storage-audit.html  # Export HTML security report
+
+# Security checks performed:
+# - Blob public access enabled (HIGH risk)
+# - HTTPS-only disabled (MEDIUM risk)
+# - Network allows all (MEDIUM risk)
+# - TLS version < 1.2 (LOW risk)
+# - Shared key access enabled (LOW risk)
+```
+
+**Scenario 5d: Azure Key Vault Security Audit (Multi-Subscription)**
+```powershell
+# Enumerate Key Vaults across ALL accessible subscriptions
+.\azx.ps1 keyvault-enum                       # Auto-enumerate all subscriptions
+.\azx.ps1 keyvault-enum -ResourceGroup Security-RG    # Filter by resource group
+.\azx.ps1 keyvault-enum -SubscriptionId "12345678-..."  # Target specific subscription
+.\azx.ps1 keyvault-enum -ExportPath keyvault-audit.json  # Export JSON for analysis
+
+# Security checks performed:
+# - Soft delete disabled (MEDIUM risk)
+# - Purge protection disabled (LOW risk)
+# - RBAC authorization disabled (LOW risk)
+# - Public network access enabled (MEDIUM risk)
+# - Many access policies (>10)
+```
+
+**Scenario 5e: Azure Network Security Audit (Multi-Subscription)**
+```powershell
+# Enumerate network resources across ALL accessible subscriptions
+.\azx.ps1 network-enum                        # Auto-enumerate all subscriptions
+.\azx.ps1 network-enum -ResourceGroup Prod-RG # Filter by resource group
+.\azx.ps1 network-enum -SubscriptionId "12345678-..."  # Target specific subscription
+.\azx.ps1 network-enum -ExportPath network-audit.csv  # Export CSV for spreadsheet
+
+# Resources enumerated:
+# - Virtual Networks (VNets) - address spaces, subnets, peerings
+# - Network Security Groups (NSGs) - security rules, risky inbound rules
+# - Public IP Addresses - allocation, association status
+# - Load Balancers - frontend IPs, backend pools, rules
+
+# Security checks performed:
+# - Risky NSG inbound rules (HIGH risk) - open ports from Internet
+# - Unassociated Public IPs (MEDIUM risk) - misconfiguration indicator
+```
+
 **Scenario 6: Service Principal Permission Discovery**
 ```powershell
 # Discover service principals with their permissions and ownership
@@ -932,6 +1117,15 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 
 # Azure VM logged-on users (like nxc smb --logged-on-users / Remote Registry Service) - Azure authentication required
 .\azx.ps1 vm-loggedon [-ResourceGroup <RGName>] [-SubscriptionId <SubId>] [-VMFilter <all|running|stopped>] [-NoColor] [-ExportPath <Path>]
+
+# Azure Storage Account enumeration (multi-subscription support) - Azure authentication required
+.\azx.ps1 storage-enum [-ResourceGroup <RGName>] [-SubscriptionId <SubId>] [-ExportPath <Path>]
+
+# Azure Key Vault enumeration (multi-subscription support) - Azure authentication required
+.\azx.ps1 keyvault-enum [-ResourceGroup <RGName>] [-SubscriptionId <SubId>] [-ExportPath <Path>]
+
+# Azure Network resource enumeration (multi-subscription support) - Azure authentication required
+.\azx.ps1 network-enum [-ResourceGroup <RGName>] [-SubscriptionId <SubId>] [-ExportPath <Path>]
 
 # Vulnerable target enumeration (like nxc smb --gen-relay-list) - domain auto-detected if not specified
 .\azx.ps1 vuln-list [-Domain <DomainName>] [-NoColor] [-ExportPath <Path>]
@@ -2150,6 +2344,137 @@ NetExec's `--logged-on-users` uses the Workstation Service (wkssvc) RPC interfac
 - **Incident Response**: Quickly identify active sessions during investigation
 - **Compliance**: Document who has access to sensitive systems
 - **Session Hygiene**: Find and terminate stale or unauthorized sessions
+
+---
+
+### Azure Storage Account Enumeration Examples (Multi-Subscription)
+
+### Example 31-storage-a: Enumerate All Storage Accounts
+Enumerate storage accounts across ALL accessible subscriptions:
+```powershell
+.\azx.ps1 storage-enum
+```
+
+**Output Shows:**
+- Storage account name, resource group, location
+- Security risk level (HIGH/MEDIUM/LOW)
+- Security issues (public access, HTTPS, TLS, network rules)
+- Blob, File, Table, Queue endpoints
+
+### Example 31-storage-b: Target Specific Subscription
+Enumerate storage accounts in a specific subscription:
+```powershell
+.\azx.ps1 storage-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+```
+
+### Example 31-storage-c: Filter by Resource Group
+Enumerate storage accounts in a specific resource group:
+```powershell
+.\azx.ps1 storage-enum -ResourceGroup Production-RG
+```
+
+### Example 31-storage-d: Export Security Audit Report
+Generate HTML report for security audit:
+```powershell
+.\azx.ps1 storage-enum -ExportPath storage-security-audit.html
+```
+
+**What storage-enum Checks:**
+
+| Check | Risk Level | Description |
+|-------|-----------|-------------|
+| **Blob Public Access** | HIGH | Storage accounts allowing public blob access |
+| **HTTPS-Only Disabled** | MEDIUM | Storage accounts not requiring HTTPS |
+| **Network Default: Allow** | MEDIUM | Storage accounts allowing all network access |
+| **TLS Version < 1.2** | LOW | Storage accounts with older TLS versions |
+| **Shared Key Access** | LOW | Storage accounts allowing shared key auth |
+
+---
+
+### Azure Key Vault Enumeration Examples (Multi-Subscription)
+
+### Example 32-keyvault-a: Enumerate All Key Vaults
+Enumerate Key Vaults across ALL accessible subscriptions:
+```powershell
+.\azx.ps1 keyvault-enum
+```
+
+**Output Shows:**
+- Key Vault name, resource group, location
+- Vault URI
+- Security settings (soft delete, purge protection, RBAC)
+- Access policy count
+- Risk level and security issues
+
+### Example 32-keyvault-b: Target Specific Subscription with Export
+Enumerate Key Vaults in a specific subscription and export to JSON:
+```powershell
+.\azx.ps1 keyvault-enum -SubscriptionId "12345678-1234-1234-1234-123456789012" -ExportPath keyvaults.json
+```
+
+### Example 32-keyvault-c: Security Audit with HTML Report
+Generate comprehensive security audit report:
+```powershell
+.\azx.ps1 keyvault-enum -ExportPath keyvault-security-audit.html
+```
+
+**What keyvault-enum Checks:**
+
+| Check | Risk Level | Description |
+|-------|-----------|-------------|
+| **Public Network Access** | MEDIUM | Key Vaults with public network access enabled |
+| **Soft Delete Disabled** | MEDIUM | Key Vaults without soft delete protection |
+| **Purge Protection Disabled** | LOW | Key Vaults without purge protection |
+| **RBAC Disabled** | LOW | Key Vaults using access policies instead of RBAC |
+| **Many Access Policies** | INFO | Key Vaults with >10 access policies |
+
+---
+
+### Azure Network Enumeration Examples (Multi-Subscription)
+
+### Example 33-network-a: Enumerate All Network Resources
+Enumerate network resources across ALL accessible subscriptions:
+```powershell
+.\azx.ps1 network-enum
+```
+
+**Resources Enumerated:**
+- Virtual Networks (VNets) - address spaces, subnets, peerings
+- Network Security Groups (NSGs) - rules, risky inbound rules
+- Public IP Addresses - allocation, association status
+- Load Balancers - frontend IPs, backend pools
+
+### Example 33-network-b: Target Specific Subscription
+Enumerate network resources in a specific subscription:
+```powershell
+.\azx.ps1 network-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+```
+
+### Example 33-network-c: Filter by Resource Group with CSV Export
+Enumerate network resources in a specific resource group:
+```powershell
+.\azx.ps1 network-enum -ResourceGroup Production-RG -ExportPath network-audit.csv
+```
+
+### Example 33-network-d: Generate HTML Security Report
+Generate comprehensive network security report:
+```powershell
+.\azx.ps1 network-enum -ExportPath network-security-report.html
+```
+
+**What network-enum Checks:**
+
+| Check | Risk Level | Description |
+|-------|-----------|-------------|
+| **Risky NSG Inbound Rules** | HIGH | Open ports (22, 3389, 445, 135, 1433, etc.) from Internet/Any |
+| **Unassociated Public IPs** | MEDIUM | Public IPs not associated with any resource |
+| **VNet Peerings** | INFO | Virtual network peering configurations |
+
+**Security Recommendations:**
+- Review and restrict NSG rules allowing traffic from Any/Internet
+- Use Just-In-Time VM Access for management ports (22, 3389)
+- Consider using Azure Bastion instead of public IPs for VM access
+- Implement network segmentation using NSGs and ASGs
 
 ---
 
@@ -4051,12 +4376,23 @@ This tool is provided for **legitimate security testing, research, and administr
 | Full device enum | `.\azx.ps1 hosts -ShowOwners -ExportPath out.json` | ✅ Guest/Member | - |
 | Test guest perms | `Get-MgUser -Top 10` (after connecting) | ✅ Guest | - |
 | Enumerate all users | `.\azx.ps1 user-profiles` | ✅ Guest/Member | - |
+| **Enum VM logged-on users** | `.\azx.ps1 vm-loggedon` | ✅ Azure RBAC | `nxc smb --logged-on-users` |
+| **Enum Storage Accounts** | `.\azx.ps1 storage-enum` | ✅ Azure RBAC | - |
+| **Enum Key Vaults** | `.\azx.ps1 keyvault-enum` | ✅ Azure RBAC | - |
+| **Enum Network resources** | `.\azx.ps1 network-enum` | ✅ Azure RBAC | - |
 | **Show available commands** | `.\azx.ps1 help` | ❌ None | `nxc --help` |
 
 **Tip**: Add `-Disconnect` to any authenticated command to automatically disconnect from Microsoft Graph after execution:
 ```powershell
 .\azx.ps1 hosts -ExportPath devices.csv -Disconnect
 .\azx.ps1 sp-discovery -ExportPath sp.json -Disconnect
+```
+
+**ARM Commands (Multi-Subscription)**: These commands automatically enumerate all accessible Azure subscriptions:
+```powershell
+.\azx.ps1 storage-enum                                  # All storage accounts across all subscriptions
+.\azx.ps1 keyvault-enum -SubscriptionId "12345..."      # Key vaults in specific subscription
+.\azx.ps1 network-enum -ResourceGroup Prod-RG           # Network resources in specific resource group
 ```
 
 ### Defensive Audit Commands

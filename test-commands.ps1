@@ -19,6 +19,9 @@ $commands = @(
     "roles",
     "ca-policies",
     "vm-loggedon",
+    "storage-enum",
+    "keyvault-enum",
+    "network-enum",
     "help"
 )
 

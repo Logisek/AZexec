@@ -332,171 +332,19 @@ function Invoke-VMLoggedOnUsersEnumeration {
     Write-ColorOutput -Message "[*] Azure equivalent of Workstation Service (wkssvc) enumeration" -Color "Cyan"
     Write-ColorOutput -Message "[*] Uses Azure VM Run Command instead of RPC/SMB`n" -Color "Cyan"
     
-    # Check and install required Az modules
-    Write-ColorOutput -Message "[*] Checking required Az PowerShell modules..." -Color "Yellow"
-    
+    # Use shared helper functions from AzureRM.ps1
     $requiredModules = @('Az.Accounts', 'Az.Compute', 'Az.Resources')
-    $modulesToInstall = @()
-    
-    foreach ($module in $requiredModules) {
-        if (-not (Get-Module -ListAvailable -Name $module)) {
-            $modulesToInstall += $module
-        }
-    }
-    
-    if ($modulesToInstall.Count -gt 0) {
-        Write-ColorOutput -Message "[!] Missing modules: $($modulesToInstall -join ', ')" -Color "Yellow"
-        Write-ColorOutput -Message "[*] Installing missing modules..." -Color "Yellow"
-        
-        foreach ($module in $modulesToInstall) {
-            try {
-                Write-ColorOutput -Message "    [*] Installing $module..." -Color "Gray"
-                Install-Module $module -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop -Repository PSGallery
-                Write-ColorOutput -Message "    [+] $module installed successfully" -Color "Green"
-            } catch {
-                Write-ColorOutput -Message "    [!] Failed to install $module" -Color "Red"
-                Write-ColorOutput -Message "    [!] Error: $($_.Exception.Message)" -Color "Red"
-                Write-ColorOutput -Message "`n[*] Please install manually using:" -Color "Yellow"
-                Write-ColorOutput -Message "    Install-Module $module -Scope CurrentUser -Force" -Color "Gray"
-                Write-ColorOutput -Message "`n[*] Or install the full Az module:" -Color "Yellow"
-                Write-ColorOutput -Message "    Install-Module Az -Scope CurrentUser -Force`n" -Color "Gray"
-                return
-            }
-        }
-        Write-ColorOutput -Message "[+] All required modules installed successfully" -Color "Green"
-    } else {
-        Write-ColorOutput -Message "[+] All required Az modules are already installed" -Color "Green"
-    }
-    
-    # Import Az modules
-    Write-ColorOutput -Message "[*] Importing Az modules..." -Color "Yellow"
-    try {
-        Import-Module Az.Accounts -ErrorAction Stop
-        Import-Module Az.Compute -ErrorAction Stop
-        Import-Module Az.Resources -ErrorAction Stop
-        Write-ColorOutput -Message "[+] Az modules imported successfully`n" -Color "Green"
-    } catch {
-        Write-ColorOutput -Message "[!] Failed to import Az modules" -Color "Red"
-        Write-ColorOutput -Message "[!] Error: $($_.Exception.Message)" -Color "Red"
-        Write-ColorOutput -Message "`n[*] Try manually importing:" -Color "Yellow"
-        Write-ColorOutput -Message "    Import-Module Az.Accounts" -Color "Gray"
-        Write-ColorOutput -Message "    Import-Module Az.Compute" -Color "Gray"
-        Write-ColorOutput -Message "    Import-Module Az.Resources`n" -Color "Gray"
+    if (-not (Initialize-AzureRMModules -RequiredModules $requiredModules)) {
         return
     }
     
-    # Check if authenticated to Azure
-    try {
-        $azContext = Get-AzContext -ErrorAction Stop
-        
-        if (-not $azContext) {
-            Write-ColorOutput -Message "[!] Not authenticated to Azure" -Color "Red"
-            Write-ColorOutput -Message "[*] Attempting authentication..." -Color "Yellow"
-            Write-ColorOutput -Message "[*] Note: You may see warnings about tenants requiring MFA - these are informational only`n" -Color "Cyan"
-            
-            # Suppress most Azure warnings but keep critical errors
-            Connect-AzAccount -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
-            $azContext = Get-AzContext
-        }
-        
-        if ($azContext) {
-            Write-ColorOutput -Message "[+] Authenticated as: $($azContext.Account.Id)" -Color "Green"
-            Write-ColorOutput -Message "[+] Subscription: $($azContext.Subscription.Name) ($($azContext.Subscription.Id))" -Color "Green"
-            
-            # Check user's RBAC roles (informational only - may not detect inherited or group-based permissions)
-            Write-ColorOutput -Message "[*] Checking Azure RBAC permissions (informational)..." -Color "Yellow"
-            try {
-                $roleAssignments = Get-AzRoleAssignment -SignInName $azContext.Account.Id -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-                
-                if ($roleAssignments -and $roleAssignments.Count -gt 0) {
-                    $relevantRoles = $roleAssignments | Where-Object { 
-                        $_.RoleDefinitionName -match "Reader|Contributor|Virtual Machine|Owner" 
-                    }
-                    
-                    if ($relevantRoles.Count -gt 0) {
-                        Write-ColorOutput -Message "[+] Direct RBAC role assignments found:" -Color "Green"
-                        $roleGroups = $relevantRoles | Group-Object RoleDefinitionName
-                        foreach ($group in $roleGroups) {
-                            $scopeInfo = $group.Group | ForEach-Object {
-                                if ($_.Scope -match "/subscriptions/[^/]+$") { "Subscription" } 
-                                elseif ($_.Scope -match "/resourceGroups/([^/]+)") { "RG: $($matches[1])" }
-                                else { "Other" }
-                            }
-                            $uniqueScopes = ($scopeInfo | Select-Object -Unique) -join ", "
-                            Write-ColorOutput -Message "    • $($group.Name) ($uniqueScopes)" -Color "Gray"
-                        }
-                        
-                        # Check if user has sufficient permissions for VM enumeration
-                        $hasReader = $relevantRoles | Where-Object { $_.RoleDefinitionName -match "Reader|Contributor|Owner" }
-                        $hasVMAccess = $relevantRoles | Where-Object { $_.RoleDefinitionName -match "Virtual Machine|Contributor|Owner" }
-                        
-                        if (-not $hasReader) {
-                            Write-ColorOutput -Message "[!] Note: No direct Reader/Contributor role - you may have inherited permissions" -Color "Cyan"
-                        }
-                        if (-not $hasVMAccess) {
-                            Write-ColorOutput -Message "[!] Note: No direct VM roles - you may have group-based or inherited permissions" -Color "Cyan"
-                        }
-                    } else {
-                        Write-ColorOutput -Message "[*] No direct VM-related roles found (you may have group-based or inherited permissions)" -Color "Cyan"
-                    }
-                } else {
-                    Write-ColorOutput -Message "[*] No direct role assignments detected (you may have group-based or inherited permissions)" -Color "Cyan"
-                }
-                Write-ColorOutput -Message "[*] Proceeding with VM enumeration - actual permissions will be tested..." -Color "Cyan"
-            } catch {
-                # Silent failure - permission check is informational only
-                Write-ColorOutput -Message "[*] Proceeding with VM enumeration..." -Color "Cyan"
-            }
-            
-            Write-Host ""
-        }
-    } catch {
-        Write-ColorOutput -Message "[!] Failed to get Azure context: $($_.Exception.Message)" -Color "Red"
-        Write-ColorOutput -Message "[*] Please authenticate using: Connect-AzAccount" -Color "Yellow"
-        return
-    }
+    # Connect to Azure using shared helper
+    $azContext = Connect-AzureRM
+    if (-not $azContext) { return }
     
-    # Determine which subscriptions to enumerate
-    $subscriptionsToScan = @()
-    
-    if ($SubscriptionId) {
-        # User specified a specific subscription
-        try {
-            $targetSub = Get-AzSubscription -SubscriptionId $SubscriptionId -ErrorAction Stop
-            $subscriptionsToScan = @($targetSub)
-            Write-ColorOutput -Message "[*] Target subscription: $($targetSub.Name) ($($targetSub.Id))`n" -Color "Cyan"
-        } catch {
-            Write-ColorOutput -Message "[!] Failed to find subscription: $SubscriptionId" -Color "Red"
-            Write-ColorOutput -Message "[*] Error: $($_.Exception.Message)" -Color "Red"
-            Write-ColorOutput -Message "`n[*] List available subscriptions:" -Color "Yellow"
-            Write-ColorOutput -Message "    Get-AzSubscription | Format-Table Name, Id, State`n" -Color "Gray"
-            return
-        }
-    } else {
-        # Enumerate all accessible subscriptions
-        try {
-            $allSubs = Get-AzSubscription -ErrorAction Stop -WarningAction SilentlyContinue | Where-Object { $_.State -eq 'Enabled' }
-            $subscriptionsToScan = @($allSubs)
-            
-            if ($subscriptionsToScan.Count -eq 0) {
-                Write-ColorOutput -Message "[!] No enabled subscriptions found" -Color "Red"
-                return
-            }
-            
-            Write-ColorOutput -Message "[*] Found $($subscriptionsToScan.Count) enabled subscription(s):" -Color "Cyan"
-            $currentSubId = $azContext.Subscription.Id
-            foreach ($sub in $subscriptionsToScan) {
-                $isCurrent = if ($sub.Id -eq $currentSubId) { " [CURRENT]" } else { "" }
-                $tenantInfo = if ($sub.TenantId) { " | Tenant: $($sub.TenantId)" } else { "" }
-                Write-ColorOutput -Message "    • $($sub.Name)$isCurrent" -Color $(if ($sub.Id -eq $currentSubId) { "Green" } else { "Gray" })
-                Write-ColorOutput -Message "      ID: $($sub.Id)$tenantInfo" -Color "DarkGray"
-            }
-            Write-ColorOutput -Message "`n[*] Will enumerate VMs across all subscriptions (use -SubscriptionId to target specific subscription)`n" -Color "Yellow"
-        } catch {
-            Write-ColorOutput -Message "[!] Failed to retrieve subscriptions: $($_.Exception.Message)" -Color "Red"
-            return
-        }
-    }
+    # Get subscriptions to enumerate using shared helper
+    $subscriptionsToScan = Get-SubscriptionsToEnumerate -SubscriptionId $SubscriptionId -CurrentContext $azContext
+    if (-not $subscriptionsToScan) { return }
     
     # Global counters across all subscriptions
     $exportData = @()
@@ -512,37 +360,8 @@ function Invoke-VMLoggedOnUsersEnumeration {
     
     # Loop through each subscription
     foreach ($subscription in $subscriptionsToScan) {
-        Write-ColorOutput -Message "[*] --------------------------------------------------" -Color "Cyan"
-        Write-ColorOutput -Message "[*] Subscription: $($subscription.Name)" -Color "White"
-        Write-ColorOutput -Message "[*] ID: $($subscription.Id)" -Color "Gray"
-        Write-ColorOutput -Message "[*] --------------------------------------------------`n" -Color "Cyan"
-        
-        # Switch to this subscription
-        try {
-            # Try to set context with tenant ID for better compatibility
-            if ($subscription.TenantId) {
-                Set-AzContext -SubscriptionId $subscription.Id -TenantId $subscription.TenantId -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
-            } else {
-                Set-AzContext -SubscriptionId $subscription.Id -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
-            }
-        } catch {
-            Write-ColorOutput -Message "[!] Failed to switch to subscription: $($subscription.Name)" -Color "Red"
-            Write-ColorOutput -Message "[*] Error: $($_.Exception.Message)" -Color "Red"
-            
-            # Check if it's a tenant/authentication issue
-            if ($_.Exception.Message -like "*tenant*" -or $_.Exception.Message -like "*authentication*") {
-                Write-ColorOutput -Message "[*] This subscription may be in a different tenant requiring separate authentication" -Color "Yellow"
-                Write-ColorOutput -Message "[*] Tenant ID: $($subscription.TenantId)" -Color "Yellow"
-            }
-            Write-ColorOutput -Message "[*] Skipping to next subscription...`n" -Color "Yellow"
-            continue
-        }
-        
-        # Verify context switch was successful
-        $currentContext = Get-AzContext -ErrorAction SilentlyContinue
-        if (-not $currentContext -or $currentContext.Subscription.Id -ne $subscription.Id) {
-            Write-ColorOutput -Message "[!] Context switch verification failed for: $($subscription.Name)" -Color "Red"
-            Write-ColorOutput -Message "[*] Skipping to next subscription...`n" -Color "Yellow"
+        # Use shared helper for subscription context switching
+        if (-not (Set-SubscriptionContext -Subscription $subscription)) {
             continue
         }
         
