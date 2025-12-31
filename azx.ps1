@@ -4975,30 +4975,56 @@ function Invoke-VMLoggedOnUsersEnumeration {
     Write-ColorOutput -Message "[*] Command: VM-LoggedOn (Similar to: nxc smb --logged-on-users)" -Color "Yellow"
     Write-ColorOutput -Message "[*] This is the Azure equivalent of Remote Registry Service enumeration`n" -Color "Cyan"
     
-    # Check if Az.Compute module is installed
-    Write-ColorOutput -Message "[*] Checking Az.Compute module..." -Color "Yellow"
+    # Check and install required Az modules
+    Write-ColorOutput -Message "[*] Checking required Az PowerShell modules..." -Color "Yellow"
     
-    if (-not (Get-Module -ListAvailable -Name Az.Compute)) {
-        Write-ColorOutput -Message "[!] Az.Compute module not found. Installing..." -Color "Yellow"
-        try {
-            Install-Module Az.Compute -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
-            Write-ColorOutput -Message "[+] Az.Compute module installed successfully" -Color "Green"
-        } catch {
-            Write-ColorOutput -Message "[!] Failed to install Az.Compute module: $_" -Color "Red"
-            Write-ColorOutput -Message "[*] Please install manually: Install-Module Az.Compute -Scope CurrentUser" -Color "Yellow"
-            return
+    $requiredModules = @('Az.Accounts', 'Az.Compute', 'Az.Resources')
+    $modulesToInstall = @()
+    
+    foreach ($module in $requiredModules) {
+        if (-not (Get-Module -ListAvailable -Name $module)) {
+            $modulesToInstall += $module
         }
     }
     
+    if ($modulesToInstall.Count -gt 0) {
+        Write-ColorOutput -Message "[!] Missing modules: $($modulesToInstall -join ', ')" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Installing missing modules..." -Color "Yellow"
+        
+        foreach ($module in $modulesToInstall) {
+            try {
+                Write-ColorOutput -Message "    [*] Installing $module..." -Color "Gray"
+                Install-Module $module -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop -Repository PSGallery
+                Write-ColorOutput -Message "    [+] $module installed successfully" -Color "Green"
+            } catch {
+                Write-ColorOutput -Message "    [!] Failed to install $module" -Color "Red"
+                Write-ColorOutput -Message "    [!] Error: $($_.Exception.Message)" -Color "Red"
+                Write-ColorOutput -Message "`n[*] Please install manually using:" -Color "Yellow"
+                Write-ColorOutput -Message "    Install-Module $module -Scope CurrentUser -Force" -Color "Gray"
+                Write-ColorOutput -Message "`n[*] Or install the full Az module:" -Color "Yellow"
+                Write-ColorOutput -Message "    Install-Module Az -Scope CurrentUser -Force`n" -Color "Gray"
+                return
+            }
+        }
+        Write-ColorOutput -Message "[+] All required modules installed successfully" -Color "Green"
+    } else {
+        Write-ColorOutput -Message "[+] All required Az modules are already installed" -Color "Green"
+    }
+    
     # Import Az modules
+    Write-ColorOutput -Message "[*] Importing Az modules..." -Color "Yellow"
     try {
         Import-Module Az.Accounts -ErrorAction Stop
         Import-Module Az.Compute -ErrorAction Stop
         Import-Module Az.Resources -ErrorAction Stop
         Write-ColorOutput -Message "[+] Az modules imported successfully`n" -Color "Green"
     } catch {
-        Write-ColorOutput -Message "[!] Failed to import Az modules: $_" -Color "Red"
-        Write-ColorOutput -Message "[*] Please ensure Az.Accounts, Az.Compute, and Az.Resources are installed" -Color "Yellow"
+        Write-ColorOutput -Message "[!] Failed to import Az modules" -Color "Red"
+        Write-ColorOutput -Message "[!] Error: $($_.Exception.Message)" -Color "Red"
+        Write-ColorOutput -Message "`n[*] Try manually importing:" -Color "Yellow"
+        Write-ColorOutput -Message "    Import-Module Az.Accounts" -Color "Gray"
+        Write-ColorOutput -Message "    Import-Module Az.Compute" -Color "Gray"
+        Write-ColorOutput -Message "    Import-Module Az.Resources`n" -Color "Gray"
         return
     }
     
@@ -5009,8 +5035,10 @@ function Invoke-VMLoggedOnUsersEnumeration {
         if (-not $azContext) {
             Write-ColorOutput -Message "[!] Not authenticated to Azure" -Color "Red"
             Write-ColorOutput -Message "[*] Attempting authentication..." -Color "Yellow"
+            Write-ColorOutput -Message "[*] Note: You may see warnings about tenants requiring MFA - these are informational only`n" -Color "Cyan"
             
-            Connect-AzAccount -ErrorAction Stop
+            # Suppress most Azure warnings but keep critical errors
+            Connect-AzAccount -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
             $azContext = Get-AzContext
         }
         
@@ -5018,46 +5046,49 @@ function Invoke-VMLoggedOnUsersEnumeration {
             Write-ColorOutput -Message "[+] Authenticated as: $($azContext.Account.Id)" -Color "Green"
             Write-ColorOutput -Message "[+] Subscription: $($azContext.Subscription.Name) ($($azContext.Subscription.Id))" -Color "Green"
             
-            # Check user's RBAC roles
-            Write-ColorOutput -Message "[*] Checking Azure RBAC permissions..." -Color "Yellow"
+            # Check user's RBAC roles (informational only - may not detect inherited or group-based permissions)
+            Write-ColorOutput -Message "[*] Checking Azure RBAC permissions (informational)..." -Color "Yellow"
             try {
-                $roleAssignments = Get-AzRoleAssignment -SignInName $azContext.Account.Id -ErrorAction SilentlyContinue
+                $roleAssignments = Get-AzRoleAssignment -SignInName $azContext.Account.Id -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
                 
-                if ($roleAssignments) {
+                if ($roleAssignments -and $roleAssignments.Count -gt 0) {
                     $relevantRoles = $roleAssignments | Where-Object { 
-                        $_.RoleDefinitionName -match "Reader|Contributor|Virtual Machine" 
+                        $_.RoleDefinitionName -match "Reader|Contributor|Virtual Machine|Owner" 
                     }
                     
                     if ($relevantRoles.Count -gt 0) {
-                        Write-ColorOutput -Message "[+] Found relevant RBAC roles:" -Color "Green"
-                        foreach ($role in $relevantRoles) {
-                            $scopeType = if ($role.Scope -match "/subscriptions/[^/]+$") { "Subscription" } 
-                                        elseif ($role.Scope -match "/resourceGroups/") { "Resource Group" }
-                                        else { "Other" }
-                            Write-ColorOutput -Message "    • $($role.RoleDefinitionName) ($scopeType)" -Color "Gray"
+                        Write-ColorOutput -Message "[+] Direct RBAC role assignments found:" -Color "Green"
+                        $roleGroups = $relevantRoles | Group-Object RoleDefinitionName
+                        foreach ($group in $roleGroups) {
+                            $scopeInfo = $group.Group | ForEach-Object {
+                                if ($_.Scope -match "/subscriptions/[^/]+$") { "Subscription" } 
+                                elseif ($_.Scope -match "/resourceGroups/([^/]+)") { "RG: $($matches[1])" }
+                                else { "Other" }
+                            }
+                            $uniqueScopes = ($scopeInfo | Select-Object -Unique) -join ", "
+                            Write-ColorOutput -Message "    • $($group.Name) ($uniqueScopes)" -Color "Gray"
                         }
                         
                         # Check if user has sufficient permissions for VM enumeration
-                        $hasReader = $relevantRoles | Where-Object { $_.RoleDefinitionName -match "Reader|Contributor" }
-                        $hasVMAccess = $relevantRoles | Where-Object { $_.RoleDefinitionName -match "Virtual Machine|Contributor" }
+                        $hasReader = $relevantRoles | Where-Object { $_.RoleDefinitionName -match "Reader|Contributor|Owner" }
+                        $hasVMAccess = $relevantRoles | Where-Object { $_.RoleDefinitionName -match "Virtual Machine|Contributor|Owner" }
                         
                         if (-not $hasReader) {
-                            Write-ColorOutput -Message "[!] WARNING: No 'Reader' or 'Contributor' role found - VM enumeration may fail" -Color "Yellow"
+                            Write-ColorOutput -Message "[!] Note: No direct Reader/Contributor role - you may have inherited permissions" -Color "Cyan"
                         }
                         if (-not $hasVMAccess) {
-                            Write-ColorOutput -Message "[!] WARNING: No VM-related roles found - VM Run Command will fail" -Color "Yellow"
-                            Write-ColorOutput -Message "[*] You need: 'Virtual Machine Contributor' or 'Virtual Machine Command Executor' role" -Color "Yellow"
+                            Write-ColorOutput -Message "[!] Note: No direct VM roles - you may have group-based or inherited permissions" -Color "Cyan"
                         }
                     } else {
-                        Write-ColorOutput -Message "[!] No relevant RBAC roles found for this subscription" -Color "Yellow"
-                        Write-ColorOutput -Message "[!] VM enumeration will likely fail due to insufficient permissions" -Color "Yellow"
+                        Write-ColorOutput -Message "[*] No direct VM-related roles found (you may have group-based or inherited permissions)" -Color "Cyan"
                     }
                 } else {
-                    Write-ColorOutput -Message "[!] Could not retrieve RBAC role assignments" -Color "Yellow"
-                    Write-ColorOutput -Message "[*] Proceeding anyway - errors will be shown if permissions are insufficient" -Color "Yellow"
+                    Write-ColorOutput -Message "[*] No direct role assignments detected (you may have group-based or inherited permissions)" -Color "Cyan"
                 }
+                Write-ColorOutput -Message "[*] Proceeding with VM enumeration - actual permissions will be tested..." -Color "Cyan"
             } catch {
-                Write-ColorOutput -Message "[!] Could not check RBAC permissions: $($_.Exception.Message)" -Color "Yellow"
+                # Silent failure - permission check is informational only
+                Write-ColorOutput -Message "[*] Proceeding with VM enumeration..." -Color "Cyan"
             }
             
             Write-Host ""
@@ -5068,142 +5099,183 @@ function Invoke-VMLoggedOnUsersEnumeration {
         return
     }
     
-    # Set subscription if specified
+    # Determine which subscriptions to enumerate
+    $subscriptionsToScan = @()
+    
     if ($SubscriptionId) {
+        # User specified a specific subscription
         try {
-            Set-AzContext -SubscriptionId $SubscriptionId -ErrorAction Stop | Out-Null
-            Write-ColorOutput -Message "[+] Switched to subscription: $SubscriptionId`n" -Color "Green"
+            $targetSub = Get-AzSubscription -SubscriptionId $SubscriptionId -ErrorAction Stop
+            $subscriptionsToScan = @($targetSub)
+            Write-ColorOutput -Message "[*] Target subscription: $($targetSub.Name) ($($targetSub.Id))`n" -Color "Cyan"
         } catch {
-            Write-ColorOutput -Message "[!] Failed to switch subscription: $SubscriptionId" -Color "Red"
+            Write-ColorOutput -Message "[!] Failed to find subscription: $SubscriptionId" -Color "Red"
             Write-ColorOutput -Message "[*] Error: $($_.Exception.Message)" -Color "Red"
             Write-ColorOutput -Message "`n[*] List available subscriptions:" -Color "Yellow"
             Write-ColorOutput -Message "    Get-AzSubscription | Format-Table Name, Id, State`n" -Color "Gray"
             return
         }
-    }
-    
-    # Get VMs
-    Write-ColorOutput -Message "[*] Retrieving Azure VMs..." -Color "Yellow"
-    
-    try {
-        if ($ResourceGroup) {
-            $vms = Get-AzVM -ResourceGroupName $ResourceGroup -Status -ErrorAction Stop
-            Write-ColorOutput -Message "[+] Retrieved $($vms.Count) VMs from resource group: $ResourceGroup" -Color "Green"
-        } else {
-            $vms = Get-AzVM -Status -ErrorAction Stop
-            Write-ColorOutput -Message "[+] Retrieved $($vms.Count) total VMs across all resource groups" -Color "Green"
+    } else {
+        # Enumerate all accessible subscriptions
+        try {
+            $allSubs = Get-AzSubscription -ErrorAction Stop -WarningAction SilentlyContinue | Where-Object { $_.State -eq 'Enabled' }
+            $subscriptionsToScan = @($allSubs)
+            
+            if ($subscriptionsToScan.Count -eq 0) {
+                Write-ColorOutput -Message "[!] No enabled subscriptions found" -Color "Red"
+                return
+            }
+            
+            Write-ColorOutput -Message "[*] Found $($subscriptionsToScan.Count) enabled subscription(s):" -Color "Cyan"
+            $currentSubId = $azContext.Subscription.Id
+            foreach ($sub in $subscriptionsToScan) {
+                $isCurrent = if ($sub.Id -eq $currentSubId) { " [CURRENT]" } else { "" }
+                $tenantInfo = if ($sub.TenantId) { " | Tenant: $($sub.TenantId)" } else { "" }
+                Write-ColorOutput -Message "    • $($sub.Name)$isCurrent" -Color $(if ($sub.Id -eq $currentSubId) { "Green" } else { "Gray" })
+                Write-ColorOutput -Message "      ID: $($sub.Id)$tenantInfo" -Color "DarkGray"
+            }
+            Write-ColorOutput -Message "`n[*] Will enumerate VMs across all subscriptions (use -SubscriptionId to target specific subscription)`n" -Color "Yellow"
+        } catch {
+            Write-ColorOutput -Message "[!] Failed to retrieve subscriptions: $($_.Exception.Message)" -Color "Red"
+            return
         }
-    } catch {
-        $errorMessage = $_.Exception.Message
-        
-        # Parse Azure authorization error for cleaner display
-        if ($errorMessage -like "*AuthorizationFailed*" -or $errorMessage -like "*does not have authorization*") {
-            Write-ColorOutput -Message "`n[!] ========================================" -Color "Red"
-            Write-ColorOutput -Message "[!] AUTHORIZATION FAILED" -Color "Red"
-            Write-ColorOutput -Message "[!] ========================================`n" -Color "Red"
-            
-            # Extract key details from error
-            if ($errorMessage -match "client '([^']+)'") {
-                $user = $matches[1]
-                Write-ColorOutput -Message "[*] User: $user" -Color "Yellow"
-            }
-            
-            if ($errorMessage -match "action '([^']+)'") {
-                $permission = $matches[1]
-                Write-ColorOutput -Message "[*] Missing Permission: $permission" -Color "Yellow"
-            }
-            
-            if ($errorMessage -match "scope '([^']+)'") {
-                $scope = $matches[1]
-                $scopeParts = $scope -split '/'
-                if ($scopeParts.Count -ge 3 -and $scopeParts[1] -eq 'subscriptions') {
-                    $subId = $scopeParts[2]
-                    Write-ColorOutput -Message "[*] Subscription: $subId" -Color "Yellow"
-                }
-            }
-            
-            Write-ColorOutput -Message "`n[!] Required Azure RBAC Roles (choose one):" -Color "Cyan"
-            Write-ColorOutput -Message "    1. Reader role (to list VMs)" -Color "White"
-            Write-ColorOutput -Message "       + Virtual Machine Contributor role (to run commands)" -Color "White"
-            Write-ColorOutput -Message "    2. Virtual Machine Contributor role (full access)" -Color "White"
-            Write-ColorOutput -Message "    3. Contributor role (full subscription access)" -Color "White"
-            
-            Write-ColorOutput -Message "`n[*] How to fix:" -Color "Cyan"
-            Write-ColorOutput -Message "    1. Go to Azure Portal > Subscriptions" -Color "White"
-            Write-ColorOutput -Message "    2. Select your subscription > Access Control (IAM)" -Color "White"
-            Write-ColorOutput -Message "    3. Click 'Add role assignment'" -Color "White"
-            Write-ColorOutput -Message "    4. Select 'Reader' role and assign to your account" -Color "White"
-            Write-ColorOutput -Message "    5. Optionally add 'Virtual Machine Contributor' for run commands" -Color "White"
-            
-            Write-ColorOutput -Message "`n[*] PowerShell command to check your current permissions:" -Color "Cyan"
-            Write-ColorOutput -Message "    Get-AzRoleAssignment -SignInName $($azContext.Account.Id)" -Color "Gray"
-            
-            Write-ColorOutput -Message "`n[*] TIP: If you have access to other subscriptions, try:" -Color "Yellow"
-            Write-ColorOutput -Message "    Get-AzSubscription | Format-Table Name, Id, State" -Color "Gray"
-            Write-ColorOutput -Message "    .\azx.ps1 vm-loggedon -SubscriptionId <subscription-id>`n" -Color "Gray"
-            
-        } else {
-            # Generic error handling
-            Write-ColorOutput -Message "[!] Failed to retrieve VMs" -Color "Red"
-            Write-ColorOutput -Message "[!] Error: $errorMessage" -Color "Red"
-        }
-        
-        return
     }
     
-    if ($vms.Count -eq 0) {
-        Write-ColorOutput -Message "[!] No VMs found" -Color "Red"
-        return
-    }
-    
-    # Apply VM filter
-    $filteredVMs = $vms
-    if ($VMFilter -ne "all") {
-        $filteredVMs = $vms | Where-Object {
-            $powerState = ($_.PowerState -split ' ')[-1]
-            if ($VMFilter -eq "running") {
-                $powerState -eq "running"
-            } elseif ($VMFilter -eq "stopped") {
-                $powerState -ne "running"
-            } else {
-                $true
-            }
-        }
-        Write-ColorOutput -Message "[*] Filtered to $($filteredVMs.Count) VMs with status: $VMFilter`n" -Color "Cyan"
-    }
-    
-    if ($filteredVMs.Count -eq 0) {
-        Write-ColorOutput -Message "[!] No VMs found matching filter: $VMFilter" -Color "Red"
-        return
-    }
-    
-    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
-    Write-ColorOutput -Message "[*] LOGGED-ON USERS ENUMERATION" -Color "Cyan"
-    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
-    
-    # Prepare export data
+    # Global counters across all subscriptions
     $exportData = @()
     $totalLoggedOnUsers = 0
     $successfulQueries = 0
     $failedQueries = 0
+    $totalVMsFound = 0
+    $totalVMsQueried = 0
     
-    foreach ($vm in $filteredVMs) {
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] MULTI-SUBSCRIPTION VM ENUMERATION" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    # Loop through each subscription
+    foreach ($subscription in $subscriptionsToScan) {
+        Write-ColorOutput -Message "[*] --------------------------------------------------" -Color "Cyan"
+        Write-ColorOutput -Message "[*] Subscription: $($subscription.Name)" -Color "White"
+        Write-ColorOutput -Message "[*] ID: $($subscription.Id)" -Color "Gray"
+        Write-ColorOutput -Message "[*] --------------------------------------------------`n" -Color "Cyan"
+        
+        # Switch to this subscription
+        try {
+            # Try to set context with tenant ID for better compatibility
+            if ($subscription.TenantId) {
+                Set-AzContext -SubscriptionId $subscription.Id -TenantId $subscription.TenantId -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+            } else {
+                Set-AzContext -SubscriptionId $subscription.Id -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+            }
+        } catch {
+            Write-ColorOutput -Message "[!] Failed to switch to subscription: $($subscription.Name)" -Color "Red"
+            Write-ColorOutput -Message "[*] Error: $($_.Exception.Message)" -Color "Red"
+            
+            # Check if it's a tenant/authentication issue
+            if ($_.Exception.Message -like "*tenant*" -or $_.Exception.Message -like "*authentication*") {
+                Write-ColorOutput -Message "[*] This subscription may be in a different tenant requiring separate authentication" -Color "Yellow"
+                Write-ColorOutput -Message "[*] Tenant ID: $($subscription.TenantId)" -Color "Yellow"
+            }
+            Write-ColorOutput -Message "[*] Skipping to next subscription...`n" -Color "Yellow"
+            continue
+        }
+        
+        # Verify context switch was successful
+        $currentContext = Get-AzContext -ErrorAction SilentlyContinue
+        if (-not $currentContext -or $currentContext.Subscription.Id -ne $subscription.Id) {
+            Write-ColorOutput -Message "[!] Context switch verification failed for: $($subscription.Name)" -Color "Red"
+            Write-ColorOutput -Message "[*] Skipping to next subscription...`n" -Color "Yellow"
+            continue
+        }
+        
+        # Get VMs in this subscription
+        Write-ColorOutput -Message "[*] Retrieving Azure VMs..." -Color "Yellow"
+        
+        try {
+            $vms = @()
+            if ($ResourceGroup) {
+                $vms = @(Get-AzVM -ResourceGroupName $ResourceGroup -Status -ErrorAction Stop)
+                if ($vms.Count -gt 0) {
+                    Write-ColorOutput -Message "[+] Retrieved $($vms.Count) VM(s) from resource group: $ResourceGroup" -Color "Green"
+                } else {
+                    Write-ColorOutput -Message "[*] No VMs found in resource group: $ResourceGroup" -Color "Yellow"
+                }
+            } else {
+                $vms = @(Get-AzVM -Status -ErrorAction Stop)
+                if ($vms.Count -gt 0) {
+                    Write-ColorOutput -Message "[+] Retrieved $($vms.Count) VM(s) across all resource groups" -Color "Green"
+                } else {
+                    Write-ColorOutput -Message "[*] No VMs found in this subscription" -Color "Yellow"
+                }
+            }
+        } catch {
+            $errorMessage = $_.Exception.Message
+            
+            # Parse Azure authorization error for cleaner display
+            if ($errorMessage -like "*AuthorizationFailed*" -or $errorMessage -like "*does not have authorization*") {
+                Write-ColorOutput -Message "[!] Authorization failed for subscription: $($subscription.Name)" -Color "Red"
+                Write-ColorOutput -Message "[*] You don't have permission to list VMs in this subscription" -Color "Yellow"
+                Write-ColorOutput -Message "[*] Skipping to next subscription...`n" -Color "Yellow"
+            } else {
+                Write-ColorOutput -Message "[!] Error retrieving VMs: $errorMessage" -Color "Red"
+                Write-ColorOutput -Message "[*] Skipping to next subscription...`n" -Color "Yellow"
+            }
+            continue
+        }
+        
+        if ($vms.Count -eq 0) {
+            Write-ColorOutput -Message "[*] No VMs to enumerate in this subscription`n" -Color "Yellow"
+            continue
+        }
+        
+        $totalVMsFound += $vms.Count
+        
+        # Apply VM filter
+        $filteredVMs = $vms
+        if ($VMFilter -ne "all") {
+            $filteredVMs = @($vms | Where-Object {
+                $powerState = ($_.PowerState -split ' ')[-1]
+                if ($VMFilter -eq "running") {
+                    # Match running or available states
+                    $powerState -match "running|available"
+                } elseif ($VMFilter -eq "stopped") {
+                    # Not running/available
+                    $powerState -notmatch "running|available"
+                } else {
+                    $true
+                }
+            })
+            Write-ColorOutput -Message "[*] Filtered to $($filteredVMs.Count) VM(s) with status: $VMFilter`n" -Color "Cyan"
+        }
+        
+        if ($filteredVMs.Count -eq 0) {
+            Write-ColorOutput -Message "[*] No VMs matching filter: $VMFilter`n" -Color "Yellow"
+            continue
+        }
+        
+        $totalVMsQueried += $filteredVMs.Count
+        
+        # Enumerate VMs in this subscription
+        foreach ($vm in $filteredVMs) {
         $vmName = $vm.Name
         $vmResourceGroup = $vm.ResourceGroupName
         $powerState = ($vm.PowerState -split ' ')[-1]
         $osType = $vm.StorageProfile.OsDisk.OsType
         
-        # Color based on power state
-        $stateColor = if ($powerState -eq "running") { "Green" } else { "Yellow" }
+        # Check if VM is in a running/available state
+        # Azure may report different states: "running", "Available", "VM running", etc.
+        $isRunning = $powerState -match "running|available"
+        $stateColor = if ($isRunning) { "Green" } else { "Yellow" }
         
         Write-ColorOutput -Message "[*] VM: $vmName" -Color "White"
         Write-ColorOutput -Message "    Resource Group: $vmResourceGroup" -Color "Gray"
         Write-ColorOutput -Message "    OS Type: $osType" -Color "Gray"
         Write-ColorOutput -Message "    Power State: $powerState" -Color $stateColor
         
-        # Only query running VMs
-        if ($powerState -ne "running") {
-            Write-ColorOutput -Message "    [!] VM is not running - skipping query" -Color "Yellow"
+        # Only query running/available VMs
+        if (-not $isRunning) {
+            Write-ColorOutput -Message "    [!] VM is not in running state - skipping query" -Color "Yellow"
             $failedQueries++
             Write-Host ""
             continue
@@ -5260,6 +5332,13 @@ fi
             
             $output = $result.Value[0].Message
             
+            # Clean up Azure RunCommand output artifacts
+            # Remove "Enable succeeded:", "[stdout]", "[stderr]" and other metadata
+            $output = $output -replace "Enable succeeded:", ""
+            $output = $output -replace "\[stdout\]", ""
+            $output = $output -replace "\[stderr\]", ""
+            $output = $output.Trim()
+            
             if ($output -match "NO_USERS_LOGGED_ON") {
                 Write-ColorOutput -Message "    [+] Query successful - No users currently logged on" -Color "Cyan"
                 $successfulQueries++
@@ -5269,12 +5348,14 @@ fi
                 $failedQueries++
             } else {
                 $loggedOnUsers = @()
-                $lines = $output -split "`n" | Where-Object { $_.Trim() -ne "" }
+                $lines = $output -split "`n" | Where-Object { $_.Trim() -ne "" -and $_ -notmatch "^\s*$" }
                 
                 foreach ($line in $lines) {
                     if ($osType -eq "Windows") {
                         if ($line -match "USER:([^|]+)\|SESSION:([^|]*)\|ID:([^|]+)\|STATE:([^|]+)\|IDLE:(.+)") {
                             $loggedOnUsers += [PSCustomObject]@{
+                                Subscription = $subscription.Name
+                                SubscriptionId = $subscription.Id
                                 VM = $vmName
                                 ResourceGroup = $vmResourceGroup
                                 OSType = $osType
@@ -5288,8 +5369,10 @@ fi
                         }
                     } else {
                         # Linux
-                        if ($line -match "USER:([^|]+)\|TTY:([^|]*)\|LOGIN:([^|]+)\|FROM:(.+)") {
+                        if ($line -match "USER:([^|]+)\|TTY:([^|]*)\|LOGIN:([^|]+)\|FROM:(.*)") {
                             $loggedOnUsers += [PSCustomObject]@{
+                                Subscription = $subscription.Name
+                                SubscriptionId = $subscription.Id
                                 VM = $vmName
                                 ResourceGroup = $vmResourceGroup
                                 OSType = $osType
@@ -5344,17 +5427,22 @@ fi
             }
             
             $failedQueries++
-        }
+            }
+            
+            Write-Host ""
+        } # End VM loop
         
-        Write-Host ""
-    }
+        Write-ColorOutput -Message "[*] Subscription enumeration complete`n" -Color "Green"
+    } # End subscription loop
     
-    # Summary
+    # Summary across all subscriptions
     Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
-    Write-ColorOutput -Message "[*] ENUMERATION SUMMARY" -Color "Cyan"
+    Write-ColorOutput -Message "[*] MULTI-SUBSCRIPTION ENUMERATION SUMMARY" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
     
-    Write-ColorOutput -Message "[*] Total VMs: $($filteredVMs.Count)" -Color "White"
+    Write-ColorOutput -Message "[*] Subscriptions Scanned: $($subscriptionsToScan.Count)" -Color "White"
+    Write-ColorOutput -Message "[*] Total VMs Found: $totalVMsFound" -Color "White"
+    Write-ColorOutput -Message "[*] VMs Queried (after filters): $totalVMsQueried" -Color "White"
     Write-ColorOutput -Message "[*] Successful Queries: $successfulQueries" -Color "Green"
     Write-ColorOutput -Message "[*] Failed Queries: $failedQueries" -Color "Red"
     Write-ColorOutput -Message "[*] Total Logged-On Users Found: $totalLoggedOnUsers" -Color "Cyan"
@@ -5375,7 +5463,9 @@ fi
                 }
                 ".html" {
                     $stats = @{
-                        "Total VMs" = $filteredVMs.Count
+                        "Subscriptions Scanned" = $subscriptionsToScan.Count
+                        "Total VMs Found" = $totalVMsFound
+                        "VMs Queried" = $totalVMsQueried
                         "Successful Queries" = $successfulQueries
                         "Failed Queries" = $failedQueries
                         "Total Logged-On Users" = $totalLoggedOnUsers
@@ -5403,11 +5493,34 @@ fi
         Write-ColorOutput -Message "    - VMs must be in 'running' state" -Color "Yellow"
     }
     
+    # Multi-subscription tips
+    if ($subscriptionsToScan.Count -gt 1 -and -not $SubscriptionId) {
+        Write-ColorOutput -Message "`n[*] MULTI-SUBSCRIPTION SCAN:" -Color "Cyan"
+        Write-ColorOutput -Message "    - Scanned $($subscriptionsToScan.Count) subscriptions automatically" -Color "Cyan"
+        Write-ColorOutput -Message "    - Use -SubscriptionId to target a specific subscription" -Color "Cyan"
+        Write-ColorOutput -Message "    - Export includes subscription information for each user" -Color "Cyan"
+        
+        # Show which subscriptions had issues
+        $failedSubs = $subscriptionsToScan | Where-Object { 
+            $subId = $_.Id
+            -not ($exportData | Where-Object { $_.SubscriptionId -eq $subId })
+        }
+        if ($failedSubs.Count -gt 0) {
+            Write-ColorOutput -Message "`n[*] Subscriptions with issues (0 VMs or errors):" -Color "Yellow"
+            foreach ($sub in $failedSubs) {
+                Write-ColorOutput -Message "    • $($sub.Name) - Try: .\azx.ps1 vm-loggedon -SubscriptionId $($sub.Id)" -Color "Yellow"
+            }
+        }
+    }
+    
     if ($totalLoggedOnUsers -gt 0) {
         Write-ColorOutput -Message "`n[*] NEXT STEPS:" -Color "Cyan"
         Write-ColorOutput -Message "    - Investigate logged-on users for privileged accounts" -Color "Cyan"
         Write-ColorOutput -Message "    - Correlate with Azure AD sign-in logs: .\azx.ps1 sessions" -Color "Cyan"
         Write-ColorOutput -Message "    - Check for stale sessions or suspicious activity" -Color "Cyan"
+        if ($subscriptionsToScan.Count -gt 1) {
+            Write-ColorOutput -Message "    - Review users across multiple subscriptions for anomalies" -Color "Cyan"
+        }
     }
     
     return $exportData
