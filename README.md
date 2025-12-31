@@ -56,9 +56,9 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | *N/A* | `.\azx.ps1 ca-policies` | ✅ Required | **Review conditional access policies** (member accounts only) |
 | *N/A* | `.\azx.ps1 storage-enum` | ✅ Required | **Enumerate Azure Storage Accounts** (multi-subscription) |
 | *N/A* | `.\azx.ps1 keyvault-enum` | ✅ Required | **Enumerate Azure Key Vaults** (multi-subscription) |
-| *N/A* | `.\azx.ps1 network-enum` | ✅ Required | **Enumerate Azure Network resources** (multi-subscription) |
+| `nxc smb --enum-network-interfaces` | `.\azx.ps1 network-enum` | ✅ Required | **Enumerate Azure Network resources** (VNets, NSGs, Public IPs, Load Balancers, NICs) |
 | *N/A* | `.\azx.ps1 help` | ❌ None | **Display available commands and usage** |
-| `nxc smb --shares` | *(N/A for Azure)* | - | Azure doesn't have SMB shares |
+| `nxc smb --shares` | `.\azx.ps1 shares-enum` | ✅ Required | **Enumerate Azure File Shares** (access permissions) |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -273,12 +273,95 @@ Discover Azure Network resources with security analysis:
 - **Network Security Groups (NSGs)**: Security rules, risky inbound rules
 - **Public IP Addresses**: Allocation, association status
 - **Load Balancers**: Frontend IPs, backend pools, rules
+- **Network Interfaces (NICs)**: IP configurations, VM attachments, NSG associations, MAC addresses
 
 **Security Analysis Includes**:
 | Check | Risk Level | Description |
 |-------|-----------|-------------|
 | Risky NSG Inbound Rules | HIGH | Open ports (22, 3389, 445, etc.) from Internet/Any |
 | Unassociated Public IPs | MEDIUM | Public IPs not associated with any resource |
+| Unattached Network Interfaces | MEDIUM | NICs not attached to VMs (billable, potential misconfiguration) |
+| NICs with Public IP but No NSG | HIGH | Network interfaces exposed to internet without security group |
+| IP Forwarding Enabled | MEDIUM | NICs configured for routing/firewall capabilities |
+
+**Network Interface Details Displayed**:
+- **VM Attachment**: Shows which VM the NIC is attached to (or "Not Attached")
+- **Private IP Addresses**: All private IPs configured on the NIC
+- **Public IP Addresses**: Any public IPs associated with the NIC
+- **NSG Association**: Network Security Group protecting the NIC (or "None")
+- **IP Forwarding**: Whether the NIC can forward packets (routing capability)
+- **Accelerated Networking**: SR-IOV performance feature status
+- **MAC Address**: Hardware address (allocated when attached to VM)
+- **Risk Assessment**: Automatic security risk evaluation
+
+**NetExec Equivalent**: This is similar to `nxc smb --enum-network-interfaces` which enumerates network adapters on Windows systems via RPC. In Azure, we enumerate the cloud-level network interface resources instead of querying individual VMs.
+
+**Usage Examples**:
+
+```powershell
+# Enumerate all network interfaces across all subscriptions
+.\azx.ps1 network-enum
+
+# Find unattached NICs (cost optimization opportunity)
+.\azx.ps1 network-enum -ExportPath nics.csv
+# Then filter CSV for ResourceType="NetworkInterface" and Details containing "Not Attached"
+
+# Identify NICs with public IPs but no NSG (HIGH RISK)
+.\azx.ps1 network-enum | Select-String "Public IP" | Select-String "NSG: None"
+
+# Target specific resource group
+.\azx.ps1 network-enum -ResourceGroup Production-RG
+```
+
+**Security Use Cases**:
+1. **Attack Surface Mapping**: Identify all network interfaces with public IPs
+2. **Lateral Movement Planning**: Map private IP ranges and network topology
+3. **Cost Optimization**: Find unattached NICs that are still billable
+4. **Compliance Auditing**: Verify all NICs have proper NSG associations
+5. **IP Forwarding Detection**: Identify NICs configured for routing (potential pivot points)
+
+### Azure File Shares Enumeration: `shares-enum`
+
+The Azure equivalent of NetExec's `--shares` command. Enumerate Azure File Shares with access permission analysis:
+
+```powershell
+# Enumerate file shares across ALL accessible subscriptions (like nxc smb --shares)
+.\azx.ps1 shares-enum
+
+# Filter by access level (like nxc smb --shares READ,WRITE)
+.\azx.ps1 shares-enum -SharesFilter READ,WRITE
+.\azx.ps1 shares-enum -SharesFilter WRITE
+.\azx.ps1 shares-enum -SharesFilter READ
+
+# Target specific subscription or resource group
+.\azx.ps1 shares-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+.\azx.ps1 shares-enum -ResourceGroup Production-RG -ExportPath shares.csv
+```
+
+**Information Enumerated**:
+| Information | Description | Security Value |
+|-------------|-------------|----------------|
+| **Share Name** | Azure File Share name | Identify potential data stores |
+| **Access Level** | READ, WRITE, or READ,WRITE | Determine exploitation potential |
+| **Quota** | Storage quota in GB | Assess storage capacity |
+| **Access Tier** | Hot, Cool, Transaction Optimized | Cost/performance profile |
+| **Protocol** | SMB or NFS | Protocol-specific attack vectors |
+| **Storage Account** | Parent storage account | Scope of access |
+| **Public Network Access** | Whether publicly accessible | Exposure risk |
+
+**NetExec Comparison**:
+| NetExec Command | AZexec Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `nxc smb 192.168.1.0/24 -u user -p 'PASS' --shares` | `.\azx.ps1 shares-enum` | List all accessible shares |
+| `nxc smb 192.168.1.0/24 -u user -p 'PASS' --shares READ,WRITE` | `.\azx.ps1 shares-enum -SharesFilter READ,WRITE` | Filter writable shares |
+| `nxc smb 192.168.1.0/24 -u user -p 'PASS' --shares READ` | `.\azx.ps1 shares-enum -SharesFilter READ` | Filter readable shares |
+| `nxc smb 192.168.1.0/24 -u user -p 'PASS' --shares WRITE` | `.\azx.ps1 shares-enum -SharesFilter WRITE` | Filter write-only shares |
+
+**Security Analysis**:
+- Shares with WRITE access are highlighted in RED (potential data exfiltration/upload risk)
+- Shares in publicly accessible storage accounts are flagged
+- Protocol breakdown (SMB vs NFS) for attack planning
+- Recommendations for securing file shares
 
 ### Multi-Subscription Pattern
 
@@ -417,6 +500,13 @@ All ARM commands share a common multi-subscription enumeration pattern:
   - Security posture assessment and risk identification
   - High-risk policy highlighting (block access, risk-based policies)
   - Export comprehensive policy data to CSV or JSON
+- **Azure File Shares Enumeration**: Enumerate Azure File Shares with access permissions (mimics `nxc smb --shares`)
+  - Azure equivalent of SMB share enumeration
+  - Display access permissions (READ, WRITE) similar to NetExec
+  - Filter by access level (READ, WRITE, READ,WRITE)
+  - Show quotas, access tiers, and enabled protocols (SMB/NFS)
+  - Security analysis for writable and publicly accessible shares
+  - Multi-subscription support with automatic enumeration
 - **Netexec-Style Output**: Familiar output format for penetration testers and security professionals
 - **Advanced Filtering**: Filter devices by OS, trust type, compliance status, and more
 - **Owner Information**: Optional device owner enumeration with additional API calls
@@ -792,6 +882,7 @@ Each command in `azx.ps1` is implemented in a dedicated function file:
 | `storage-enum` | `AzureRM.ps1` | `Invoke-StorageEnumeration` |
 | `keyvault-enum` | `AzureRM.ps1` | `Invoke-KeyVaultEnumeration` |
 | `network-enum` | `AzureRM.ps1` | `Invoke-NetworkEnumeration` |
+| `shares-enum` | `AzureRM.ps1` | `Invoke-SharesEnumeration` |
 | `help` | `UI.ps1` | `Show-Help` |
 
 This modular design makes the codebase easier to maintain, test, and extend with new commands.
@@ -805,7 +896,8 @@ The following commands use Azure Resource Manager API (Az PowerShell modules) in
 | `vm-loggedon` | Enumerate logged-on users on Azure VMs | Az.Accounts, Az.Compute, Az.Resources | VM Contributor or Reader + VM Command Executor |
 | `storage-enum` | Enumerate Storage Accounts with security analysis | Az.Accounts, Az.Resources, Az.Storage | Reader (Storage Account Contributor for full details) |
 | `keyvault-enum` | Enumerate Key Vaults with security analysis | Az.Accounts, Az.Resources, Az.KeyVault | Reader (Key Vault Reader for full details) |
-| `network-enum` | Enumerate VNets, NSGs, Public IPs, Load Balancers | Az.Accounts, Az.Resources, Az.Network | Reader |
+| `network-enum` | Enumerate VNets, NSGs, Public IPs, Load Balancers, Network Interfaces | Az.Accounts, Az.Resources, Az.Network | Reader |
+| `shares-enum` | Enumerate Azure File Shares (mimics nxc --shares) | Az.Accounts, Az.Resources, Az.Storage | Reader + Storage Account Key Operator or Storage File Data SMB Share Reader |
 
 **Multi-Subscription Support**: All ARM commands automatically enumerate all accessible subscriptions. Use `-SubscriptionId` to target a specific subscription, or `-ResourceGroup` to filter within subscriptions.
 
@@ -1055,6 +1147,28 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 # Security checks performed:
 # - Risky NSG inbound rules (HIGH risk) - open ports from Internet
 # - Unassociated Public IPs (MEDIUM risk) - misconfiguration indicator
+```
+
+**Scenario 5f: Azure File Shares Enumeration (Like nxc smb --shares)**
+```powershell
+# Enumerate Azure File Shares - the Azure equivalent of SMB share enumeration
+.\azx.ps1 shares-enum                        # All shares across all subscriptions
+.\azx.ps1 shares-enum -SharesFilter WRITE    # Only shares with WRITE access
+.\azx.ps1 shares-enum -SharesFilter READ,WRITE  # Shares with both READ and WRITE
+.\azx.ps1 shares-enum -SharesFilter READ     # Only shares with READ access
+.\azx.ps1 shares-enum -ResourceGroup Prod-RG # Filter by resource group
+.\azx.ps1 shares-enum -ExportPath shares.csv # Export to CSV
+
+# This command is the Azure equivalent of:
+# nxc smb 192.168.1.0/24 -u user -p 'PASSWORDHERE' --shares
+# nxc smb 192.168.1.0/24 -u user -p 'PASSWORDHERE' --shares READ,WRITE
+
+# What it does:
+# - Enumerates Azure File Shares across Storage Accounts
+# - Shows access permissions (READ, WRITE) like SMB share access
+# - Displays quota, access tier, and protocol (SMB/NFS)
+# - Identifies writable shares (potential data upload risk)
+# - Flags shares in publicly accessible storage accounts
 ```
 
 **Scenario 6: Service Principal Permission Discovery**

@@ -842,8 +842,10 @@ function Invoke-NetworkEnumeration {
     $totalNSGs = 0
     $totalPublicIPs = 0
     $totalLoadBalancers = 0
+    $totalNICs = 0
     $openNSGRules = 0
     $unassociatedPublicIPs = 0
+    $unattachedNICs = 0
     
     Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
     Write-ColorOutput -Message "[*] MULTI-SUBSCRIPTION NETWORK ENUMERATION" -Color "Cyan"
@@ -1080,21 +1082,172 @@ function Invoke-NetworkEnumeration {
             Write-ColorOutput -Message "[!] Error retrieving Load Balancers: $($_.Exception.Message)" -Color "Red"
         }
         
+        # ==================
+        # Network Interfaces (NICs)
+        # ==================
+        Write-ColorOutput -Message "`n[*] Retrieving Network Interfaces..." -Color "Yellow"
+        
+        try {
+            $nics = @()
+            if ($ResourceGroup) {
+                $nics = @(Get-AzNetworkInterface -ResourceGroupName $ResourceGroup -ErrorAction Stop)
+            } else {
+                $nics = @(Get-AzNetworkInterface -ErrorAction Stop)
+            }
+            Write-ColorOutput -Message "[+] Retrieved $($nics.Count) Network Interface(s)" -Color "Green"
+            $totalNICs += $nics.Count
+            
+            foreach ($nic in $nics) {
+                $nicName = $nic.Name
+                $nicRG = $nic.ResourceGroupName
+                $isAttached = $null -ne $nic.VirtualMachine
+                
+                if (-not $isAttached) {
+                    $unattachedNICs++
+                }
+                
+                # Get IP configurations
+                $privateIPs = @()
+                $publicIPs = @()
+                $hasPublicIP = $false
+                
+                foreach ($ipConfig in $nic.IpConfigurations) {
+                    $privateIP = $ipConfig.PrivateIpAddress
+                    if ($privateIP) {
+                        $privateIPs += $privateIP
+                    }
+                    
+                    # Check for associated public IP
+                    if ($ipConfig.PublicIpAddress) {
+                        $hasPublicIP = $true
+                        try {
+                            $pubIPResource = Get-AzPublicIpAddress -ResourceGroupName $nicRG -Name ($ipConfig.PublicIpAddress.Id -split '/')[-1] -ErrorAction SilentlyContinue
+                            if ($pubIPResource -and $pubIPResource.IpAddress) {
+                                $publicIPs += $pubIPResource.IpAddress
+                            }
+                        } catch {
+                            # Silently continue if we can't get the public IP details
+                        }
+                    }
+                }
+                
+                # Get NSG association
+                $nsgAssociated = $null -ne $nic.NetworkSecurityGroup
+                $nsgName = if ($nsgAssociated) { 
+                    ($nic.NetworkSecurityGroup.Id -split '/')[-1] 
+                } else { 
+                    "None" 
+                }
+                
+                # Get VM association
+                $vmName = if ($isAttached) { 
+                    ($nic.VirtualMachine.Id -split '/')[-1] 
+                } else { 
+                    "Not Attached" 
+                }
+                
+                # Determine risk level
+                $securityIssues = @()
+                $riskLevel = "INFO"
+                
+                if (-not $isAttached) {
+                    $securityIssues += "Unattached NIC (billable, potential misconfiguration)"
+                    $riskLevel = "MEDIUM"
+                }
+                
+                if ($hasPublicIP -and -not $nsgAssociated) {
+                    $securityIssues += "Public IP without NSG (HIGH RISK)"
+                    $riskLevel = "HIGH"
+                } elseif ($hasPublicIP) {
+                    $securityIssues += "Has Public IP (verify NSG rules)"
+                    if ($riskLevel -eq "INFO") {
+                        $riskLevel = "MEDIUM"
+                    }
+                }
+                
+                if (-not $nsgAssociated -and $isAttached) {
+                    $securityIssues += "No NSG associated (relies on subnet NSG)"
+                    if ($riskLevel -eq "INFO") {
+                        $riskLevel = "LOW"
+                    }
+                }
+                
+                # IP Forwarding enabled?
+                if ($nic.EnableIPForwarding) {
+                    $securityIssues += "IP Forwarding enabled (routing/firewall capability)"
+                    if ($riskLevel -eq "INFO") {
+                        $riskLevel = "MEDIUM"
+                    }
+                }
+                
+                # Accelerated Networking
+                $acceleratedNetworking = if ($nic.EnableAcceleratedNetworking) { "Enabled" } else { "Disabled" }
+                
+                $riskColor = switch ($riskLevel) {
+                    "HIGH" { "Red" }
+                    "MEDIUM" { "Yellow" }
+                    "LOW" { "Cyan" }
+                    default { "White" }
+                }
+                
+                Write-ColorOutput -Message "    [*] NIC: $nicName" -Color "White"
+                Write-ColorOutput -Message "        Resource Group: $nicRG" -Color "Gray"
+                Write-ColorOutput -Message "        Attached to VM: $vmName" -Color $(if ($isAttached) { "Green" } else { "Yellow" })
+                Write-ColorOutput -Message "        Private IP(s): $(if ($privateIPs.Count -gt 0) { $privateIPs -join ', ' } else { 'None' })" -Color "Cyan"
+                
+                if ($publicIPs.Count -gt 0) {
+                    Write-ColorOutput -Message "        Public IP(s): $($publicIPs -join ', ')" -Color "Yellow"
+                } else {
+                    Write-ColorOutput -Message "        Public IP(s): None" -Color "Gray"
+                }
+                
+                Write-ColorOutput -Message "        NSG: $nsgName" -Color $(if ($nsgAssociated) { "Green" } else { "Gray" })
+                Write-ColorOutput -Message "        IP Forwarding: $(if ($nic.EnableIPForwarding) { 'Enabled' } else { 'Disabled' })" -Color $(if ($nic.EnableIPForwarding) { "Yellow" } else { "Gray" })
+                Write-ColorOutput -Message "        Accelerated Networking: $acceleratedNetworking" -Color "Gray"
+                Write-ColorOutput -Message "        MAC Address: $(if ($nic.MacAddress) { $nic.MacAddress } else { 'Not Allocated' })" -Color "Gray"
+                Write-ColorOutput -Message "        Risk Level: $riskLevel" -Color $riskColor
+                
+                if ($securityIssues.Count -gt 0) {
+                    Write-ColorOutput -Message "        [!] SECURITY ISSUES:" -Color "Red"
+                    foreach ($issue in $securityIssues) {
+                        Write-ColorOutput -Message "            - $issue" -Color "Red"
+                    }
+                }
+                
+                # Build export object for NIC
+                $exportData += [PSCustomObject]@{
+                    Subscription = $subscription.Name
+                    SubscriptionId = $subscription.Id
+                    ResourceType = "NetworkInterface"
+                    Name = $nicName
+                    ResourceGroup = $nicRG
+                    Location = $nic.Location
+                    Details = "VM: $vmName | Private IPs: $($privateIPs -join ', ') | Public IPs: $(if ($publicIPs.Count -gt 0) { $publicIPs -join ', ' } else { 'None' }) | NSG: $nsgName | MAC: $(if ($nic.MacAddress) { $nic.MacAddress } else { 'N/A' })"
+                    RiskLevel = $riskLevel
+                    SecurityIssues = ($securityIssues -join "; ")
+                }
+            }
+        } catch {
+            Write-ColorOutput -Message "[!] Error retrieving Network Interfaces: $($_.Exception.Message)" -Color "Red"
+        }
+        
         Write-ColorOutput -Message "`n[*] Subscription enumeration complete`n" -Color "Green"
     }
     
     # Summary
-    Show-MultiSubscriptionSummary -SubscriptionsScanned $subscriptionsToScan.Count -TotalItems ($totalVNets + $totalNSGs + $totalPublicIPs + $totalLoadBalancers) -ItemType "Network Resources" -SubscriptionId $SubscriptionId
+    Show-MultiSubscriptionSummary -SubscriptionsScanned $subscriptionsToScan.Count -TotalItems ($totalVNets + $totalNSGs + $totalPublicIPs + $totalLoadBalancers + $totalNICs) -ItemType "Network Resources" -SubscriptionId $SubscriptionId
     
     Write-ColorOutput -Message "`n[*] RESOURCE BREAKDOWN:" -Color "Yellow"
     Write-ColorOutput -Message "    Virtual Networks: $totalVNets" -Color "Cyan"
     Write-ColorOutput -Message "    Network Security Groups: $totalNSGs" -Color "Cyan"
     Write-ColorOutput -Message "    Public IP Addresses: $totalPublicIPs" -Color "Cyan"
     Write-ColorOutput -Message "    Load Balancers: $totalLoadBalancers" -Color "Cyan"
+    Write-ColorOutput -Message "    Network Interfaces: $totalNICs" -Color "Cyan"
     
     Write-ColorOutput -Message "`n[*] SECURITY SUMMARY:" -Color "Yellow"
     Write-ColorOutput -Message "    NSGs with Risky Inbound Rules: $openNSGRules" -Color $(if ($openNSGRules -gt 0) { "Red" } else { "Green" })
     Write-ColorOutput -Message "    Unassociated Public IPs: $unassociatedPublicIPs" -Color $(if ($unassociatedPublicIPs -gt 0) { "Yellow" } else { "Green" })
+    Write-ColorOutput -Message "    Unattached Network Interfaces: $unattachedNICs" -Color $(if ($unattachedNICs -gt 0) { "Yellow" } else { "Green" })
     
     # Export if requested
     if ($ExportPath) {
@@ -1104,21 +1257,361 @@ function Invoke-NetworkEnumeration {
             "Network Security Groups" = $totalNSGs
             "Public IP Addresses" = $totalPublicIPs
             "Load Balancers" = $totalLoadBalancers
+            "Network Interfaces" = $totalNICs
             "Risky NSG Rules (HIGH RISK)" = $openNSGRules
             "Unassociated Public IPs" = $unassociatedPublicIPs
+            "Unattached NICs" = $unattachedNICs
         }
-        Export-EnumerationResults -Data $exportData -ExportPath $ExportPath -Title "Azure Network Resource Enumeration" -Statistics $stats -CommandName "network-enum" -Description "Enumeration of Azure Network resources including VNets, NSGs, Public IPs, and Load Balancers"
+        Export-EnumerationResults -Data $exportData -ExportPath $ExportPath -Title "Azure Network Resource Enumeration" -Statistics $stats -CommandName "network-enum" -Description "Enumeration of Azure Network resources including VNets, NSGs, Public IPs, Load Balancers, and Network Interfaces"
     }
     
     # Helpful tips
-    if ($openNSGRules -gt 0) {
+    if ($openNSGRules -gt 0 -or $unattachedNICs -gt 0) {
         Write-ColorOutput -Message "`n[*] SECURITY RECOMMENDATIONS:" -Color "Cyan"
-        Write-ColorOutput -Message "    - Review and restrict NSG rules allowing traffic from Any/Internet" -Color "Cyan"
-        Write-ColorOutput -Message "    - Use Just-In-Time VM Access for management ports (22, 3389)" -Color "Cyan"
-        Write-ColorOutput -Message "    - Consider using Azure Bastion instead of public IPs for VM access" -Color "Cyan"
-        Write-ColorOutput -Message "    - Implement network segmentation using NSGs and ASGs" -Color "Cyan"
+        if ($openNSGRules -gt 0) {
+            Write-ColorOutput -Message "    - Review and restrict NSG rules allowing traffic from Any/Internet" -Color "Cyan"
+            Write-ColorOutput -Message "    - Use Just-In-Time VM Access for management ports (22, 3389)" -Color "Cyan"
+            Write-ColorOutput -Message "    - Consider using Azure Bastion instead of public IPs for VM access" -Color "Cyan"
+            Write-ColorOutput -Message "    - Implement network segmentation using NSGs and ASGs" -Color "Cyan"
+        }
+        if ($unattachedNICs -gt 0) {
+            Write-ColorOutput -Message "    - Remove unattached network interfaces to reduce costs and attack surface" -Color "Cyan"
+            Write-ColorOutput -Message "    - Unattached NICs with public IPs are billable and may be misconfigured" -Color "Cyan"
+        }
     }
     
     return $exportData
 }
 
+
+# ============================================
+# AZURE FILE SHARES ENUMERATION (--shares equivalent)
+# ============================================
+
+<#
+.SYNOPSIS
+    Enumerate Azure File Shares across Storage Accounts.
+.DESCRIPTION
+    The Azure equivalent of NetExec's --shares command. Discovers File Shares
+    in Storage Accounts with access permission analysis. Shows which shares
+    are accessible, their quotas, and access tier.
+    
+    NetExec equivalent: nxc smb 192.168.1.0/24 -u user -p 'PASSWORDHERE' --shares
+    
+    In Azure, "shares" are Azure File Shares in Storage Accounts. This command
+    enumerates all file shares and their configurations, including:
+    - Share name and quota
+    - Access tier (Hot, Cool, Transaction Optimized)
+    - Enabled protocols (SMB, NFS)
+    - Access permissions (based on RBAC and storage account settings)
+    - Share snapshots
+    
+    Security relevance:
+    - File Shares may contain sensitive data
+    - Misconfigured shares can expose data to unauthorized users
+    - Public access settings on storage accounts affect share accessibility
+#>
+function Invoke-SharesEnumeration {
+    param(
+        [string]$ResourceGroup,
+        [string]$SubscriptionId,
+        [string]$ExportPath,
+        [ValidateSet("all", "READ", "WRITE", "READ,WRITE")]
+        [string]$SharesFilter = "all"
+    )
+    
+    Write-ColorOutput -Message "`n[*] AZX - Azure File Shares Enumeration" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Command: shares-enum (Azure equivalent of nxc smb --shares)" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Discovering Azure File Shares with access permissions`n" -Color "Cyan"
+    
+    # Initialize required modules
+    $requiredModules = @('Az.Accounts', 'Az.Resources', 'Az.Storage')
+    if (-not (Initialize-AzureRMModules -RequiredModules $requiredModules)) {
+        return
+    }
+    
+    # Connect to Azure
+    $azContext = Connect-AzureRM
+    if (-not $azContext) { return }
+    
+    # Get subscriptions to enumerate
+    $subscriptionsToScan = Get-SubscriptionsToEnumerate -SubscriptionId $SubscriptionId -CurrentContext $azContext
+    if (-not $subscriptionsToScan) { return }
+    
+    # Global counters
+    $exportData = @()
+    $totalStorageAccounts = 0
+    $totalFileShares = 0
+    $sharesWithReadAccess = 0
+    $sharesWithWriteAccess = 0
+    $sharesWithPublicAccess = 0
+    $smbShares = 0
+    $nfsShares = 0
+    
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] AZURE FILE SHARES ENUMERATION" -Color "Cyan"
+    Write-ColorOutput -Message "[*] (NetExec --shares equivalent)" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    # Display filter information
+    if ($SharesFilter -ne "all") {
+        Write-ColorOutput -Message "[*] Filter: Only showing shares with $SharesFilter access`n" -Color "Yellow"
+    }
+    
+    # Loop through each subscription
+    foreach ($subscription in $subscriptionsToScan) {
+        if (-not (Set-SubscriptionContext -Subscription $subscription)) {
+            continue
+        }
+        
+        Write-ColorOutput -Message "[*] Retrieving Storage Accounts..." -Color "Yellow"
+        
+        try {
+            $storageAccounts = @()
+            if ($ResourceGroup) {
+                $storageAccounts = @(Get-AzStorageAccount -ResourceGroupName $ResourceGroup -ErrorAction Stop)
+                Write-ColorOutput -Message "[+] Retrieved $($storageAccounts.Count) storage account(s) from resource group: $ResourceGroup" -Color "Green"
+            } else {
+                $storageAccounts = @(Get-AzStorageAccount -ErrorAction Stop)
+                Write-ColorOutput -Message "[+] Retrieved $($storageAccounts.Count) storage account(s) across all resource groups" -Color "Green"
+            }
+        } catch {
+            $errorMessage = $_.Exception.Message
+            if ($errorMessage -like "*AuthorizationFailed*") {
+                Write-ColorOutput -Message "[!] Authorization failed for subscription: $($subscription.Name)" -Color "Red"
+                Write-ColorOutput -Message "[*] Skipping to next subscription...`n" -Color "Yellow"
+            } else {
+                Write-ColorOutput -Message "[!] Error retrieving storage accounts: $errorMessage" -Color "Red"
+            }
+            continue
+        }
+        
+        if ($storageAccounts.Count -eq 0) {
+            Write-ColorOutput -Message "[*] No storage accounts found in this subscription`n" -Color "Yellow"
+            continue
+        }
+        
+        $totalStorageAccounts += $storageAccounts.Count
+        
+        foreach ($sa in $storageAccounts) {
+            $saName = $sa.StorageAccountName
+            $saRG = $sa.ResourceGroupName
+            
+            # Get storage account context for file share enumeration
+            try {
+                $saContext = $sa.Context
+                if (-not $saContext) {
+                    # Try to get context using keys (requires Storage Account Key Operator or higher)
+                    try {
+                        $saKeys = Get-AzStorageAccountKey -ResourceGroupName $saRG -Name $saName -ErrorAction Stop
+                        $saContext = New-AzStorageContext -StorageAccountName $saName -StorageAccountKey $saKeys[0].Value -ErrorAction Stop
+                    } catch {
+                        # Try with OAuth token instead
+                        try {
+                            $saContext = New-AzStorageContext -StorageAccountName $saName -UseConnectedAccount -ErrorAction Stop
+                        } catch {
+                            Write-ColorOutput -Message "[!] Cannot access storage account: $saName (no key/OAuth access)" -Color "Yellow"
+                            continue
+                        }
+                    }
+                }
+            } catch {
+                Write-ColorOutput -Message "[!] Failed to get context for storage account: $saName" -Color "Yellow"
+                continue
+            }
+            
+            # Get file shares
+            try {
+                $fileShares = @(Get-AzStorageShare -Context $saContext -ErrorAction Stop)
+            } catch {
+                $errorMessage = $_.Exception.Message
+                if ($errorMessage -like "*AuthorizationFailure*" -or $errorMessage -like "*AuthenticationFailed*") {
+                    Write-ColorOutput -Message "[!] Access denied to file shares in: $saName" -Color "Yellow"
+                } else {
+                    Write-ColorOutput -Message "[!] Error retrieving file shares from $saName : $errorMessage" -Color "Yellow"
+                }
+                continue
+            }
+            
+            if ($fileShares.Count -eq 0) {
+                continue
+            }
+            
+            # Storage account header (like netexec host header)
+            $networkDefaultAction = $sa.NetworkRuleSet.DefaultAction
+            $isPubliclyAccessible = ($networkDefaultAction -eq "Allow") -or ($sa.AllowBlobPublicAccess -eq $true)
+            
+            Write-ColorOutput -Message "`n[*] Storage Account: $saName" -Color "White"
+            Write-ColorOutput -Message "    Resource Group: $saRG | Location: $($sa.PrimaryLocation)" -Color "Gray"
+            Write-ColorOutput -Message "    Public Network Access: $(if ($isPubliclyAccessible) { 'Enabled' } else { 'Restricted' })" -Color $(if ($isPubliclyAccessible) { "Yellow" } else { "Green" })
+            Write-ColorOutput -Message "    File Shares Found: $($fileShares.Count)" -Color "Cyan"
+            
+            foreach ($share in $fileShares) {
+                $shareName = $share.Name
+                $shareQuota = $share.Quota
+                $shareLastModified = $share.LastModified
+                
+                # Get detailed share properties
+                try {
+                    $shareProperties = Get-AzStorageShare -Name $shareName -Context $saContext -ErrorAction Stop
+                    $shareAccessTier = $shareProperties.ShareProperties.AccessTier
+                    $shareEnabledProtocols = $shareProperties.ShareProperties.EnabledProtocols
+                    $shareRootSquash = $shareProperties.ShareProperties.RootSquash
+                } catch {
+                    $shareAccessTier = "Unknown"
+                    $shareEnabledProtocols = "SMB"
+                    $shareRootSquash = "N/A"
+                }
+                
+                # Determine access permissions based on RBAC and storage account settings
+                # In Azure, READ = Storage Blob Data Reader / Storage File Data SMB Share Reader
+                # WRITE = Storage Blob Data Contributor / Storage File Data SMB Share Contributor
+                # For simplicity, we check if the current user can access the share
+                $canRead = $true  # If we got here, we can at least list shares
+                $canWrite = $false
+                
+                # Test write access by checking if we can get share metadata
+                try {
+                    # If we can access share properties, we likely have at least read access
+                    # Write access would require Storage File Data SMB Share Contributor role
+                    $shareAcl = Get-AzStorageShareStoredAccessPolicy -ShareName $shareName -Context $saContext -ErrorAction SilentlyContinue
+                    if ($null -ne $shareAcl) {
+                        $canWrite = $true
+                    }
+                } catch {
+                    # Write access check failed - user likely has only read access
+                }
+                
+                # Track access types
+                if ($canRead) { $sharesWithReadAccess++ }
+                if ($canWrite) { $sharesWithWriteAccess++ }
+                if ($isPubliclyAccessible) { $sharesWithPublicAccess++ }
+                
+                # Track protocol types
+                if ($shareEnabledProtocols -eq "SMB") { $smbShares++ }
+                elseif ($shareEnabledProtocols -eq "NFS") { $nfsShares++ }
+                
+                # Build access string (netexec style)
+                $accessString = ""
+                if ($canRead -and $canWrite) {
+                    $accessString = "READ,WRITE"
+                } elseif ($canRead) {
+                    $accessString = "READ"
+                } elseif ($canWrite) {
+                    $accessString = "WRITE"
+                } else {
+                    $accessString = "NO ACCESS"
+                }
+                
+                # Apply filter if specified
+                if ($SharesFilter -ne "all") {
+                    if ($SharesFilter -eq "READ" -and -not ($canRead -and -not $canWrite)) { continue }
+                    if ($SharesFilter -eq "WRITE" -and -not $canWrite) { continue }
+                    if ($SharesFilter -eq "READ,WRITE" -and -not ($canRead -and $canWrite)) { continue }
+                }
+                
+                $totalFileShares++
+                
+                # Determine color based on access level
+                $accessColor = switch ($accessString) {
+                    "READ,WRITE" { "Red" }
+                    "WRITE" { "Yellow" }
+                    "READ" { "Green" }
+                    default { "DarkGray" }
+                }
+                
+                # NetExec-style output for shares
+                # Format: AZR    STORAGEACCOUNT   443    SHARENAME    [ACCESS]   Quota: XXX GB
+                $azrPrefix = "AZR"
+                $port = "443"
+                
+                Write-Host "        " -NoNewline
+                Write-Host $azrPrefix -ForegroundColor "Magenta" -NoNewline
+                Write-Host "         " -NoNewline
+                Write-Host $saName.PadRight(25) -NoNewline
+                Write-Host $port.PadRight(7) -NoNewline
+                Write-Host $shareName.PadRight(30) -NoNewline
+                Write-Host "[$accessString]".PadRight(15) -ForegroundColor $accessColor -NoNewline
+                Write-Host "Quota: $($shareQuota)GB | Tier: $shareAccessTier | Protocol: $shareEnabledProtocols" -ForegroundColor "Gray"
+                
+                # Build export object
+                $exportData += [PSCustomObject]@{
+                    Subscription = $subscription.Name
+                    SubscriptionId = $subscription.Id
+                    StorageAccountName = $saName
+                    ResourceGroup = $saRG
+                    Location = $sa.PrimaryLocation
+                    ShareName = $shareName
+                    Access = $accessString
+                    CanRead = $canRead
+                    CanWrite = $canWrite
+                    QuotaGB = $shareQuota
+                    AccessTier = $shareAccessTier
+                    EnabledProtocols = $shareEnabledProtocols
+                    RootSquash = $shareRootSquash
+                    LastModified = $shareLastModified
+                    PublicNetworkAccess = $isPubliclyAccessible
+                    StorageAccountKind = $sa.Kind
+                    StorageAccountSku = $sa.Sku.Name
+                }
+            }
+        }
+        
+        Write-ColorOutput -Message "`n[*] Subscription enumeration complete" -Color "Green"
+    }
+    
+    # Summary (netexec style)
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] SHARES ENUMERATION SUMMARY" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] Subscriptions Scanned: $($subscriptionsToScan.Count)" -Color "White"
+    Write-ColorOutput -Message "[*] Storage Accounts Scanned: $totalStorageAccounts" -Color "White"
+    Write-ColorOutput -Message "[*] Total File Shares Found: $totalFileShares" -Color "White"
+    
+    Write-ColorOutput -Message "`n[*] ACCESS BREAKDOWN:" -Color "Yellow"
+    Write-ColorOutput -Message "    Shares with READ access: $sharesWithReadAccess" -Color "Green"
+    Write-ColorOutput -Message "    Shares with WRITE access: $sharesWithWriteAccess" -Color $(if ($sharesWithWriteAccess -gt 0) { "Red" } else { "Green" })
+    Write-ColorOutput -Message "    Shares in publicly accessible storage: $sharesWithPublicAccess" -Color $(if ($sharesWithPublicAccess -gt 0) { "Red" } else { "Green" })
+    
+    Write-ColorOutput -Message "`n[*] PROTOCOL BREAKDOWN:" -Color "Yellow"
+    Write-ColorOutput -Message "    SMB Shares: $smbShares" -Color "Cyan"
+    Write-ColorOutput -Message "    NFS Shares: $nfsShares" -Color "Cyan"
+    
+    # Export if requested
+    if ($ExportPath) {
+        $stats = @{
+            "Subscriptions Scanned" = $subscriptionsToScan.Count
+            "Storage Accounts" = $totalStorageAccounts
+            "Total File Shares" = $totalFileShares
+            "READ Access" = $sharesWithReadAccess
+            "WRITE Access (HIGH RISK)" = $sharesWithWriteAccess
+            "Public Network Access" = $sharesWithPublicAccess
+        }
+        Export-EnumerationResults -Data $exportData -ExportPath $ExportPath -Title "Azure File Shares Enumeration" -Statistics $stats -CommandName "shares-enum" -Description "Azure equivalent of NetExec --shares command. Enumerates Azure File Shares with access permissions."
+    }
+    
+    # Security recommendations
+    if ($sharesWithWriteAccess -gt 0 -or $sharesWithPublicAccess -gt 0) {
+        Write-ColorOutput -Message "`n[*] SECURITY RECOMMENDATIONS:" -Color "Cyan"
+        if ($sharesWithWriteAccess -gt 0) {
+            Write-ColorOutput -Message "    - Review shares with WRITE access - potential data exfiltration risk" -Color "Cyan"
+            Write-ColorOutput -Message "    - Limit write permissions to minimum required users/groups" -Color "Cyan"
+        }
+        if ($sharesWithPublicAccess -gt 0) {
+            Write-ColorOutput -Message "    - Shares in publicly accessible storage may be at risk" -Color "Cyan"
+            Write-ColorOutput -Message "    - Consider enabling firewall rules to restrict access" -Color "Cyan"
+            Write-ColorOutput -Message "    - Use Private Endpoints for sensitive file shares" -Color "Cyan"
+        }
+        Write-ColorOutput -Message "    - Enable Azure Defender for Storage for threat detection" -Color "Cyan"
+    }
+    
+    # NetExec comparison help
+    Write-ColorOutput -Message "`n[*] NETEXEC COMPARISON:" -Color "Yellow"
+    Write-ColorOutput -Message "    NetExec: nxc smb 192.168.1.0/24 -u user -p 'PASS' --shares" -Color "Gray"
+    Write-ColorOutput -Message "    AZexec:  .\azx.ps1 shares-enum" -Color "Gray"
+    Write-ColorOutput -Message "`n    NetExec: nxc smb 192.168.1.0/24 -u user -p 'PASS' --shares READ,WRITE" -Color "Gray"
+    Write-ColorOutput -Message "    AZexec:  .\azx.ps1 shares-enum -SharesFilter READ,WRITE" -Color "Gray"
+    
+    return $exportData
+}

@@ -104,9 +104,16 @@
       * Identify access policy configurations and network exposure
       * Multi-subscription support with automatic enumeration
     - Azure Network Resource Enumeration (authentication required)
-      * Discover VNets, NSGs, Public IPs, and Load Balancers
+      * Discover VNets, NSGs, Public IPs, Load Balancers, and Network Interfaces
       * Identify risky NSG inbound rules (open ports from internet)
-      * Detect unassociated public IPs
+      * Detect unassociated public IPs and unattached NICs
+      * Enumerate network interfaces with IP configurations and security analysis
+      * Multi-subscription support with automatic enumeration
+    - Azure File Shares Enumeration (mimics nxc smb --shares)
+      * Enumerate Azure File Shares across Storage Accounts
+      * Display access permissions (READ, WRITE) similar to SMB share enumeration
+      * Filter by access level (READ, WRITE, READ,WRITE)
+      * Show quotas, access tiers, and enabled protocols (SMB/NFS)
       * Multi-subscription support with automatic enumeration
     - Netexec-style formatted output
     - Filter by OS, trust type, compliance status
@@ -134,7 +141,8 @@
     - vm-loggedon: Enumerate logged-on users on Azure VMs (similar to nxc smb --logged-on-users / Workstation Service wkssvc)
     - storage-enum: Enumerate Azure Storage Accounts with security configurations (multi-subscription support)
     - keyvault-enum: Enumerate Azure Key Vaults with security configurations (multi-subscription support)
-    - network-enum: Enumerate Azure Network resources (VNets, NSGs, Public IPs, Load Balancers) (multi-subscription support)
+    - network-enum: Enumerate Azure Network resources (VNets, NSGs, Public IPs, Load Balancers, Network Interfaces) (multi-subscription support)
+    - shares-enum: Enumerate Azure File Shares with access permissions (mimics nxc smb --shares) (multi-subscription support)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -207,6 +215,14 @@
     - all: Query all VMs regardless of power state (default)
     - running: Only query running VMs
     - stopped: Only show stopped VMs (will not query them)
+
+.PARAMETER SharesFilter
+    Optional filter for file share access level (for shares-enum command).
+    Similar to NetExec's --shares READ,WRITE filter.
+    - all: Show all file shares (default)
+    - READ: Only show shares with READ access
+    - WRITE: Only show shares with WRITE access
+    - READ,WRITE: Only show shares with both READ and WRITE access
 
 .EXAMPLE
     .\azx.ps1 hosts
@@ -466,20 +482,36 @@
 
 .EXAMPLE
     .\azx.ps1 network-enum
-    Enumerate Azure Network resources (VNets, NSGs, Public IPs, Load Balancers) across all subscriptions
+    Enumerate Azure Network resources (VNets, NSGs, Public IPs, Load Balancers, Network Interfaces) across all subscriptions
 
 .EXAMPLE
     .\azx.ps1 network-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
-    Enumerate Network resources in a specific subscription
+    Enumerate Network resources in a specific subscription (includes network interface enumeration)
 
 .EXAMPLE
     .\azx.ps1 network-enum -ResourceGroup Production-RG -ExportPath network.csv
-    Enumerate Network resources in a specific resource group and export to CSV
+    Enumerate Network resources in a specific resource group and export to CSV (includes NICs with IP configurations)
+
+.EXAMPLE
+    .\azx.ps1 shares-enum
+    Enumerate Azure File Shares across all accessible subscriptions (similar to nxc smb --shares)
+
+.EXAMPLE
+    .\azx.ps1 shares-enum -SharesFilter READ,WRITE
+    Enumerate only file shares with both READ and WRITE access (similar to nxc smb --shares READ,WRITE)
+
+.EXAMPLE
+    .\azx.ps1 shares-enum -SharesFilter WRITE -ExportPath writable-shares.csv
+    Enumerate file shares with WRITE access and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 shares-enum -SubscriptionId "12345678-1234-1234-1234-123456789012" -ExportPath shares.json
+    Enumerate File Shares in a specific subscription and export to JSON
 
 .NOTES
     Requires PowerShell 7+
     Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies' commands)
-    Requires Az PowerShell module (for ARM-based commands: 'vm-loggedon', 'storage-enum', 'keyvault-enum', 'network-enum')
+    Requires Az PowerShell module (for ARM-based commands: 'vm-loggedon', 'storage-enum', 'keyvault-enum', 'network-enum', 'shares-enum')
     Requires appropriate Azure/Entra permissions (for authenticated commands)
     The 'tenant' and 'users' commands do not require authentication
     The 'vuln-list' and 'guest-vuln-scan' commands perform unauthenticated checks first, then authenticated checks
@@ -495,6 +527,9 @@
     - 'storage-enum': Requires Az.Accounts, Az.Resources, Az.Storage (Reader role required, Storage Account Contributor for full details)
     - 'keyvault-enum': Requires Az.Accounts, Az.Resources, Az.KeyVault (Reader role required, Key Vault Reader for full details)
     - 'network-enum': Requires Az.Accounts, Az.Resources, Az.Network (Reader role required)
+    - 'shares-enum': Requires Az.Accounts, Az.Resources, Az.Storage (Reader + Storage Account Key Operator or Storage File Data SMB Share Reader)
+    
+    The 'shares-enum' command is the Azure equivalent of NetExec's --shares command for SMB share enumeration
     
     All ARM-based commands support multi-subscription enumeration:
     - By default, all accessible subscriptions are enumerated automatically
@@ -507,7 +542,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -558,7 +593,11 @@ param(
     
     [Parameter(Mandatory = $false)]
     [ValidateSet("all", "running", "stopped")]
-    [string]$VMFilter = "all"
+    [string]$VMFilter = "all",
+    
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("all", "READ", "WRITE", "READ,WRITE")]
+    [string]$SharesFilter = "all"
 )
 
 
@@ -628,7 +667,7 @@ if ($Command -eq "vuln-list" -or $Command -eq "guest-vuln-scan") {
 }
 
 # ARM-based commands use Azure Resource Manager (Az modules) with RBAC, not Graph API
-if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum")) {
+if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum")) {
     Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
     Write-ColorOutput -Message "[*] AZURE RESOURCE MANAGER - RBAC REQUIREMENTS" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
@@ -659,6 +698,12 @@ if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum
             Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Network Enumeration:`n" -Color "Yellow"
             Write-ColorOutput -Message "    Minimum: Reader role (to list network resources)" -Color "Gray"
             Write-ColorOutput -Message "    Recommended: Network Contributor (for full details)`n" -Color "Gray"
+        }
+        "shares-enum" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for File Shares Enumeration:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Minimum: Reader + Storage Account Key Operator Service Role" -Color "Gray"
+            Write-ColorOutput -Message "    Recommended: Storage File Data SMB Share Reader (for file shares)`n" -Color "Gray"
+            Write-ColorOutput -Message "    For write access testing: Storage File Data SMB Share Contributor`n" -Color "Gray"
         }
     }
     
@@ -724,12 +769,15 @@ switch ($Command) {
     "network-enum" {
         Invoke-NetworkEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -ExportPath $ExportPath
     }
+    "shares-enum" {
+        Invoke-SharesEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -SharesFilter $SharesFilter -ExportPath $ExportPath
+    }
     "help" {
         Show-Help
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, help" -Color "Yellow"
     }
 }
 
