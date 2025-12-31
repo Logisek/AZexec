@@ -1615,3 +1615,323 @@ function Invoke-SharesEnumeration {
     
     return $exportData
 }
+
+
+# ============================================
+# AZURE MANAGED DISKS ENUMERATION
+# ============================================
+
+<#
+.SYNOPSIS
+    Enumerate Azure Managed Disks across subscriptions.
+.DESCRIPTION
+    Discovers Azure Managed Disks with security-relevant information including
+    disk size, encryption status, attachment state, SKU, and network access settings.
+    This is the Azure equivalent of NetExec's --disks command for SMB enumeration.
+.PARAMETER ResourceGroup
+    Optional resource group filter.
+.PARAMETER SubscriptionId
+    Optional subscription ID to target specific subscription.
+.PARAMETER ExportPath
+    Optional path to export results (CSV, JSON, or HTML).
+#>
+function Invoke-DisksEnumeration {
+    param(
+        [string]$ResourceGroup,
+        [string]$SubscriptionId,
+        [string]$ExportPath
+    )
+    
+    Write-ColorOutput -Message "`n[*] AZX - Azure Managed Disks Enumeration" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Command: disks-enum" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Discovering managed disks with security configurations`n" -Color "Cyan"
+    
+    # Initialize required modules
+    $requiredModules = @('Az.Accounts', 'Az.Resources', 'Az.Compute')
+    if (-not (Initialize-AzureRMModules -RequiredModules $requiredModules)) {
+        return
+    }
+    
+    # Connect to Azure
+    $azContext = Connect-AzureRM
+    if (-not $azContext) { return }
+    
+    # Get subscriptions to enumerate
+    $subscriptionsToScan = Get-SubscriptionsToEnumerate -SubscriptionId $SubscriptionId -CurrentContext $azContext
+    if (-not $subscriptionsToScan) { return }
+    
+    # Global counters
+    $exportData = @()
+    $totalDisks = 0
+    $attachedDisks = 0
+    $unattachedDisks = 0
+    $encryptedDisks = 0
+    $unencryptedDisks = 0
+    $publicNetworkAccessDisks = 0
+    $osDiskCount = 0
+    $dataDiskCount = 0
+    $totalSizeGB = 0
+    
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] MULTI-SUBSCRIPTION DISK ENUMERATION" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    # Loop through each subscription
+    foreach ($subscription in $subscriptionsToScan) {
+        if (-not (Set-SubscriptionContext -Subscription $subscription)) {
+            continue
+        }
+        
+        Write-ColorOutput -Message "[*] Retrieving Managed Disks..." -Color "Yellow"
+        
+        try {
+            $disks = @()
+            if ($ResourceGroup) {
+                $disks = @(Get-AzDisk -ResourceGroupName $ResourceGroup -ErrorAction Stop)
+                Write-ColorOutput -Message "[+] Retrieved $($disks.Count) disk(s) from resource group: $ResourceGroup" -Color "Green"
+            } else {
+                $disks = @(Get-AzDisk -ErrorAction Stop)
+                Write-ColorOutput -Message "[+] Retrieved $($disks.Count) disk(s) across all resource groups" -Color "Green"
+            }
+        } catch {
+            $errorMessage = $_.Exception.Message
+            if ($errorMessage -like "*AuthorizationFailed*") {
+                Write-ColorOutput -Message "[!] Authorization failed for subscription: $($subscription.Name)" -Color "Red"
+                Write-ColorOutput -Message "[*] Skipping to next subscription...`n" -Color "Yellow"
+            } else {
+                Write-ColorOutput -Message "[!] Error retrieving disks: $errorMessage" -Color "Red"
+            }
+            continue
+        }
+        
+        if ($disks.Count -eq 0) {
+            Write-ColorOutput -Message "[*] No managed disks found in this subscription`n" -Color "Yellow"
+            continue
+        }
+        
+        $totalDisks += $disks.Count
+        
+        # Display disk information in netexec style
+        Write-ColorOutput -Message "`n[*] Managed Disks Found: $($disks.Count)" -Color "Cyan"
+        Write-ColorOutput -Message "[*] --------------------------------------------------`n" -Color "Cyan"
+        
+        # Header (netexec style)
+        Write-Host "    " -NoNewline
+        Write-Host "AZR".PadRight(8) -ForegroundColor "Magenta" -NoNewline
+        Write-Host "DISK NAME".PadRight(40) -ForegroundColor "White" -NoNewline
+        Write-Host "SIZE".PadRight(10) -ForegroundColor "White" -NoNewline
+        Write-Host "TYPE".PadRight(12) -ForegroundColor "White" -NoNewline
+        Write-Host "STATE".PadRight(15) -ForegroundColor "White" -NoNewline
+        Write-Host "ENCRYPTION" -ForegroundColor "White"
+        Write-Host "    " -NoNewline
+        Write-Host ("-" * 100) -ForegroundColor "DarkGray"
+        
+        foreach ($disk in $disks) {
+            $diskName = $disk.Name
+            $diskRG = $disk.ResourceGroupName
+            $diskLocation = $disk.Location
+            $diskSizeGB = $disk.DiskSizeGB
+            $diskSku = $disk.Sku.Name
+            $diskState = $disk.DiskState
+            $osType = $disk.OsType
+            $diskType = if ($osType) { "OS Disk" } else { "Data Disk" }
+            
+            # Encryption settings
+            $encryptionType = "None"
+            $isEncrypted = $false
+            if ($disk.Encryption) {
+                if ($disk.Encryption.Type -eq "EncryptionAtRestWithPlatformKey") {
+                    $encryptionType = "Platform-Managed"
+                    $isEncrypted = $true
+                } elseif ($disk.Encryption.Type -eq "EncryptionAtRestWithCustomerKey") {
+                    $encryptionType = "Customer-Managed"
+                    $isEncrypted = $true
+                } elseif ($disk.Encryption.Type -eq "EncryptionAtRestWithPlatformAndCustomerKeys") {
+                    $encryptionType = "Platform+Customer"
+                    $isEncrypted = $true
+                }
+            } elseif ($disk.EncryptionSettingsCollection) {
+                $encryptionType = "Legacy Encryption"
+                $isEncrypted = $true
+            }
+            
+            # Network access
+            $networkAccessPolicy = $disk.NetworkAccessPolicy
+            $publicNetworkAccess = $disk.PublicNetworkAccess
+            $hasPublicAccess = ($publicNetworkAccess -eq "Enabled") -or ($networkAccessPolicy -eq "AllowAll")
+            
+            # Attachment state
+            $isAttached = ($diskState -eq "Attached")
+            $attachedTo = if ($disk.ManagedBy) { 
+                $vmName = ($disk.ManagedBy -split '/')[-1]
+                $vmName
+            } else { 
+                "Unattached" 
+            }
+            
+            # Track statistics
+            if ($isAttached) { $attachedDisks++ } else { $unattachedDisks++ }
+            if ($isEncrypted) { $encryptedDisks++ } else { $unencryptedDisks++ }
+            if ($hasPublicAccess) { $publicNetworkAccessDisks++ }
+            if ($osType) { $osDiskCount++ } else { $dataDiskCount++ }
+            $totalSizeGB += $diskSizeGB
+            
+            # Determine risk level
+            $riskLevel = "LOW"
+            $securityIssues = @()
+            
+            if (-not $isEncrypted) {
+                $riskLevel = "HIGH"
+                $securityIssues += "No Encryption"
+            }
+            if ($hasPublicAccess) {
+                if ($riskLevel -ne "HIGH") { $riskLevel = "MEDIUM" }
+                $securityIssues += "Public Network Access"
+            }
+            if (-not $isAttached) {
+                $securityIssues += "Unattached"
+            }
+            
+            # Color coding
+            $stateColor = if ($isAttached) { "Green" } else { "Yellow" }
+            $encryptionColor = if ($isEncrypted) { "Green" } else { "Red" }
+            $riskColor = switch ($riskLevel) {
+                "HIGH" { "Red" }
+                "MEDIUM" { "Yellow" }
+                default { "Green" }
+            }
+            
+            # NetExec-style output
+            Write-Host "    " -NoNewline
+            Write-Host "AZR".PadRight(8) -ForegroundColor "Magenta" -NoNewline
+            Write-Host $diskName.Substring(0, [Math]::Min(38, $diskName.Length)).PadRight(40) -NoNewline
+            Write-Host "$($diskSizeGB)GB".PadRight(10) -NoNewline
+            Write-Host $diskType.PadRight(12) -NoNewline
+            Write-Host $diskState.PadRight(15) -ForegroundColor $stateColor -NoNewline
+            Write-Host $encryptionType -ForegroundColor $encryptionColor
+            
+            # Additional details
+            Write-Host "        " -NoNewline
+            Write-Host "RG: $diskRG | Location: $diskLocation | SKU: $diskSku" -ForegroundColor "DarkGray"
+            
+            if ($isAttached) {
+                Write-Host "        " -NoNewline
+                Write-Host "Attached to: $attachedTo" -ForegroundColor "Gray"
+            }
+            
+            if ($securityIssues.Count -gt 0) {
+                Write-Host "        " -NoNewline
+                Write-Host "[RISK: $riskLevel] " -ForegroundColor $riskColor -NoNewline
+                Write-Host "$($securityIssues -join ', ')" -ForegroundColor "Gray"
+            }
+            
+            if ($osType) {
+                Write-Host "        " -NoNewline
+                Write-Host "OS Type: $osType" -ForegroundColor "Cyan"
+            }
+            
+            Write-Host ""
+            
+            # Build export object
+            $exportData += [PSCustomObject]@{
+                Subscription = $subscription.Name
+                SubscriptionId = $subscription.Id
+                DiskName = $diskName
+                ResourceGroup = $diskRG
+                Location = $diskLocation
+                SizeGB = $diskSizeGB
+                DiskType = $diskType
+                OsType = $osType
+                DiskState = $diskState
+                IsAttached = $isAttached
+                AttachedTo = $attachedTo
+                SkuName = $diskSku
+                SkuTier = $disk.Sku.Tier
+                EncryptionType = $encryptionType
+                IsEncrypted = $isEncrypted
+                NetworkAccessPolicy = $networkAccessPolicy
+                PublicNetworkAccess = $publicNetworkAccess
+                HasPublicAccess = $hasPublicAccess
+                RiskLevel = $riskLevel
+                SecurityIssues = ($securityIssues -join '; ')
+                CreationTime = $disk.TimeCreated
+                DiskIOPSReadWrite = $disk.DiskIOPSReadWrite
+                DiskMBpsReadWrite = $disk.DiskMBpsReadWrite
+                Zones = ($disk.Zones -join ',')
+            }
+        }
+        
+        Write-ColorOutput -Message "[*] Subscription enumeration complete" -Color "Green"
+    }
+    
+    # Summary (netexec style)
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] DISKS ENUMERATION SUMMARY" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] Subscriptions Scanned: $($subscriptionsToScan.Count)" -Color "White"
+    Write-ColorOutput -Message "[*] Total Managed Disks Found: $totalDisks" -Color "White"
+    Write-ColorOutput -Message "[*] Total Storage Capacity: $totalSizeGB GB" -Color "White"
+    
+    Write-ColorOutput -Message "`n[*] DISK TYPE BREAKDOWN:" -Color "Yellow"
+    Write-ColorOutput -Message "    OS Disks: $osDiskCount" -Color "Cyan"
+    Write-ColorOutput -Message "    Data Disks: $dataDiskCount" -Color "Cyan"
+    
+    Write-ColorOutput -Message "`n[*] ATTACHMENT STATE:" -Color "Yellow"
+    Write-ColorOutput -Message "    Attached Disks: $attachedDisks" -Color "Green"
+    Write-ColorOutput -Message "    Unattached Disks: $unattachedDisks" -Color $(if ($unattachedDisks -gt 0) { "Yellow" } else { "Green" })
+    
+    Write-ColorOutput -Message "`n[*] ENCRYPTION STATUS:" -Color "Yellow"
+    Write-ColorOutput -Message "    Encrypted Disks: $encryptedDisks" -Color "Green"
+    Write-ColorOutput -Message "    Unencrypted Disks: $unencryptedDisks" -Color $(if ($unencryptedDisks -gt 0) { "Red" } else { "Green" })
+    
+    Write-ColorOutput -Message "`n[*] NETWORK ACCESS:" -Color "Yellow"
+    Write-ColorOutput -Message "    Public Network Access Enabled: $publicNetworkAccessDisks" -Color $(if ($publicNetworkAccessDisks -gt 0) { "Yellow" } else { "Green" })
+    
+    # Export if requested
+    if ($ExportPath) {
+        $stats = @{
+            "Subscriptions Scanned" = $subscriptionsToScan.Count
+            "Total Disks" = $totalDisks
+            "Total Storage (GB)" = $totalSizeGB
+            "OS Disks" = $osDiskCount
+            "Data Disks" = $dataDiskCount
+            "Attached Disks" = $attachedDisks
+            "Unattached Disks (MEDIUM RISK)" = $unattachedDisks
+            "Encrypted Disks" = $encryptedDisks
+            "Unencrypted Disks (HIGH RISK)" = $unencryptedDisks
+            "Public Network Access" = $publicNetworkAccessDisks
+        }
+        Export-EnumerationResults -Data $exportData -ExportPath $ExportPath -Title "Azure Managed Disks Enumeration" -Statistics $stats -CommandName "disks-enum" -Description "Azure equivalent of NetExec --disks command. Enumerates Azure Managed Disks with encryption and security configurations."
+    }
+    
+    # Security recommendations
+    if ($unencryptedDisks -gt 0 -or $unattachedDisks -gt 0 -or $publicNetworkAccessDisks -gt 0) {
+        Write-ColorOutput -Message "`n[*] SECURITY RECOMMENDATIONS:" -Color "Cyan"
+        if ($unencryptedDisks -gt 0) {
+            Write-ColorOutput -Message "    - Enable encryption for all unencrypted disks (HIGH PRIORITY)" -Color "Cyan"
+            Write-ColorOutput -Message "    - Use Azure Disk Encryption (ADE) or Server-Side Encryption (SSE)" -Color "Cyan"
+            Write-ColorOutput -Message "    - Consider using Customer-Managed Keys for sensitive data" -Color "Cyan"
+        }
+        if ($unattachedDisks -gt 0) {
+            Write-ColorOutput -Message "    - Review unattached disks - potential orphaned resources" -Color "Cyan"
+            Write-ColorOutput -Message "    - Delete unused disks to reduce costs and attack surface" -Color "Cyan"
+            Write-ColorOutput -Message "    - Unattached disks may contain sensitive data from deleted VMs" -Color "Cyan"
+        }
+        if ($publicNetworkAccessDisks -gt 0) {
+            Write-ColorOutput -Message "    - Restrict public network access to disks" -Color "Cyan"
+            Write-ColorOutput -Message "    - Use Private Endpoints for disk access" -Color "Cyan"
+        }
+        Write-ColorOutput -Message "    - Enable Azure Defender for Storage for threat detection" -Color "Cyan"
+        Write-ColorOutput -Message "    - Implement disk backup and snapshot policies" -Color "Cyan"
+    }
+    
+    # NetExec comparison help
+    Write-ColorOutput -Message "`n[*] NETEXEC COMPARISON:" -Color "Yellow"
+    Write-ColorOutput -Message "    NetExec: nxc smb 192.168.1.0/24 -u UserNAme -p 'PASSWORDHERE' --disks" -Color "Gray"
+    Write-ColorOutput -Message "    AZexec:  .\azx.ps1 disks-enum" -Color "Gray"
+    Write-ColorOutput -Message "`n    NetExec enumerates local/network disks on remote SMB hosts" -Color "Gray"
+    Write-ColorOutput -Message "    AZexec enumerates Azure Managed Disks across subscriptions" -Color "Gray"
+    
+    return $exportData
+}

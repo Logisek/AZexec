@@ -23,6 +23,7 @@ $commands = @(
     "keyvault-enum",
     "network-enum",
     "shares-enum",
+    "disks-enum",
     "help"
 )
 

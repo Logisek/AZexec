@@ -143,6 +143,7 @@
     - keyvault-enum: Enumerate Azure Key Vaults with security configurations (multi-subscription support)
     - network-enum: Enumerate Azure Network resources (VNets, NSGs, Public IPs, Load Balancers, Network Interfaces) (multi-subscription support)
     - shares-enum: Enumerate Azure File Shares with access permissions (mimics nxc smb --shares) (multi-subscription support)
+    - disks-enum: Enumerate Azure Managed Disks with encryption and security configurations (mimics nxc smb --disks) (multi-subscription support)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -508,6 +509,22 @@
     .\azx.ps1 shares-enum -SubscriptionId "12345678-1234-1234-1234-123456789012" -ExportPath shares.json
     Enumerate File Shares in a specific subscription and export to JSON
 
+.EXAMPLE
+    .\azx.ps1 disks-enum
+    Enumerate Azure Managed Disks across all accessible subscriptions (similar to nxc smb --disks)
+
+.EXAMPLE
+    .\azx.ps1 disks-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+    Enumerate Managed Disks in a specific subscription
+
+.EXAMPLE
+    .\azx.ps1 disks-enum -ResourceGroup Production-RG -ExportPath disks.csv
+    Enumerate Managed Disks in a specific resource group and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 disks-enum -ExportPath disks.json
+    Enumerate Managed Disks across all subscriptions and export to JSON with full details
+
 .NOTES
     Requires PowerShell 7+
     Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies' commands)
@@ -528,8 +545,10 @@
     - 'keyvault-enum': Requires Az.Accounts, Az.Resources, Az.KeyVault (Reader role required, Key Vault Reader for full details)
     - 'network-enum': Requires Az.Accounts, Az.Resources, Az.Network (Reader role required)
     - 'shares-enum': Requires Az.Accounts, Az.Resources, Az.Storage (Reader + Storage Account Key Operator or Storage File Data SMB Share Reader)
+    - 'disks-enum': Requires Az.Accounts, Az.Resources, Az.Compute (Reader role required)
     
     The 'shares-enum' command is the Azure equivalent of NetExec's --shares command for SMB share enumeration
+    The 'disks-enum' command is the Azure equivalent of NetExec's --disks command for disk enumeration
     
     All ARM-based commands support multi-subscription enumeration:
     - By default, all accessible subscriptions are enumerated automatically
@@ -542,7 +561,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -667,7 +686,7 @@ if ($Command -eq "vuln-list" -or $Command -eq "guest-vuln-scan") {
 }
 
 # ARM-based commands use Azure Resource Manager (Az modules) with RBAC, not Graph API
-if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum")) {
+if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum")) {
     Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
     Write-ColorOutput -Message "[*] AZURE RESOURCE MANAGER - RBAC REQUIREMENTS" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
@@ -704,6 +723,11 @@ if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum
             Write-ColorOutput -Message "    Minimum: Reader + Storage Account Key Operator Service Role" -Color "Gray"
             Write-ColorOutput -Message "    Recommended: Storage File Data SMB Share Reader (for file shares)`n" -Color "Gray"
             Write-ColorOutput -Message "    For write access testing: Storage File Data SMB Share Contributor`n" -Color "Gray"
+        }
+        "disks-enum" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Managed Disks Enumeration:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Minimum: Reader role (to list managed disks)" -Color "Gray"
+            Write-ColorOutput -Message "    Recommended: Disk Reader or Contributor (for full details)`n" -Color "Gray"
         }
     }
     
@@ -772,12 +796,15 @@ switch ($Command) {
     "shares-enum" {
         Invoke-SharesEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -SharesFilter $SharesFilter -ExportPath $ExportPath
     }
+    "disks-enum" {
+        Invoke-DisksEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -ExportPath $ExportPath
+    }
     "help" {
         Show-Help
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, help" -Color "Yellow"
     }
 }
 

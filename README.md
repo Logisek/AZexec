@@ -59,6 +59,7 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb --enum-network-interfaces` | `.\azx.ps1 network-enum` | ✅ Required | **Enumerate Azure Network resources** (VNets, NSGs, Public IPs, Load Balancers, NICs) |
 | *N/A* | `.\azx.ps1 help` | ❌ None | **Display available commands and usage** |
 | `nxc smb --shares` | `.\azx.ps1 shares-enum` | ✅ Required | **Enumerate Azure File Shares** (access permissions) |
+| `nxc smb --disks` | `.\azx.ps1 disks-enum` | ✅ Required | **Enumerate Azure Managed Disks** (encryption, attachment state) |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -362,6 +363,54 @@ The Azure equivalent of NetExec's `--shares` command. Enumerate Azure File Share
 - Shares in publicly accessible storage accounts are flagged
 - Protocol breakdown (SMB vs NFS) for attack planning
 - Recommendations for securing file shares
+
+### Azure Managed Disks Enumeration: `disks-enum`
+
+The Azure equivalent of NetExec's `--disks` command. Enumerate Azure Managed Disks with encryption and security analysis:
+
+```powershell
+# Enumerate managed disks across ALL accessible subscriptions (like nxc smb --disks)
+.\azx.ps1 disks-enum
+
+# Target specific subscription or resource group
+.\azx.ps1 disks-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+.\azx.ps1 disks-enum -ResourceGroup Production-RG -ExportPath disks.csv
+
+# Export to JSON for detailed analysis
+.\azx.ps1 disks-enum -ExportPath disks.json
+```
+
+**Information Enumerated**:
+| Information | Description | Security Value |
+|-------------|-------------|----------------|
+| **Disk Name** | Azure Managed Disk name | Identify storage resources |
+| **Size** | Disk capacity in GB | Assess data volume |
+| **Disk Type** | OS Disk or Data Disk | Understand disk purpose |
+| **State** | Attached or Unattached | Identify orphaned resources |
+| **Encryption** | Platform/Customer/None | Encryption status |
+| **SKU** | Premium_LRS, Standard_LRS, etc. | Performance tier |
+| **Attached To** | VM name if attached | Ownership tracking |
+| **Network Access** | Public or Private | Exposure risk |
+| **OS Type** | Windows, Linux (for OS disks) | Operating system |
+
+**NetExec Comparison**:
+| NetExec Command | AZexec Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `nxc smb 192.168.1.0/24 -u UserNAme -p 'PASSWORDHERE' --disks` | `.\azx.ps1 disks-enum` | Enumerate all disks |
+| NetExec enumerates local/network disks on remote hosts | AZexec enumerates Azure Managed Disks | Cloud vs On-Prem |
+
+**Security Analysis**:
+- Unencrypted disks are highlighted in RED (HIGH RISK - potential data exposure)
+- Unattached disks are flagged in YELLOW (orphaned resources, potential sensitive data)
+- Public network access is identified (exposure risk)
+- Disk type breakdown (OS vs Data disks)
+- Total storage capacity tracking
+- Recommendations for encryption and cleanup
+
+**Risk Levels**:
+- **HIGH**: Unencrypted disks (data at rest not protected)
+- **MEDIUM**: Public network access enabled, unattached disks
+- **LOW**: Encrypted, attached disks with private access
 
 ### Multi-Subscription Pattern
 
@@ -883,6 +932,7 @@ Each command in `azx.ps1` is implemented in a dedicated function file:
 | `keyvault-enum` | `AzureRM.ps1` | `Invoke-KeyVaultEnumeration` |
 | `network-enum` | `AzureRM.ps1` | `Invoke-NetworkEnumeration` |
 | `shares-enum` | `AzureRM.ps1` | `Invoke-SharesEnumeration` |
+| `disks-enum` | `AzureRM.ps1` | `Invoke-DisksEnumeration` |
 | `help` | `UI.ps1` | `Show-Help` |
 
 This modular design makes the codebase easier to maintain, test, and extend with new commands.
@@ -898,6 +948,7 @@ The following commands use Azure Resource Manager API (Az PowerShell modules) in
 | `keyvault-enum` | Enumerate Key Vaults with security analysis | Az.Accounts, Az.Resources, Az.KeyVault | Reader (Key Vault Reader for full details) |
 | `network-enum` | Enumerate VNets, NSGs, Public IPs, Load Balancers, Network Interfaces | Az.Accounts, Az.Resources, Az.Network | Reader |
 | `shares-enum` | Enumerate Azure File Shares (mimics nxc --shares) | Az.Accounts, Az.Resources, Az.Storage | Reader + Storage Account Key Operator or Storage File Data SMB Share Reader |
+| `disks-enum` | Enumerate Azure Managed Disks (mimics nxc --disks) | Az.Accounts, Az.Resources, Az.Compute | Reader (Disk Reader or Contributor for full details) |
 
 **Multi-Subscription Support**: All ARM commands automatically enumerate all accessible subscriptions. Use `-SubscriptionId` to target a specific subscription, or `-ResourceGroup` to filter within subscriptions.
 
