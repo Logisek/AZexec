@@ -493,6 +493,140 @@ $PSVersionTable.PSVersion
 .\azx.ps1 hosts
 ```
 
+## 🗂️ Project Structure
+
+AZexec follows a modular architecture where functionality is organized into separate files:
+
+```
+AZexec/
+├── azx.ps1                          # Main script - command routing and initialization
+├── Functions/
+│   ├── Core.ps1                     # Core utilities and Graph module management
+│   ├── UI.ps1                       # Banner and help display functions
+│   ├── Devices.ps1                  # hosts command - device enumeration
+│   ├── Users.ps1                    # users & user-profiles commands
+│   ├── Groups.ps1                   # groups command - group enumeration
+│   ├── Applications.ps1             # apps command - application enumeration
+│   ├── ServicePrincipals.ps1        # sp-discovery command - service principal discovery
+│   ├── Roles.ps1                    # roles command - role assignment enumeration
+│   ├── Policies.ps1                 # pass-pol & ca-policies commands
+│   ├── Guest.ps1                    # guest command - guest authentication testing
+│   ├── Sessions.ps1                 # sessions & vm-loggedon commands
+│   ├── Tenant.ps1                   # tenant command - tenant discovery
+│   └── Vulnerabilities.ps1          # vuln-list & guest-vuln-scan commands
+├── test-commands.ps1                # Automated test suite for all commands
+├── README.md                        # This file
+└── LICENSE                          # GPL v3 license
+
+```
+
+### Command to Function Mapping
+
+Each command in `azx.ps1` is implemented in a dedicated function file:
+
+| Command | Function File | Function Name |
+|---------|---------------|---------------|
+| `hosts` | `Devices.ps1` | `Invoke-HostEnumeration` |
+| `tenant` | `Tenant.ps1` | `Invoke-TenantDiscovery` |
+| `users` | `Users.ps1` | `Invoke-UserEnumeration` |
+| `user-profiles` | `Users.ps1` | `Invoke-UserProfileEnumeration` |
+| `groups` | `Groups.ps1` | `Invoke-GroupEnumeration` |
+| `pass-pol` | `Policies.ps1` | `Invoke-PasswordPolicyEnumeration` |
+| `guest` | `Guest.ps1` | `Invoke-GuestEnumeration` |
+| `vuln-list` | `Vulnerabilities.ps1` | `Invoke-VulnListEnumeration` |
+| `sessions` | `Sessions.ps1` | `Invoke-SessionEnumeration` |
+| `guest-vuln-scan` | `Vulnerabilities.ps1` | `Invoke-GuestVulnScanEnumeration` |
+| `apps` | `Applications.ps1` | `Invoke-ApplicationEnumeration` |
+| `sp-discovery` | `ServicePrincipals.ps1` | `Invoke-ServicePrincipalDiscovery` |
+| `roles` | `Roles.ps1` | `Invoke-RoleAssignmentEnumeration` |
+| `ca-policies` | `Policies.ps1` | `Invoke-ConditionalAccessPolicyReview` |
+| `vm-loggedon` | `Sessions.ps1` | `Invoke-VMLoggedOnUsersEnumeration` |
+| `help` | `UI.ps1` | `Show-Help` |
+
+This modular design makes the codebase easier to maintain, test, and extend with new commands.
+
+## 🧪 Testing
+
+AZexec includes an automated test suite to verify all commands execute without parameter errors.
+
+### Running the Test Suite
+
+```powershell
+# Run automated tests for all commands
+.\test-commands.ps1
+```
+
+The test script will:
+- Execute each command with no parameters
+- Verify the command is recognized and executes properly
+- Report execution time for each command
+- Identify commands that require authentication (expected to timeout waiting for auth)
+- Display a summary with pass/fail status
+
+### Test Output Example
+
+```
+========================================
+  AZexec Command Test Suite
+  Testing 16 commands
+========================================
+
+[*] Testing command: hosts ... PASS (Auth Required)
+[*] Testing command: tenant ... PASS
+[*] Testing command: users ... PASS
+[*] Testing command: user-profiles ... PASS (Auth Required)
+[*] Testing command: groups ... PASS (Auth Required)
+[*] Testing command: pass-pol ... PASS (Auth Required)
+[*] Testing command: guest ... PASS
+[*] Testing command: vuln-list ... PASS
+[*] Testing command: sessions ... PASS (Auth Required)
+[*] Testing command: guest-vuln-scan ... PASS
+[*] Testing command: apps ... PASS (Auth Required)
+[*] Testing command: sp-discovery ... PASS (Auth Required)
+[*] Testing command: roles ... PASS (Auth Required)
+[*] Testing command: ca-policies ... PASS (Auth Required)
+[*] Testing command: vm-loggedon ... PASS (Auth Required)
+[*] Testing command: help ... PASS
+
+========================================
+  TEST SUMMARY
+========================================
+
+Command         Status      Duration
+-------         ------      --------
+hosts           PASS        3.54s
+tenant          PASS        2.06s
+users           PASS        0.44s
+user-profiles   PASS        3.41s
+groups          PASS        4.59s
+pass-pol        PASS        6.76s
+guest           PASS        2.21s
+vuln-list       PASS        15.81s
+sessions        PASS        5.00s
+guest-vuln-scan PASS        9.00s
+apps            PASS        6.65s
+sp-discovery    PASS (Auth) 30.21s
+roles           PASS        20.24s
+ca-policies     PASS        5.20s
+vm-loggedon     PASS (Auth) 54.46s
+help            PASS        0.49s
+
+Total: 16 | Passed: 16 | Failed: 0
+
+All commands executed successfully!
+```
+
+### What the Tests Verify
+
+- ✅ All commands are properly registered in the ValidateSet
+- ✅ Command routing works correctly in the main script
+- ✅ Function files are loaded successfully
+- ✅ Commands execute without parameter errors
+- ✅ Authentication prompts appear for commands requiring auth
+- ✅ Help system displays available commands
+
+**Note**: The test suite verifies command structure and execution, not functional correctness. It ensures the tool doesn't have breaking changes after structural modifications.
+
 ## 📖 Usage
 
 ### Quick Reference: Attack Scenarios
