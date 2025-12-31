@@ -327,10 +327,105 @@ function Invoke-VMLoggedOnUsersEnumeration {
         [string]$ExportPath
     )
     
-    Write-ColorOutput -Message "`n[*] AZX - Azure VM Logged-On Users Enumeration" -Color "Yellow"
-    Write-ColorOutput -Message "[*] Command: VM-LoggedOn (Similar to: nxc smb --logged-on-users)" -Color "Yellow"
-    Write-ColorOutput -Message "[*] Azure equivalent of Workstation Service (wkssvc) enumeration" -Color "Cyan"
-    Write-ColorOutput -Message "[*] Uses Azure VM Run Command instead of RPC/SMB`n" -Color "Cyan"
+    Write-ColorOutput -Message "`n[*] AZX - Logged-On Users Enumeration" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Command: vm-loggedon (Similar to: nxc smb --logged-on-users)" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Azure equivalent of Workstation Service (wkssvc) enumeration`n" -Color "Cyan"
+    
+    # ============================================
+    # SECTION 1: INTUNE-MANAGED DEVICES (Graph API)
+    # ============================================
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] SECTION 1: INTUNE-MANAGED DEVICES" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    $intuneDevicesFound = $false
+    $intuneDevicesCount = 0
+    $intuneUsersCount = 0
+    $intuneExportData = @()
+    
+    try {
+        # Check if Microsoft.Graph module is available
+        if (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication) {
+            Import-Module Microsoft.Graph.Authentication -ErrorAction SilentlyContinue
+            
+            # Try to connect to Graph with Intune permissions
+            Write-ColorOutput -Message "[*] Connecting to Microsoft Graph for Intune device data..." -Color "Yellow"
+            Connect-MgGraph -Scopes "DeviceManagementManagedDevices.Read.All" -NoWelcome -ErrorAction Stop
+            
+            $context = Get-MgContext
+            if ($context) {
+                Write-ColorOutput -Message "[+] Connected to Graph as: $($context.Account)" -Color "Green"
+                
+                # Query Intune for Windows devices with logged-on user info
+                # Note: usersLoggedOn requires beta API, so we use v1.0 with available properties
+                $uri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?`$filter=operatingSystem eq 'Windows'&`$select=id,deviceName,azureADDeviceId,userPrincipalName,lastSyncDateTime,userDisplayName"
+                $intuneDevices = Invoke-MgGraphRequest -Uri $uri -Method GET -ErrorAction Stop
+                
+                if ($intuneDevices.value -and $intuneDevices.value.Count -gt 0) {
+                    $intuneDevicesFound = $true
+                    $intuneDevicesCount = $intuneDevices.value.Count
+                    Write-ColorOutput -Message "[+] Found $intuneDevicesCount Windows devices in Intune`n" -Color "Green"
+                    
+                    foreach ($device in $intuneDevices.value) {
+                        $deviceName = $device.deviceName
+                        $primaryUser = $device.userPrincipalName
+                        $userDisplayName = $device.userDisplayName
+                        $lastSync = $device.lastSyncDateTime
+                        
+                        # Determine session info from primary user
+                        $sessionInfo = if ($primaryUser) {
+                            "Primary User: $primaryUser"
+                        } else {
+                            "No user assigned"
+                        }
+                        
+                        $color = if ($primaryUser) { "Green" } else { "Yellow" }
+                        
+                        # NetExec-style output
+                        Write-Host "AZR".PadRight(12) -ForegroundColor "Cyan" -NoNewline
+                        Write-Host $device.azureADDeviceId.Substring(0, [Math]::Min(14, $device.azureADDeviceId.Length)).PadRight(17) -NoNewline
+                        Write-Host "443".PadRight(7) -NoNewline
+                        Write-Host $deviceName.PadRight(30) -NoNewline
+                        Write-Host "[*] " -ForegroundColor $color -NoNewline
+                        Write-Host $sessionInfo -ForegroundColor $color
+                        
+                        if ($primaryUser) { $intuneUsersCount++ }
+                        
+                        # Collect for export
+                        $intuneExportData += [PSCustomObject]@{
+                            Source = "Intune"
+                            DeviceName = $deviceName
+                            AzureADDeviceId = $device.azureADDeviceId
+                            PrimaryUser = $primaryUser
+                            UserDisplayName = $userDisplayName
+                            LastSyncDateTime = $lastSync
+                            SessionType = "MDM-Managed"
+                        }
+                    }
+                    
+                    # Summary for Intune devices
+                    Write-ColorOutput -Message "`n[*] Intune Device Summary:" -Color "Cyan"
+                    Write-ColorOutput -Message "    Total Windows Devices: $intuneDevicesCount" -Color "White"
+                    Write-ColorOutput -Message "    Devices with Primary User: $intuneUsersCount" -Color "Green"
+                } else {
+                    Write-ColorOutput -Message "[*] No Windows devices found in Intune" -Color "Yellow"
+                }
+            }
+        } else {
+            Write-ColorOutput -Message "[*] Microsoft.Graph module not available - skipping Intune enumeration" -Color "Yellow"
+            Write-ColorOutput -Message "[*] Install with: Install-Module Microsoft.Graph -Scope CurrentUser" -Color "Gray"
+        }
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to query Intune devices: $($_.Exception.Message)" -Color "Yellow"
+        Write-ColorOutput -Message "[*] This may require DeviceManagementManagedDevices.Read.All permission with admin consent" -Color "Gray"
+    }
+    
+    # ============================================
+    # SECTION 2: AZURE VMs (ARM API / Run Command)
+    # ============================================
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] SECTION 2: AZURE VMs (via Run Command)" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
     
     # Use shared helper functions from AzureRM.ps1
     $requiredModules = @('Az.Accounts', 'Az.Compute', 'Az.Resources')
@@ -611,43 +706,71 @@ fi
         Write-ColorOutput -Message "[*] Subscription enumeration complete`n" -Color "Green"
     } # End subscription loop
     
-    # Summary across all subscriptions
+    # Summary across all sources
     Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
-    Write-ColorOutput -Message "[*] MULTI-SUBSCRIPTION ENUMERATION SUMMARY" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ENUMERATION COMPLETE" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
     
-    Write-ColorOutput -Message "[*] Subscriptions Scanned: $($subscriptionsToScan.Count)" -Color "White"
-    Write-ColorOutput -Message "[*] Total VMs Found: $totalVMsFound" -Color "White"
-    Write-ColorOutput -Message "[*] VMs Queried (after filters): $totalVMsQueried" -Color "White"
-    Write-ColorOutput -Message "[*] Successful Queries: $successfulQueries" -Color "Green"
-    Write-ColorOutput -Message "[*] Failed Queries: $failedQueries" -Color "Red"
-    Write-ColorOutput -Message "[*] Total Logged-On Users Found: $totalLoggedOnUsers" -Color "Cyan"
+    # Intune summary
+    if ($intuneDevicesFound) {
+        Write-ColorOutput -Message "[*] INTUNE-MANAGED DEVICES:" -Color "Yellow"
+        Write-ColorOutput -Message "    Total Windows Devices: $intuneDevicesCount" -Color "White"
+        Write-ColorOutput -Message "    Devices with Primary User: $intuneUsersCount" -Color "Green"
+        Write-ColorOutput -Message "" -Color "White"
+    }
+    
+    # Azure VM summary
+    Write-ColorOutput -Message "[*] AZURE VMs:" -Color "Yellow"
+    Write-ColorOutput -Message "    Subscriptions Scanned: $($subscriptionsToScan.Count)" -Color "White"
+    Write-ColorOutput -Message "    Total VMs Found: $totalVMsFound" -Color "White"
+    Write-ColorOutput -Message "    VMs Queried (after filters): $totalVMsQueried" -Color "White"
+    Write-ColorOutput -Message "    Successful Queries: $successfulQueries" -Color "Green"
+    Write-ColorOutput -Message "    Failed Queries: $failedQueries" -Color $(if ($failedQueries -gt 0) { "Red" } else { "Green" })
+    Write-ColorOutput -Message "    Total Logged-On Users Found: $totalLoggedOnUsers" -Color "Cyan"
+    
+    # Combined total
+    $totalDevices = $intuneDevicesCount + $totalVMsFound
+    $totalUsers = $intuneUsersCount + $totalLoggedOnUsers
+    Write-ColorOutput -Message "`n[*] COMBINED TOTALS:" -Color "Yellow"
+    Write-ColorOutput -Message "    Total Devices Enumerated: $totalDevices" -Color "Cyan"
+    Write-ColorOutput -Message "    Total Users/Sessions Found: $totalUsers" -Color "Cyan"
+    
+    # Combine export data
+    $allExportData = @()
+    if ($intuneExportData.Count -gt 0) {
+        $allExportData += $intuneExportData
+    }
+    if ($exportData.Count -gt 0) {
+        $allExportData += $exportData
+    }
     
     # Export if requested
-    if ($ExportPath -and $exportData.Count -gt 0) {
+    if ($ExportPath -and $allExportData.Count -gt 0) {
         try {
             $extension = [System.IO.Path]::GetExtension($ExportPath).ToLower()
             
             switch ($extension) {
                 ".csv" {
-                    $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -ErrorAction Stop
+                    $allExportData | Export-Csv -Path $ExportPath -NoTypeInformation -ErrorAction Stop
                     Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
                 }
                 ".json" {
-                    $exportData | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -ErrorAction Stop
+                    $allExportData | ConvertTo-Json -Depth 10 | Out-File -FilePath $ExportPath -ErrorAction Stop
                     Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
                 }
                 ".html" {
                     $stats = @{
+                        "Intune Devices" = $intuneDevicesCount
+                        "Intune Users" = $intuneUsersCount
                         "Subscriptions Scanned" = $subscriptionsToScan.Count
                         "Total VMs Found" = $totalVMsFound
                         "VMs Queried" = $totalVMsQueried
                         "Successful Queries" = $successfulQueries
                         "Failed Queries" = $failedQueries
-                        "Total Logged-On Users" = $totalLoggedOnUsers
+                        "VM Logged-On Users" = $totalLoggedOnUsers
                     }
                     
-                    Export-HtmlReport -Data $exportData -OutputPath $ExportPath -Title "Azure VM Logged-On Users" -Statistics $stats -CommandName "vm-loggedon" -Description "Enumeration of logged-on users on Azure VMs (equivalent to Remote Registry Service)"
+                    Export-HtmlReport -Data $allExportData -OutputPath $ExportPath -Title "Logged-On Users (Intune + Azure VMs)" -Statistics $stats -CommandName "vm-loggedon" -Description "Enumeration of logged-on users on Intune devices and Azure VMs (equivalent to Workstation Service)"
                     Write-ColorOutput -Message "`n[+] HTML report exported to: $ExportPath" -Color "Green"
                 }
                 default {
@@ -657,7 +780,7 @@ fi
         } catch {
             Write-ColorOutput -Message "`n[!] Failed to export results: $_" -Color "Red"
         }
-    } elseif ($ExportPath -and $exportData.Count -eq 0) {
+    } elseif ($ExportPath -and $allExportData.Count -eq 0) {
         Write-ColorOutput -Message "`n[!] No data to export" -Color "Yellow"
     }
     

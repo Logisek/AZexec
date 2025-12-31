@@ -4,7 +4,7 @@
 
 # AZexec - Azure Execution Tool
 
-**AZX** is a PowerShell-based Azure/Entra ID enumeration tool designed to provide netexec-style output for cloud environments. It offers a familiar command-line interface for security professionals and administrators working with Azure/Entra ID.
+**AZX** is a PowerShell-based Azure/Entra ID offensive tool designed to provide netexec-style output for cloud environments. It offers a familiar command-line interface for security professionals and administrators working with Azure/Entra ID.
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
@@ -37,16 +37,18 @@
 
 For penetration testers familiar with NetExec (formerly CrackMapExec), here's how the commands translate to Azure:
 
-| NetExec SMB Command | AZexec Equivalent | Authentication | Description |
-|---------------------|-------------------|----------------|-------------|
+| NetExec SMB/LDAP Command | AZexec Equivalent | Authentication | Description |
+|--------------------------|-------------------|----------------|-------------|
 | `nxc smb --enum` | `.\azx.ps1 tenant -Domain example.com` | ❌ None | Enumerate tenant configuration and endpoints |
-| `nxc smb --users` | `.\azx.ps1 users -Domain example.com -CommonUsernames` | ❌ None | Enumerate valid usernames |
-| `nxc smb --rid-brute` | `.\azx.ps1 user-profiles` | ✅ Required | Enumerate user profiles with details |
+| `nxc smb --users` (unauthenticated) | `.\azx.ps1 users -Domain example.com -CommonUsernames` | ❌ None | Enumerate valid usernames (no auth) |
+| `nxc smb <target> -u <user> -p <pass> --users`<br>`nxc ldap <target> -u <user> -p <pass> --users` | `.\azx.ps1 user-profiles` | ✅ Required | **Enumerate domain users** (authenticated) |
+| `nxc smb --rid-brute` | `.\azx.ps1 rid-brute` | ✅ Required | **Enumerate users by RID bruteforce** (Azure equivalent) |
 | `nxc smb -u 'a' -p ''` | `.\azx.ps1 guest -Domain example.com -Username user -Password ''` | ❌ None | **Test guest/null login** |
 | `nxc smb --groups` | `.\azx.ps1 groups` | ✅ Required | Enumerate groups |
+| `nxc smb --local-group` | `.\azx.ps1 local-groups` | ✅ Required | **Enumerate local groups** (Administrative Units) |
 | `nxc smb --pass-pol` | `.\azx.ps1 pass-pol` | ✅ Required | Display password policies |
 | `nxc smb --qwinsta` | `.\azx.ps1 sessions` | ✅ Required | **Enumerate active sign-in sessions** (cloud-level audit logs) |
-| `nxc smb --logged-on-users` | `.\azx.ps1 vm-loggedon` | ✅ Required | **Enumerate logged-on users on Azure VMs** (Workstation Service / Remote Registry equivalent) |
+| `nxc smb --logged-on-users` | `.\azx.ps1 vm-loggedon` | ✅ Required | **Enumerate logged-on users** (Intune devices + Azure VMs) |
 | `nxc smb 10.10.10.161` | `.\azx.ps1 hosts` | ✅ Required | Enumerate devices (hosts) |
 | `nxc smb --gen-relay-list` | `.\azx.ps1 vuln-list` | ⚡ Hybrid | **Enumerate vulnerable targets** (relay equivalent) |
 | `nxc smb --check-null-session` | `.\azx.ps1 guest-vuln-scan` | ⚡ Hybrid | **Guest user vulnerability scanner** (null session audit) |
@@ -60,14 +62,722 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | *N/A* | `.\azx.ps1 help` | ❌ None | **Display available commands and usage** |
 | `nxc smb --shares` | `.\azx.ps1 shares-enum` | ✅ Required | **Enumerate Azure File Shares** (access permissions) |
 | `nxc smb --disks` | `.\azx.ps1 disks-enum` | ✅ Required | **Enumerate Azure Managed Disks** (encryption, attachment state) |
+| `nxc smb -M bitlocker` | `.\azx.ps1 bitlocker-enum` | ✅ Required | **Enumerate BitLocker encryption status** (Intune devices + Azure VMs) |
+| `nxc smb -M enum_av` | `.\azx.ps1 av-enum` | ✅ Required | **Enumerate Anti-Virus & EDR products** (security posture assessment) |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
+
+---
+
+## 👥 Domain User Enumeration - Azure/Entra ID Equivalent
+
+For penetration testers familiar with NetExec's domain user enumeration via SMB/LDAP, AZexec provides the **Azure cloud equivalent** through the `user-profiles` command.
+
+### On-Premises vs Azure: Technical Comparison
+
+| Aspect | On-Premises (NetExec) | Azure (AZexec) |
+|--------|----------------------|----------------|
+| **Command** | `nxc smb <target> -u User -p Pass --users`<br>`nxc ldap <target> -u User -p Pass --users` | `.\azx.ps1 user-profiles` |
+| **Protocol** | SMB/RPC (port 445) or LDAP (port 389/636) | Microsoft Graph API (HTTPS/443) |
+| **API Interface** | SAMR RPC / LDAP queries | Microsoft Graph `/users` endpoint |
+| **Query Method** | NetUserEnum / LDAP search filters | RESTful API with OData queries |
+| **Authentication** | Domain/local credentials (NTLM/Kerberos) | Azure AD OAuth2 token |
+| **Permissions** | Domain Users group or LDAP read access | `User.Read.All` or `Directory.Read.All` |
+| **Network Access** | Direct network connectivity required | No network access needed (cloud API) |
+| **Speed** | Fast (local network) | Moderate (API rate limits) |
+| **Stealth** | Medium (SMB/LDAP traffic) | Low (legitimate Azure API calls) |
+
+### What Information Is Retrieved?
+
+Both methods enumerate comprehensive user information from the directory:
+
+| Information | On-Premises (SMB/LDAP) | Azure (user-profiles) | Security Value |
+|-------------|------------------------|----------------------|----------------|
+| **User Principal Name** | ✅ Via LDAP | ✅ Via Graph API | Primary identifier |
+| **Display Name** | ✅ Via LDAP | ✅ Via Graph API | User identification |
+| **Job Title** | ✅ Via LDAP attributes | ✅ Via Graph API | Organizational context |
+| **Department** | ✅ Via LDAP attributes | ✅ Via Graph API | Organizational structure |
+| **Office Location** | ✅ Via LDAP attributes | ✅ Via Graph API | Physical location |
+| **Email Address** | ✅ Via LDAP (mail) | ✅ Via Graph API | Contact information |
+| **User Type** | ⚠️ Via group membership | ✅ Member/Guest flag | Identify external users |
+| **Account Status** | ✅ Via userAccountControl | ✅ AccountEnabled flag | Active vs disabled |
+| **Last Sign-In** | ⚠️ Via lastLogon (DC-specific) | ✅ Via SignInActivity | Account activity |
+| **User ID/SID** | ✅ objectSid | ✅ Azure AD Object ID | Unique identifier |
+
+### Usage Examples
+
+**On-Premises with NetExec:**
+```bash
+# Enumerate domain users via SMB
+nxc smb dc01.corp.local -u UserName -p 'Password123!' --users
+
+# Enumerate domain users via LDAP
+nxc ldap dc01.corp.local -u UserName -p 'Password123!' --users
+
+# Export users to file
+nxc ldap dc01.corp.local -u UserName -p 'Password123!' --users-export users.txt
+
+# Enumerate only active users
+nxc ldap dc01.corp.local -u UserName -p 'Password123!' --active-users
+```
+
+**Azure with AZexec:**
+```powershell
+# Enumerate all users in Azure/Entra ID
+.\azx.ps1 user-profiles
+
+# Export to CSV (similar to --users-export)
+.\azx.ps1 user-profiles -ExportPath users.csv
+
+# Export to JSON with full details
+.\azx.ps1 user-profiles -ExportPath users.json
+
+# Export to HTML report with statistics
+.\azx.ps1 user-profiles -ExportPath users.html
+```
+
+### Attack Scenarios
+
+**Scenario 1: User Discovery and Targeting**
+```powershell
+# Enumerate all users to identify high-value targets
+.\azx.ps1 user-profiles -ExportPath all-users.csv
+
+# Filter for executives, admins, or privileged accounts
+# Analyze CSV for job titles like "CEO", "Admin", "Director", etc.
+```
+
+**Scenario 2: Guest User Identification**
+```powershell
+# Identify external/guest users (potential lateral movement targets)
+.\azx.ps1 user-profiles -ExportPath users.json
+
+# Filter JSON for UserType: "Guest"
+# Guest users often have weaker security posture
+```
+
+**Scenario 3: Inactive Account Discovery**
+```powershell
+# Find disabled or inactive accounts
+.\azx.ps1 user-profiles -ExportPath users.csv
+
+# Filter for AccountEnabled: False or LastSignInDateTime: null
+# Disabled accounts may indicate former employees or service accounts
+```
+
+**Scenario 4: Organizational Mapping**
+```powershell
+# Map organizational structure via departments and job titles
+.\azx.ps1 user-profiles -ExportPath org-structure.csv
+
+# Analyze departments to understand business units
+# Identify key personnel in IT, Security, Finance departments
+```
+
+**Scenario 5: Password Spray Target Selection**
+```powershell
+# Phase 1: Enumerate valid usernames (unauthenticated)
+.\azx.ps1 users -Domain target.com -CommonUsernames -ExportPath valid-users.csv
+
+# Phase 2: Get full user profiles (authenticated as guest or compromised user)
+.\azx.ps1 user-profiles -ExportPath user-details.csv
+
+# Phase 3: Select targets without MFA (analyze conditional access policies)
+.\azx.ps1 ca-policies -ExportPath ca-policies.json
+
+# Phase 4: Execute password spray against selected targets
+.\azx.ps1 guest -Domain target.com -UserFile spray-targets.txt -Password 'Summer2024!'
+```
+
+### Why Use Microsoft Graph Instead of LDAP?
+
+Azure AD (Entra ID) is a cloud-native directory service that doesn't expose traditional LDAP interfaces. Instead, Microsoft Graph provides:
+
+1. **Cloud-Native**: Designed for Azure's security model (OAuth2 instead of NTLM/Kerberos)
+2. **More Information**: Includes cloud-specific attributes (last sign-in activity, user type, etc.)
+3. **Cross-Platform**: Works from any OS with PowerShell 7+ (Windows, Linux, macOS)
+4. **Auditable**: All Graph API calls are logged in Azure AD audit logs
+5. **No Network Access Required**: Works even without VPN/network connectivity to corporate network
+6. **Modern Authentication**: Supports MFA, conditional access, and modern security controls
+
+### Limitations Compared to On-Premises
+
+| Limitation | Impact | Workaround |
+|------------|--------|------------|
+| **Requires Azure Auth** | Can't do anonymous enumeration | Use guest credentials (see [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session)) |
+| **API Rate Limits** | May hit throttling on large tenants | Built-in pagination and retry logic |
+| **Guest User Restrictions** | Guest users may have limited visibility | Check tenant's guest user access settings |
+| **No Group Membership** | User enumeration doesn't include groups | Use `.\azx.ps1 groups` command separately |
+| **Logged Activity** | All actions logged in Azure AD | This is a feature, not a bug (compliance) |
+
+### Integration with Other AZexec Commands
+
+The `user-profiles` command works best when combined with other enumeration commands:
+
+```powershell
+# Complete directory enumeration workflow
+# Step 1: Enumerate users
+.\azx.ps1 user-profiles -ExportPath users.csv
+
+# Step 2: Enumerate groups and membership
+.\azx.ps1 groups -ExportPath groups.csv
+
+# Step 3: Enumerate privileged role assignments
+.\azx.ps1 roles -ExportPath roles.csv
+
+# Step 4: Check sign-in activity for privileged users
+.\azx.ps1 sessions -Hours 168 -ExportPath signin-logs.csv
+
+# Step 5: Analyze data to map privileged accounts and their activity
+# Cross-reference users.csv, roles.csv, and signin-logs.csv
+```
+
+### Output Format
+
+The `user-profiles` command provides netexec-style formatted output:
+
+```
+AZR             12345678-1234...    443    Alice Johnson                      [*] (upn:alice@example.com) (job:Senior Engineer) (dept:IT) (type:Member) (status:Enabled) (location:Seattle) (lastSignIn:2024-12-30)
+AZR             87654321-4321...    443    Bob Smith                          [*] (upn:bob@example.com) (job:Manager) (dept:Sales) (type:Member) (status:Enabled) (location:New York) (lastSignIn:2024-12-29)
+AZR             abcdef12-3456...    443    External Consultant                [*] (upn:consultant@external.com) (job:Consultant) (dept:N/A) (type:Guest) (status:Enabled) (location:N/A) (lastSignIn:2024-12-15)
+```
+
+**Color Coding:**
+- **Green**: Active member users (standard accounts)
+- **Yellow**: Guest users (external/B2B accounts)
+- **DarkGray**: Disabled accounts (inactive users)
+
+### Summary Statistics
+
+After enumeration, AZexec displays comprehensive statistics:
+
+```
+[*] Summary:
+    Total Users: 1,234
+    Member Users: 1,150
+    Guest Users: 84
+    Enabled Accounts: 1,200
+    Disabled Accounts: 34
+```
+
+---
+
+## 🔢 RID Bruteforcing - Azure/Entra ID Equivalent
+
+For penetration testers familiar with NetExec's RID bruteforcing technique, AZexec provides the **Azure cloud equivalent** through the `rid-brute` command.
+
+### What is RID Bruteforcing?
+
+**On-Premises (Traditional Active Directory):**
+- **RID (Relative Identifier)**: A sequential number assigned to each object (user, group, computer) in a Windows domain
+- **RID Bruteforcing**: Enumerating users by iterating through RID values (e.g., 500-5000) using the `LookupSids` RPC call
+- **Why it works**: RIDs are sequential and predictable (500=Administrator, 501=Guest, 1000+=custom users)
+- **NetExec command**: `nxc smb <target> -u UserName -p 'PASSWORDHERE' --rid-brute`
+
+**Example RID sequence:**
+```
+RID 500  -> Administrator
+RID 501  -> Guest
+RID 502  -> krbtgt
+RID 1000 -> alice
+RID 1001 -> bob
+RID 1002 -> charlie
+```
+
+### Azure AD vs On-Premises: Technical Comparison
+
+| Aspect | On-Premises (NetExec) | Azure (AZexec) |
+|--------|----------------------|----------------|
+| **Command** | `nxc smb <target> -u User -p Pass --rid-brute` | `.\azx.ps1 rid-brute` |
+| **Identifier Type** | Sequential RID (500, 501, 1000, 1001...) | Non-sequential GUID (12345678-1234-5678-1234-567812345678) |
+| **Protocol** | SMB/RPC (port 445) | Microsoft Graph API (HTTPS/443) |
+| **RPC Interface** | SAMR (Security Account Manager Remote) | Microsoft Graph `/users` endpoint |
+| **API Call** | `SamrLookupIdsInDomain` / `LsarLookupSids` | `GET /v1.0/users` |
+| **Enumeration Method** | Iterate RIDs (500-10000) and resolve to names | Query all users via Graph API |
+| **Predictability** | ✅ Sequential and predictable | ❌ GUIDs are random and non-sequential |
+| **Brute-forceable** | ✅ Yes (iterate numbers) | ❌ No (GUIDs are 128-bit random) |
+| **Authentication** | Domain/local credentials | Azure AD OAuth2 token |
+| **Permissions** | Domain Users group or specific RPC rights | `User.Read.All` or `Directory.Read.All` |
+| **Speed** | Fast (local network) | Moderate (API rate limits) |
+| **Result** | Same users enumerated | Same users enumerated |
+
+### Why Azure AD Doesn't Use RIDs
+
+Azure AD is a **cloud-native directory service** that doesn't use the same security model as on-premises Active Directory:
+
+1. **GUIDs Instead of RIDs**: Azure AD assigns globally unique identifiers (GUIDs) to objects, not sequential RIDs
+2. **No Sequential Enumeration**: GUIDs are 128-bit random values - you cannot "bruteforce" them by iteration
+3. **API-Based Access**: Azure AD uses RESTful APIs (Microsoft Graph) instead of RPC/SMB protocols
+4. **Different Security Model**: Azure AD uses OAuth2/OIDC instead of NTLM/Kerberos
+
+**Example Azure AD Object IDs (GUIDs):**
+```
+User: alice@example.com    -> 12345678-abcd-1234-5678-1234567890ab
+User: bob@example.com      -> 87654321-dcba-4321-8765-ba0987654321
+User: charlie@example.com  -> abcdef12-3456-7890-abcd-ef1234567890
+```
+
+There's **no pattern** or **sequential relationship** between these IDs - you cannot predict the next user's ID.
+
+### Azure Equivalent: Direct User Enumeration
+
+Instead of bruteforcing RIDs, Azure AD provides **direct user enumeration** via the Microsoft Graph API:
+
+```powershell
+# Azure equivalent of RID bruteforcing
+.\azx.ps1 rid-brute
+
+# This internally calls: GET https://graph.microsoft.com/v1.0/users
+# Returns ALL users in the directory (no iteration needed)
+```
+
+**Why this is better than RID bruteforcing:**
+1. ✅ **More Reliable**: No missed users due to RID gaps or deleted accounts
+2. ✅ **Faster**: Single API call retrieves all users (no iteration through 10,000+ RIDs)
+3. ✅ **More Information**: Returns full user profiles (job title, department, last sign-in, etc.)
+4. ✅ **No Guesswork**: Direct enumeration instead of trial-and-error
+
+### Functional Equivalence
+
+While the **technical implementation** differs, the `rid-brute` command provides the **same functional result** as NetExec's RID bruteforcing:
+
+| Goal | NetExec (On-Premises) | AZexec (Azure) |
+|------|----------------------|----------------|
+| **Enumerate all users** | ✅ Iterate RIDs 500-10000 | ✅ Query Graph API |
+| **Find hidden users** | ✅ Discover users not in LDAP | ✅ Discover all directory users |
+| **No prior knowledge needed** | ✅ Just need valid credentials | ✅ Just need valid credentials |
+| **Bypass LDAP restrictions** | ✅ Uses SAMR instead of LDAP | ✅ Uses Graph API (no LDAP) |
+| **Export user list** | ✅ Save to file | ✅ Save to CSV/JSON/HTML |
+
+### Usage Examples
+
+**On-Premises with NetExec:**
+```bash
+# RID bruteforce to enumerate users
+nxc smb dc01.corp.local -u UserName -p 'Password123!' --rid-brute
+
+# Specify RID range
+nxc smb dc01.corp.local -u UserName -p 'Password123!' --rid-brute 1000-2000
+
+# Export results
+nxc smb dc01.corp.local -u UserName -p 'Password123!' --rid-brute > users.txt
+```
+
+**Azure with AZexec:**
+```powershell
+# Enumerate all users (Azure equivalent of RID bruteforcing)
+.\azx.ps1 rid-brute
+
+# Export to CSV (like NetExec output)
+.\azx.ps1 rid-brute -ExportPath users.csv
+
+# Export to JSON with full details
+.\azx.ps1 rid-brute -ExportPath users.json
+
+# Export to HTML report with statistics
+.\azx.ps1 rid-brute -ExportPath users.html
+```
+
+### Attack Scenarios
+
+**Scenario 1: Complete User Enumeration**
+```powershell
+# Enumerate all users in the directory (like RID bruteforce 500-10000)
+.\azx.ps1 rid-brute -ExportPath all-users.csv
+
+# Analyze results to identify targets
+# - High-value accounts (executives, admins)
+# - Service accounts (may have weak passwords)
+# - Disabled accounts (potential re-activation targets)
+```
+
+**Scenario 2: Hidden User Discovery**
+```powershell
+# Discover users that may not appear in standard LDAP queries
+.\azx.ps1 rid-brute -ExportPath complete-user-list.json
+
+# Compare with other enumeration results to find discrepancies
+# Some users may be hidden from address lists but still exist
+```
+
+**Scenario 3: Password Spray Target Selection**
+```powershell
+# Phase 1: Enumerate all users via RID bruteforce equivalent
+.\azx.ps1 rid-brute -ExportPath all-users.csv
+
+# Phase 2: Filter for enabled accounts without MFA
+# Analyze CSV to identify spray targets
+
+# Phase 3: Execute password spray
+.\azx.ps1 guest -Domain target.com -UserFile spray-targets.txt -Password 'Summer2024!'
+```
+
+### Technical Implementation
+
+The `rid-brute` command is implemented as an **alias** to `user-profiles` with additional context:
+
+```powershell
+# When you run:
+.\azx.ps1 rid-brute
+
+# AZexec internally:
+# 1. Displays RID bruteforce context message
+# 2. Explains Azure AD uses GUIDs instead of RIDs
+# 3. Calls Invoke-UserProfileEnumeration function
+# 4. Enumerates ALL users via Microsoft Graph API
+# 5. Returns same data as user-profiles command
+```
+
+**Why an alias?**
+- Azure AD doesn't support sequential RID iteration (GUIDs are random)
+- Direct user enumeration via Graph API is more efficient than bruteforcing
+- Provides familiar command name for NetExec users
+- Achieves the same goal: enumerate all users in the directory
+
+### Output Format
+
+The `rid-brute` command provides netexec-style formatted output:
+
+```
+[*] RID Bruteforce Mode (Azure Equivalent)
+[*] Note: Azure AD uses GUIDs instead of sequential RIDs
+[*] Enumerating all users via Microsoft Graph API...
+
+AZR             12345678-1234...    443    Alice Johnson                      [*] (upn:alice@example.com) (job:Senior Engineer) (dept:IT) (type:Member) (status:Enabled) (location:Seattle) (lastSignIn:2024-12-30)
+AZR             87654321-4321...    443    Bob Smith                          [*] (upn:bob@example.com) (job:Manager) (dept:Sales) (type:Member) (status:Enabled) (location:New York) (lastSignIn:2024-12-29)
+AZR             abcdef12-3456...    443    External Consultant                [*] (upn:consultant@external.com) (job:Consultant) (dept:N/A) (type:Guest) (status:Enabled) (location:N/A) (lastSignIn:2024-12-15)
+
+[*] Summary:
+    Total Users: 1,234
+    Member Users: 1,150
+    Guest Users: 84
+    Enabled Accounts: 1,200
+    Disabled Accounts: 34
+```
+
+### Key Differences Summary
+
+| Feature | NetExec RID Brute | AZexec rid-brute |
+|---------|------------------|------------------|
+| **Enumeration Method** | Iterate sequential RIDs | Query Graph API directly |
+| **Speed** | Slow (must check each RID) | Fast (single API call) |
+| **Completeness** | May miss users with non-sequential RIDs | Guaranteed complete enumeration |
+| **Stealth** | Medium (many RPC calls) | Low (legitimate API usage) |
+| **Information Depth** | Basic (SID, username, type) | Comprehensive (full user profiles) |
+| **Reliability** | May fail on RID gaps | Always returns all users |
+
+### When to Use This Command
+
+Use `rid-brute` when:
+- ✅ You're familiar with NetExec's `--rid-brute` and want the Azure equivalent
+- ✅ You want to enumerate ALL users in the directory
+- ✅ You need a complete user list for password spraying or targeting
+- ✅ You want to discover "hidden" users not visible in standard queries
+- ✅ You're performing a comprehensive directory enumeration
+
+**Note**: The `rid-brute` and `user-profiles` commands are functionally identical in AZexec. Use whichever command name you prefer based on your background (NetExec users may prefer `rid-brute`, while Azure-native users may prefer `user-profiles`).
+
+---
+
+## 🔐 Enumerate Local Groups - Azure/Entra ID Equivalent
+
+For penetration testers familiar with NetExec's local group enumeration, AZexec provides the **Azure cloud equivalent** through the `local-groups` command, which enumerates **Administrative Units**.
+
+### What are Local Groups?
+
+**On-Premises (Traditional Windows):**
+- **Local Groups**: Security groups stored on individual Windows machines (not in the domain)
+- **Examples**: Administrators, Users, Remote Desktop Users, Backup Operators, Power Users
+- **Purpose**: Machine-specific access control and privilege delegation
+- **NetExec command**: `nxc smb <target> -u UserName -p 'PASSWORDHERE' --local-group`
+- **Enumeration method**: Query local SAM (Security Account Manager) via RPC
+
+**Example Local Groups on Windows:**
+```
+BUILTIN\Administrators  -> Full system access
+BUILTIN\Users           -> Standard user access
+BUILTIN\Remote Desktop Users -> RDP access
+BUILTIN\Backup Operators     -> Backup/restore privileges
+BUILTIN\Power Users          -> Legacy admin-like access
+```
+
+### Azure AD vs On-Premises: Technical Comparison
+
+| Aspect | On-Premises (NetExec) | Azure (AZexec) |
+|--------|----------------------|----------------|
+| **Command** | `nxc smb <target> -u User -p Pass --local-group` | `.\azx.ps1 local-groups` |
+| **Concept** | Local groups on individual machines | Administrative Units in Azure AD |
+| **Scope** | Machine-specific (single host) | Directory-scoped (subset of tenant) |
+| **Protocol** | SMB/RPC (port 445) | Microsoft Graph API (HTTPS/443) |
+| **API Interface** | SAMR (Security Account Manager Remote) | Microsoft Graph `/administrativeUnits` endpoint |
+| **API Call** | `SamrQueryInformationAlias` / `NetLocalGroupEnum` | `GET /v1.0/directory/administrativeUnits` |
+| **Purpose** | Access control for specific machine | Delegated administration for subset of directory |
+| **Authentication** | Domain/local credentials | Azure AD OAuth2 token |
+| **Permissions** | Local admin or specific RPC rights | `AdministrativeUnit.Read.All` or `Directory.Read.All` |
+| **Licensing** | None (built into Windows) | Azure AD Premium P1 or P2 |
+| **Membership Types** | Assigned only | Assigned or Dynamic (rule-based) |
+
+### Why Administrative Units are the Azure Equivalent
+
+While Azure AD doesn't have "local groups" in the traditional sense, **Administrative Units (AUs)** serve a similar purpose:
+
+**Similarities:**
+1. **Scoped Administration**: Local groups provide machine-scoped admin rights; AUs provide directory-scoped admin rights
+2. **Delegation**: Both allow delegating privileges without granting tenant/domain-wide access
+3. **Access Control**: Both restrict what administrators can manage
+4. **Containment**: Local groups contain users for a machine; AUs contain users/groups/devices for a scope
+
+**Key Difference:**
+- Local groups = **horizontal scope** (different machines have different local groups)
+- Administrative Units = **vertical scope** (different AUs manage different subsets of the same directory)
+
+### What are Administrative Units?
+
+Administrative Units are containers in Azure AD that allow you to:
+- **Group directory objects**: Users, groups, and devices
+- **Assign scoped administrators**: Grant admin roles that only apply to objects in the AU
+- **Delegate management**: Allow regional/departmental admins without global permissions
+- **Organize governance**: Structure administrative boundaries (by region, department, project)
+
+**Example Administrative Units:**
+```
+North America Region    -> Contains users/devices in NA offices
+                        -> NA regional admins can manage only these objects
+
+Finance Department      -> Contains finance team users/groups
+                        -> Finance admin can only manage finance objects
+
+Tier 1 Helpdesk        -> Contains workstation devices
+                        -> Helpdesk can reset passwords for users in this AU
+```
+
+### Usage Examples
+
+**On-Premises with NetExec:**
+```bash
+# Enumerate local groups on a Windows machine
+nxc smb 192.168.1.100 -u administrator -p 'Password123!' --local-group
+
+# Enumerate local groups on multiple targets
+nxc smb 192.168.1.0/24 -u administrator -p 'Password123!' --local-group
+
+# Output shows:
+# - Administrators group members
+# - Remote Desktop Users
+# - Backup Operators
+# - Power Users
+# - Other local groups
+```
+
+**Azure with AZexec:**
+```powershell
+# Enumerate all Administrative Units in the tenant
+.\azx.ps1 local-groups
+
+# Export to CSV with member counts
+.\azx.ps1 local-groups -ShowOwners -ExportPath admin-units.csv
+
+# Export to JSON with full details
+.\azx.ps1 local-groups -ExportPath admin-units.json
+
+# Export to HTML report with statistics
+.\azx.ps1 local-groups -ExportPath admin-units.html
+```
+
+### Attack Scenarios
+
+**Scenario 1: Identify Scoped Administration Boundaries**
+```powershell
+# Enumerate all Administrative Units to understand delegation structure
+.\azx.ps1 local-groups -ExportPath admin-units.csv
+
+# Analyze results to identify:
+# - Regional/departmental boundaries
+# - Scoped admin assignments
+# - Potential privilege escalation paths
+```
+
+**Scenario 2: Find Privileged Administrative Units**
+```powershell
+# Enumerate AUs with member and role counts
+.\azx.ps1 local-groups -ShowOwners -ExportPath admin-units-detailed.json
+
+# Look for AUs with names containing:
+# - "Admin", "Privileged", "IT", "Security"
+# - These may contain high-value targets
+```
+
+**Scenario 3: Map Organizational Structure**
+```powershell
+# Enumerate Administrative Units to map organization
+.\azx.ps1 local-groups -ExportPath org-structure.csv
+
+# Cross-reference with user enumeration:
+.\azx.ps1 user-profiles -ExportPath users.csv
+
+# Identify which users belong to which administrative scopes
+```
+
+**Scenario 4: Privilege Escalation via Scoped Roles**
+```powershell
+# Step 1: Enumerate Administrative Units
+.\azx.ps1 local-groups -ShowOwners -ExportPath aus.csv
+
+# Step 2: Enumerate role assignments
+.\azx.ps1 roles -ExportPath roles.csv
+
+# Step 3: Cross-reference to find:
+# - Users with scoped admin rights (e.g., Helpdesk Admin for specific AU)
+# - Potential lateral movement to other AUs
+# - Escalation to global roles
+```
+
+### Technical Implementation
+
+The `local-groups` command enumerates Administrative Units via Microsoft Graph API:
+
+```powershell
+# When you run:
+.\azx.ps1 local-groups
+
+# AZexec internally:
+# 1. Calls Get-MgDirectoryAdministrativeUnit to retrieve all AUs
+# 2. (Optional) Retrieves member counts via Get-MgDirectoryAdministrativeUnitMember
+# 3. (Optional) Retrieves scoped role assignments via Get-MgDirectoryAdministrativeUnitScopedRoleMember
+# 4. Displays in netexec-style format with color coding
+```
+
+**Color Coding:**
+- **Red**: Privileged Administrative Units (names containing "admin", "security", "privileged", etc.)
+- **Yellow**: Dynamic membership AUs (automated assignment via rules)
+- **Green**: Active AUs with members or scoped roles assigned
+- **Cyan**: Standard AUs
+
+### Output Format
+
+The `local-groups` command provides netexec-style formatted output:
+
+```
+[*] AZX - Azure/Entra Administrative Units Enumeration
+[*] Command: Administrative Units (Local Groups Equivalent)
+[*] Similar to: nxc smb --local-group
+
+[*] Technical Context:
+    On-Premises: Local groups provide machine-scoped access control
+                 (e.g., Administrators, Users, Remote Desktop Users)
+    Azure:       Administrative Units provide directory-scoped delegation
+                 (scoped admin roles for subset of users/groups/devices)
+
+AZR             12345678-1234...    443    North America Region               [*] (name:North America Region) (type:Assigned) (visibility:Public) (members:150) (scopedRoles:3) (desc:Administrative unit for NA offices)
+AZR             87654321-4321...    443    Finance Department                 [*] (name:Finance Department) (type:Dynamic) (visibility:Public) (members:45) (scopedRoles:2) (desc:Finance team administrative unit)
+AZR             abcdef12-3456...    443    IT Admin Tier 1                    [*] (name:IT Admin Tier 1) (type:Assigned) (visibility:Public) (members:20) (scopedRoles:5) (desc:Tier 1 helpdesk administrative scope)
+
+[*] Summary:
+    Total Administrative Units: 15
+    Assigned Membership: 12
+    Dynamic Membership: 3
+```
+
+### Information Retrieved
+
+| Information | Description | Security Value |
+|-------------|-------------|----------------|
+| **Display Name** | Name of the Administrative Unit | Identify scoped boundaries |
+| **Description** | Purpose/scope description | Understand delegation intent |
+| **Membership Type** | Assigned or Dynamic | Dynamic = automated governance |
+| **Visibility** | Public or HiddenMembership | Hidden may contain sensitive objects |
+| **Member Count** | Users/groups/devices in AU | Scope size assessment |
+| **Scoped Role Count** | Number of scoped admin assignments | Delegation assessment |
+| **Membership Rule** | Dynamic membership query (if dynamic) | Understand auto-assignment logic |
+
+### Comparison with Other Commands
+
+| Command | Purpose | Scope | Azure Concept |
+|---------|---------|-------|---------------|
+| `groups` | Enumerate security/mail groups | Tenant-wide | Domain groups equivalent |
+| `local-groups` | Enumerate Administrative Units | Scoped delegation | Local groups equivalent |
+| `roles` | Enumerate directory role assignments | Tenant-wide | Built-in roles (like Domain Admins) |
+
+### Integration with Other AZexec Commands
+
+Administrative Units work best when analyzed alongside other enumeration:
+
+```powershell
+# Complete administrative structure enumeration workflow
+# Step 1: Enumerate Administrative Units (scoped boundaries)
+.\azx.ps1 local-groups -ShowOwners -ExportPath admin-units.csv
+
+# Step 2: Enumerate all groups (functional grouping)
+.\azx.ps1 groups -ExportPath groups.csv
+
+# Step 3: Enumerate role assignments (privilege levels)
+.\azx.ps1 roles -ExportPath roles.csv
+
+# Step 4: Enumerate users (actual accounts)
+.\azx.ps1 user-profiles -ExportPath users.csv
+
+# Step 5: Cross-reference to map:
+# - Which users are in which AUs (scoped management)
+# - Which groups are in which AUs (nested delegation)
+# - Which admins have scoped vs global roles (privilege analysis)
+```
+
+### When to Use This Command
+
+Use `local-groups` when:
+- ✅ You want to understand administrative delegation structure
+- ✅ You're familiar with NetExec's `--local-group` and want the Azure equivalent
+- ✅ You need to map organizational boundaries and regional/departmental scopes
+- ✅ You're looking for privilege escalation paths via scoped admin roles
+- ✅ You want to identify sensitive administrative units (IT, Security, Executive)
+- ✅ You're performing a comprehensive directory governance audit
+
+### Licensing Requirements
+
+**Important**: Administrative Units require **Azure AD Premium P1 or P2** licensing.
+
+If your target tenant doesn't have Premium licensing:
+- The command will return zero results (not an error)
+- The tenant may not have any Administrative Units configured
+- Alternative: Focus on `groups` and `roles` commands instead
+
+### Limitations and Differences
+
+| Limitation | Impact | Workaround |
+|------------|--------|------------|
+| **Requires Premium License** | Won't work on Free/Basic Azure AD | Check with `tenant` command first |
+| **Not Machine-Specific** | AUs are directory-scoped, not host-scoped | Use `vm-loggedon` for host-specific enumeration |
+| **Guest Restrictions** | Guest users may have limited AU visibility | Use member account for full enumeration |
+| **No Built-in AUs** | Unlike Windows, no default AUs exist | Organizations must create them manually |
+
+### Summary Statistics
+
+After enumeration, AZexec displays comprehensive statistics:
+
+```
+[*] Summary:
+    Total Administrative Units: 15
+    Assigned Membership: 12
+    Dynamic Membership: 3
+
+[*] Security Recommendations:
+    - Review scoped role assignments for least privilege
+    - Audit administrative unit membership regularly
+    - Use dynamic membership rules for automated governance
+    - Restrict administrative unit creation to authorized admins
+
+[*] Note: Administrative Units require Azure AD Premium P1 or P2 licensing
+```
 
 ---
 
 ## 🔌 Workstation Service (wkssvc) Equivalent: `vm-loggedon` Command
 
 For penetration testers familiar with NetExec's `--loggedon-users` flag, the `vm-loggedon` command provides the **Azure cloud equivalent** of Workstation Service (wkssvc) enumeration.
+
+**Now with Intune support!** The command enumerates:
+1. **Intune-managed devices** - Shows primary user assigned to each Windows device (via Graph API)
+2. **Azure VMs** - Shows currently logged-on users via VM Run Command (like NetExec)
 
 ### On-Premises vs Azure: Technical Comparison
 
@@ -412,6 +1122,129 @@ The Azure equivalent of NetExec's `--disks` command. Enumerate Azure Managed Dis
 - **MEDIUM**: Public network access enabled, unattached disks
 - **LOW**: Encrypted, attached disks with private access
 
+### BitLocker Enumeration: `bitlocker-enum`
+
+The Azure equivalent of NetExec's `-M bitlocker` module. Enumerate BitLocker encryption status on Windows Azure VMs:
+
+```powershell
+# Enumerate BitLocker status on all Windows VMs (like nxc smb -M bitlocker)
+.\azx.ps1 bitlocker-enum
+
+# Target specific subscription or resource group
+.\azx.ps1 bitlocker-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+.\azx.ps1 bitlocker-enum -ResourceGroup Production-RG
+
+# Filter by VM power state (default: running only)
+.\azx.ps1 bitlocker-enum -VMFilter running
+.\azx.ps1 bitlocker-enum -VMFilter all
+
+# Export results to CSV/JSON
+.\azx.ps1 bitlocker-enum -ExportPath bitlocker-status.csv
+.\azx.ps1 bitlocker-enum -ExportPath bitlocker-status.json
+```
+
+**Information Enumerated**:
+| Information | Description | Security Value |
+|-------------|-------------|----------------|
+| **Mount Point** | Drive letter (C:, D:, etc.) | Identify volumes |
+| **Volume Status** | FullyEncrypted, FullyDecrypted, EncryptionInProgress | Encryption state |
+| **Encryption %** | Percentage of volume encrypted (0-100%) | Encryption progress |
+| **Encryption Method** | XTS-AES 128/256, AES-CBC 128/256 | Encryption algorithm |
+| **Protection Status** | On/Off | BitLocker protection active |
+| **Key Protector** | TPM, RecoveryPassword, etc. | Key protection method |
+| **Capacity** | Volume size in GB | Storage capacity |
+| **Lock Status** | Locked/Unlocked | Access status |
+
+**NetExec Comparison**:
+| NetExec Command | AZexec Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `nxc smb 192.168.1.0/24 -u admin -p pass -M bitlocker` | `.\azx.ps1 bitlocker-enum` | Enumerate BitLocker status |
+| NetExec queries via SMB/WMI on remote Windows hosts | AZexec queries via Intune API + Azure VM Run Command | Cloud vs On-Prem |
+
+**How It Works**:
+
+**Section 1: Intune-Managed Devices** (via Microsoft Graph API)
+1. Connects to Microsoft Graph with `DeviceManagementManagedDevices.Read.All` permission
+2. Queries all Windows devices enrolled in Intune
+3. Checks the `isEncrypted` property for each device
+4. Lists devices without BitLocker with specific device names
+
+**Section 2: Azure VMs** (via ARM API)
+1. **Discovery**: Enumerates all Windows VMs across subscriptions
+2. **Filtering**: Targets running VMs by default (BitLocker query requires VM to be running)
+3. **Query Execution**: Uses Azure VM Run Command to execute `Get-BitLockerVolume` on each VM
+4. **Data Parsing**: Parses BitLocker status, encryption method, and key protectors
+5. **Risk Assessment**: Identifies unencrypted volumes and disabled protection
+
+**Security Analysis**:
+- Unencrypted volumes are highlighted in RED (HIGH RISK)
+- Volumes with protection disabled are flagged in YELLOW (MEDIUM RISK)
+- Shows encryption method (strong: XTS-AES 256, weak: AES-CBC 128)
+- Identifies key protector types (TPM, Password, Recovery Key)
+- Tracks encryption progress for volumes being encrypted
+- **Lists specific device names** for devices needing BitLocker
+- Recommendations for enabling BitLocker and best practices
+
+**Risk Levels**:
+- **HIGH**: Volume not encrypted (data at rest exposed)
+- **MEDIUM**: BitLocker protection disabled (encrypted but not protected)
+- **LOW**: Fully encrypted with protection enabled
+
+**Use Cases**:
+1. **Compliance Auditing**: Verify all Windows VMs have BitLocker enabled
+2. **Security Assessment**: Identify unencrypted volumes that should be encrypted
+3. **Encryption Monitoring**: Track encryption progress across the environment
+4. **Key Management**: Identify VMs using weak key protectors (password-only)
+5. **Incident Response**: Quickly assess encryption status during security incidents
+
+**Technical Details**:
+- Requires VM to be in **running** state (stopped VMs cannot be queried)
+- Uses Azure VM Run Command (same as `vm-loggedon` command)
+- Requires **Virtual Machine Contributor** or **VM Command Executor** role
+- Queries are logged in Azure Activity Logs (audit trail)
+- Windows VMs only (BitLocker is Windows-specific)
+- Linux VMs are automatically skipped
+
+**Comparison with `disks-enum`**:
+| Feature | `bitlocker-enum` | `disks-enum` |
+|---------|------------------|--------------|
+| **Target** | Running Windows VMs | Azure Managed Disks (storage layer) |
+| **Encryption Type** | BitLocker (OS-level) | Azure Disk Encryption (platform-level) |
+| **Query Method** | VM Run Command (active query) | Azure Resource Manager API (metadata) |
+| **Requires Running VM** | Yes | No |
+| **Information** | BitLocker status, encryption method, key protectors | Disk encryption type, attachment state, network access |
+| **Use Case** | OS-level encryption compliance | Storage-level encryption audit |
+
+**Integration Example**:
+```powershell
+# Complete disk security audit workflow
+# Step 1: Check Azure Disk Encryption (storage layer)
+.\azx.ps1 disks-enum -ExportPath disks.csv
+
+# Step 2: Check BitLocker status (OS layer)
+.\azx.ps1 bitlocker-enum -ExportPath bitlocker.csv
+
+# Step 3: Compare results to ensure dual-layer encryption
+# (Both Azure Disk Encryption AND BitLocker should be enabled for maximum security)
+```
+
+**NetExec Module Equivalence**:
+This command is the direct Azure equivalent of NetExec's BitLocker module:
+```bash
+# NetExec (On-Premises)
+nxc smb 192.168.1.0/24 -u administrator -p 'Password1' -M bitlocker
+
+# AZexec (Azure)
+.\azx.ps1 bitlocker-enum
+```
+
+Both commands provide the same information:
+- Drive letters and mount points
+- Encryption status and percentage
+- Encryption method (algorithm)
+- Protection status
+- Key protector types
+
 ### Multi-Subscription Pattern
 
 All ARM commands share a common multi-subscription enumeration pattern:
@@ -445,7 +1278,7 @@ All ARM commands share a common multi-subscription enumeration pattern:
   - Identify misconfigured public clients and OAuth settings
   - Detect implicit flow configurations and security risks
   - Access federation metadata for federated tenants
-- **Username Enumeration**: Validate username existence without authentication using GetCredentialType API (mimics `nxc smb --users`)
+- **Username Enumeration**: Validate username existence without authentication using GetCredentialType API (mimics `nxc smb --users` unauthenticated)
   - Stealthy username validation (doesn't trigger auth logs)
   - No authentication required - perfect for external reconnaissance
   - Built-in common username lists
@@ -458,21 +1291,39 @@ All ARM commands share a common multi-subscription enumeration pattern:
   - MFA detection (valid credentials even if MFA blocks)
   - **Two-phase attack**: First enumerate with GetCredentialType, then spray with ROPC
   - Smart delays to avoid account lockouts
-- **User Profile Enumeration**: Enumerate detailed user profiles with authentication (requires User.Read.All)
-  - Display names, job titles, departments, and office locations
-  - User types (Member vs Guest) and account status
-  - Last sign-in activity (if AuditLog.Read.All permission available)
-  - Export to CSV or JSON for offline analysis
+- **Domain User Enumeration**: Comprehensive authenticated user enumeration (mimics `nxc smb/ldap <target> -u <user> -p <pass> --users`)
+  - **Azure equivalent of NetExec's SMB/LDAP user enumeration**
+  - Enumerate all users in Azure/Entra ID directory with full details
+  - Display names, UPNs, job titles, departments, and office locations
+  - User types (Member vs Guest) and account status (Enabled/Disabled)
+  - Last sign-in activity tracking (if AuditLog.Read.All permission available)
+  - Identify high-value targets (executives, admins, privileged accounts)
+  - Export to CSV, JSON, or HTML for offline analysis and reporting
+  - Color-coded output: Green (active members), Yellow (guests), Gray (disabled)
 - **Device Enumeration**: Query and display all devices registered in Azure/Entra ID (mimics `nxc smb --hosts`)
 - **Group Enumeration**: Enumerate all Azure AD groups with details (mimics `nxc smb --groups`)
   - Security groups, Microsoft 365 groups, distribution lists
   - Group types, membership counts, and descriptions
   - Dynamic group detection
+- **Local Groups Enumeration**: Enumerate Azure AD Administrative Units (mimics `nxc smb --local-group`)
+  - **Azure equivalent of local groups enumeration**
+  - Administrative Units provide scoped administration (like local groups provide machine-scoped access)
+  - Display membership types (Assigned vs Dynamic)
+  - Show member counts and scoped role assignments
+  - Identify privileged administrative boundaries (IT, Security, Executive)
+  - Understand organizational delegation structure and regional/departmental scopes
+  - Export to CSV, JSON, or HTML for offline analysis
+  - Color-coded output: Red (privileged AUs), Yellow (dynamic), Green (active), Cyan (standard)
+  - Requires Azure AD Premium P1/P2 licensing
 - **Password Policy Enumeration**: Display password policies and security settings (mimics `nxc smb --pass-pol`)
-  - Password expiration policies
-  - Authentication methods and MFA settings
-  - Security Defaults status
-  - Conditional Access policies
+  - **Azure AD Default Password Requirements**: Min/max length (8-256 chars), complexity (3 of 4 char types), banned password list
+  - **Smart Lockout Settings**: Lockout threshold (10 attempts), duration (60s+), familiar location detection
+  - **Password Expiration Policies**: Validity period, notification windows
+  - **Authentication Methods**: MFA configuration (Authenticator, SMS, FIDO2, etc.)
+  - **Security Defaults**: Baseline security enforcement (MFA, legacy auth blocking)
+  - **Conditional Access Policies**: Summary of policies enforcing MFA, device compliance, location restrictions
+  - **NetExec-Style Summary**: Formatted output similar to `nxc smb --pass-pol` with all key policy settings
+  - **Azure AD vs On-Premises Comparison**: Side-by-side comparison table of password policy differences
 - **Guest Login Enumeration**: Test guest/external authentication (mimics `nxc smb -u 'a' -p ''`)
   - Test if tenant accepts external/B2B authentication
   - Test credentials with empty/null passwords (like SMB null session)
@@ -556,6 +1407,33 @@ All ARM commands share a common multi-subscription enumeration pattern:
   - Show quotas, access tiers, and enabled protocols (SMB/NFS)
   - Security analysis for writable and publicly accessible shares
   - Multi-subscription support with automatic enumeration
+- **Azure Managed Disks Enumeration**: Enumerate Azure Managed Disks with encryption status (mimics `nxc smb --disks`)
+  - Azure equivalent of disk enumeration on remote hosts
+  - Display disk encryption (Platform/Customer-Managed Keys)
+  - Identify unattached disks (orphaned resources)
+  - Track disk sizes, SKUs, and attachment status
+  - Security analysis for unencrypted and publicly accessible disks
+  - Multi-subscription support with automatic enumeration
+- **BitLocker Enumeration**: Query BitLocker encryption status on Windows Azure VMs (mimics `nxc smb -M bitlocker`)
+  - Azure equivalent of NetExec BitLocker module
+  - Query BitLocker volume status via Azure VM Run Command
+  - Display encryption percentage, method (XTS-AES 256/128), and protection status
+  - Identify key protector types (TPM, Password, Recovery Key)
+  - Security analysis for unencrypted volumes and disabled protection
+  - Track encryption progress across all Windows VMs
+  - Multi-subscription support with automatic enumeration
+- **Anti-Virus & EDR Enumeration**: Enumerate security products on Azure/Entra devices (mimics `nxc smb -M enum_av`)
+  - Azure equivalent of NetExec's enum_av module
+  - Enumerate antivirus/antimalware products (Microsoft Defender, third-party AV) with **signature version**
+  - Detect Microsoft Defender for Endpoint (MDE) onboarding status via **Windows Protection State API**
+  - Query device compliance policies and security posture via Intune
+  - Identify firewall status (enabled/disabled)
+  - Display encryption status (**BitLocker** via `isEncrypted` property)
+  - Security risk scoring (High/Medium/Low risk devices)
+  - **Device-specific recommendations** - lists exact device names for each security issue
+  - **Windows-specific filtering** - MDE/BitLocker recommendations only for Windows devices
+  - Color-coded output: Green (secure), Yellow (warnings), Red (critical gaps)
+  - Export detailed security reports to CSV, JSON, or HTML
 - **Netexec-Style Output**: Familiar output format for penetration testers and security professionals
 - **Advanced Filtering**: Filter devices by OS, trust type, compliance status, and more
 - **Owner Information**: Optional device owner enumeration with additional API calls
@@ -625,8 +1503,8 @@ AZR         d1f5c8a3b7e...  443    Contoso-Admin-App            [*] (appId:...) 
 
 **Example output:**
 ```powershell
-AZR         admin@contoso.com                  443    Global Administrator          [*] (privileged:True)  # RED
-AZR         user@contoso.com                   443    Directory Readers             [*] (privileged:False)  # GREEN
+AZR         admin@example.com                  443    Global Administrator          [*] (privileged:True)  # RED
+AZR         user@example.com                   443    Directory Readers             [*] (privileged:False)  # GREEN
 ```
 
 #### `groups` - Group Enumeration
@@ -949,6 +1827,7 @@ The following commands use Azure Resource Manager API (Az PowerShell modules) in
 | `network-enum` | Enumerate VNets, NSGs, Public IPs, Load Balancers, Network Interfaces | Az.Accounts, Az.Resources, Az.Network | Reader |
 | `shares-enum` | Enumerate Azure File Shares (mimics nxc --shares) | Az.Accounts, Az.Resources, Az.Storage | Reader + Storage Account Key Operator or Storage File Data SMB Share Reader |
 | `disks-enum` | Enumerate Azure Managed Disks (mimics nxc --disks) | Az.Accounts, Az.Resources, Az.Compute | Reader (Disk Reader or Contributor for full details) |
+| `bitlocker-enum` | Enumerate BitLocker encryption status on Intune devices + Azure VMs (mimics nxc -M bitlocker) | Microsoft.Graph (Intune) + Az.Accounts, Az.Compute, Az.Resources (VMs) | DeviceManagementManagedDevices.Read.All (Intune) + VM Contributor (Azure VMs) |
 
 **Multi-Subscription Support**: All ARM commands automatically enumerate all accessible subscriptions. Use `-SubscriptionId` to target a specific subscription, or `-ResourceGroup` to filter within subscriptions.
 
@@ -1292,6 +2171,15 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 # Azure Network resource enumeration (multi-subscription support) - Azure authentication required
 .\azx.ps1 network-enum [-ResourceGroup <RGName>] [-SubscriptionId <SubId>] [-ExportPath <Path>]
 
+# Azure File Shares enumeration (multi-subscription support) - Azure authentication required
+.\azx.ps1 shares-enum [-ResourceGroup <RGName>] [-SubscriptionId <SubId>] [-SharesFilter <all|READ|WRITE|READ,WRITE>] [-ExportPath <Path>]
+
+# Azure Managed Disks enumeration (multi-subscription support) - Azure authentication required
+.\azx.ps1 disks-enum [-ResourceGroup <RGName>] [-SubscriptionId <SubId>] [-ExportPath <Path>]
+
+# BitLocker enumeration on Windows VMs (multi-subscription support) - Azure authentication required
+.\azx.ps1 bitlocker-enum [-ResourceGroup <RGName>] [-SubscriptionId <SubId>] [-VMFilter <all|running|stopped>] [-ExportPath <Path>]
+
 # Vulnerable target enumeration (like nxc smb --gen-relay-list) - domain auto-detected if not specified
 .\azx.ps1 vuln-list [-Domain <DomainName>] [-NoColor] [-ExportPath <Path>]
 
@@ -1316,7 +2204,7 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 
 | Parameter | Description | Required | Default |
 |-----------|-------------|----------|---------|
-| `Command` | Operation to perform: `hosts`, `tenant`, `users`, `user-profiles`, `groups`, `pass-pol`, `guest`, `vuln-list`, `sessions`, `guest-vuln-scan`, `apps`, `sp-discovery`, `roles`, `help` | Yes | - |
+| `Command` | Operation to perform: `hosts`, `tenant`, `users`, `user-profiles`, `groups`, `local-groups`, `pass-pol`, `guest`, `vuln-list`, `sessions`, `guest-vuln-scan`, `apps`, `sp-discovery`, `roles`, `help` | Yes | - |
 | `Domain` | Domain name for tenant/user/guest discovery. Auto-detected from UPN, username, or environment if not provided | No | Auto-detect |
 | `Filter` | Filter devices by criteria | No | `all` |
 | `ShowOwners` | Display device/group owners (slower) | No | `False` |
@@ -1738,6 +2626,56 @@ Test what groups a guest user can enumerate:
 ```powershell
 # Connect as guest user
 .\azx.ps1 groups -ExportPath guest-groups.json
+```
+
+### Local Groups Enumeration Examples (Administrative Units)
+
+### Example 30a: Basic Local Groups Enumeration (mimics `nxc smb --local-group`)
+Enumerate all Administrative Units in the Azure/Entra tenant:
+```powershell
+.\azx.ps1 local-groups
+
+# 🔴 Privileged Administrative Units are automatically highlighted in RED
+# Look for AUs containing: admin, security, privileged, IT, executive, etc.
+# 🟡 Dynamic membership AUs appear in YELLOW (automated assignment)
+# 🟢 Active AUs with members/roles appear in GREEN
+# 🔵 Standard AUs appear in CYAN
+```
+
+### Example 30b: Local Groups with Member Counts
+Enumerate Administrative Units with member and scoped role counts:
+```powershell
+.\azx.ps1 local-groups -ShowOwners
+```
+
+### Example 30c: Export Local Groups to CSV
+Export Administrative Units enumeration to CSV:
+```powershell
+.\azx.ps1 local-groups -ExportPath admin-units.csv
+```
+
+### Example 30d: Export to JSON with Full Details
+Export with complete Administrative Units information:
+```powershell
+.\azx.ps1 local-groups -ShowOwners -ExportPath admin-units.json
+```
+
+### Example 30e: HTML Report for Administrative Units
+Generate comprehensive HTML report:
+```powershell
+.\azx.ps1 local-groups -ShowOwners -ExportPath admin-units.html
+```
+
+### Example 30f: Administrative Structure Mapping
+Map complete administrative delegation structure:
+```powershell
+# Step 1: Enumerate Administrative Units (scoped boundaries)
+.\azx.ps1 local-groups -ShowOwners -ExportPath admin-units.csv
+
+# Step 2: Enumerate role assignments (privilege levels)
+.\azx.ps1 roles -ExportPath roles.csv
+
+# Step 3: Cross-reference to understand delegation structure
 ```
 
 ### Password Policy Enumeration Examples
@@ -2643,6 +3581,335 @@ Generate comprehensive network security report:
 
 ---
 
+### BitLocker Enumeration Examples (like nxc smb -M bitlocker)
+
+### Example 34-bitlocker-a: Enumerate BitLocker on All Windows Devices
+Enumerate BitLocker encryption status on Intune-managed devices AND Azure VMs:
+```powershell
+.\azx.ps1 bitlocker-enum
+```
+
+**Section 1: Intune-Managed Devices** (laptops, desktops enrolled in Intune)
+- Device encryption status (isEncrypted property)
+- Device compliance state
+- Lists specific devices needing BitLocker
+
+**Section 2: Azure VMs** (IaaS virtual machines in Azure)
+- BitLocker volume status (FullyEncrypted, FullyDecrypted, EncryptionInProgress)
+- Encryption percentage (0-100%)
+- Encryption method (XTS-AES 256/128, AES-CBC 256/128)
+- Protection status (On/Off)
+- Key protector types (TPM, RecoveryPassword, etc.)
+- Volume capacity and lock status
+
+**Example Output (Intune Section):**
+```
+[*] SECTION 1: INTUNE-MANAGED DEVICES
+[+] Found 12 Windows devices in Intune
+
+AZR  5905c343-84f7-  443  LS-LPT-05  [*] BitLocker ENABLED | Compliance: compliant
+AZR  b15754a0-0a2b-  443  LS-MCD-01  [*] NOT ENCRYPTED | Compliance: noncompliant
+
+[*] Intune Device Summary:
+    Total Windows Devices: 12
+    BitLocker Enabled: 11
+    NOT Encrypted: 1
+
+[!] Devices without BitLocker:
+    → LS-MCD-01
+```
+
+### Example 34-bitlocker-b: Target Specific Subscription
+Enumerate BitLocker status in a specific subscription:
+```powershell
+.\azx.ps1 bitlocker-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+```
+
+### Example 34-bitlocker-c: Filter by Resource Group
+Enumerate BitLocker status in a specific resource group:
+```powershell
+.\azx.ps1 bitlocker-enum -ResourceGroup Production-RG
+```
+
+### Example 34-bitlocker-d: Export to CSV for Compliance Reporting
+Generate CSV report of BitLocker encryption status:
+```powershell
+.\azx.ps1 bitlocker-enum -ExportPath bitlocker-compliance.csv
+```
+
+**CSV includes:**
+- **Intune Devices**: Device name, Azure AD Device ID, isEncrypted, compliance state, user, last sync
+- **Azure VMs**: Subscription, resource group, VM name, location, size, power state
+- **Volumes (VMs)**: Mount point, volume status, encryption percentage, encryption method, protection status, key protector types, risk level
+
+### Example 34-bitlocker-e: Filter Running VMs Only (Default)
+Query only running VMs (stopped VMs cannot be queried):
+```powershell
+.\azx.ps1 bitlocker-enum -VMFilter running  # Default behavior
+```
+
+### Example 34-bitlocker-f: Generate JSON Report with Full Details
+Export detailed BitLocker status to JSON:
+```powershell
+.\azx.ps1 bitlocker-enum -ExportPath bitlocker-audit.json
+```
+
+**What bitlocker-enum Checks:**
+
+| Check | Risk Level | Description |
+|-------|-----------|-------------|
+| **Volume Not Encrypted** | HIGH | Volume has no BitLocker encryption (data at rest exposed) |
+| **Protection Disabled** | MEDIUM | Volume encrypted but BitLocker protection is disabled |
+| **Weak Encryption Method** | MEDIUM | Using AES-CBC instead of XTS-AES |
+| **Password-Only Key Protector** | LOW | No TPM protection, password-only key protector |
+| **Encryption In Progress** | INFO | Volume is currently being encrypted |
+
+**Security Recommendations:**
+- Enable BitLocker on all unencrypted volumes (HIGH PRIORITY)
+- Use strong encryption methods (XTS-AES 256)
+- Store recovery keys in Azure Key Vault
+- Enable automatic BitLocker encryption via Azure Policy
+- Consider using Azure Disk Encryption (ADE) for platform-level encryption
+- Implement TPM-based key protectors instead of password-only
+
+**NetExec Comparison:**
+```bash
+# NetExec (On-Premises)
+nxc smb 192.168.1.0/24 -u administrator -p 'Password1' -M bitlocker
+
+# AZexec (Azure)
+.\azx.ps1 bitlocker-enum
+```
+
+Both provide the same encryption status information for Windows systems.
+
+---
+
+### Anti-Virus & EDR Enumeration Examples (like nxc smb -M enum_av)
+
+### Example 35-av-a: Enumerate Security Products on All Devices
+Enumerate antivirus and EDR products across all Azure/Entra devices:
+```powershell
+.\azx.ps1 av-enum
+```
+
+**What's Enumerated:**
+- Antivirus/Antimalware products (Microsoft Defender, third-party AV)
+- Antivirus status (enabled/disabled) and version information
+- EDR/XDR solutions (Microsoft Defender for Endpoint)
+- MDE onboarding status (Onboarded, Not Onboarded, Healthy, Unhealthy)
+- Firewall status (enabled/disabled)
+- Encryption status (BitLocker enabled/disabled)
+- Device compliance state (Compliant/Non-Compliant)
+- Security risk scores (High/Medium/Low)
+
+**Example Output:**
+```
+AZR             a1b2c3d4-5678...    443    DESKTOP-WIN10-PROD             [*] AV:Microsoft Defender(enabled) v1.403.3761.0 | EDR:Microsoft Defender for Endpoint(enabled) | MDE:Onboarded(healthy) | FW:Enabled | Encryption:BitLocker Enabled
+AZR             f9e8d7c6-5432...    443    LAPTOP-FINANCE-01              [*] AV:Unknown(disabled) | EDR:None | MDE:Not Onboarded | FW:DISABLED | Encryption:Unknown
+AZR             1a2b3c4d-9876...    443    SERVER-IT-MGMT                 [*] AV:Microsoft Defender(enabled) v1.403.3761.0 | EDR:Microsoft Defender for Endpoint(enabled) | MDE:Onboarded(unhealthy) | FW:Enabled | Encryption:BitLocker Enabled
+```
+
+**Color Coding:**
+- 🟢 **Green**: Good security posture (AV enabled, MDE onboarded, firewall enabled)
+- 🟡 **Yellow**: Warnings (AV enabled but MDE unhealthy or firewall disabled)
+- 🔴 **Red**: Critical security gaps (No AV, no MDE, firewall disabled)
+
+### Example 35-av-b: Filter Windows Devices Only
+Focus on Windows devices (most relevant for AV/EDR):
+```powershell
+.\azx.ps1 av-enum -Filter windows
+```
+
+### Example 35-av-c: Identify Non-Compliant Devices
+Find devices with security compliance issues:
+```powershell
+.\azx.ps1 av-enum -Filter noncompliant
+```
+
+### Example 35-av-d: Export Security Posture Report to CSV
+Generate CSV report of all device security posture:
+```powershell
+.\azx.ps1 av-enum -ExportPath security-posture.csv
+```
+
+**CSV includes:**
+- Device ID, name, OS, OS version, trust type
+- Antivirus product, status, version
+- EDR product and status
+- MDE onboarding status and health
+- Firewall status
+- Encryption status
+- Compliance state
+- Risk score (High/Medium/Low)
+
+### Example 35-av-e: Generate HTML Security Dashboard
+Create comprehensive HTML report with statistics and risk analysis:
+```powershell
+.\azx.ps1 av-enum -ExportPath security-dashboard.html
+```
+
+**HTML report includes:**
+- Visual statistics dashboard
+- Security posture summary
+- Color-coded risk indicators
+- Device-by-device security details
+- Actionable security recommendations
+
+### Example 35-av-f: Identify Critical Security Gaps
+Find devices with disabled antivirus or firewall:
+```powershell
+.\azx.ps1 av-enum | Out-File security-gaps.txt
+# Review output for RED colored entries (critical security gaps)
+```
+
+**What av-enum Checks:**
+
+| Check | Risk Level | Description |
+|-------|-----------|-------------|
+| **Antivirus Disabled** | HIGH | No active antivirus protection (malware exposure) |
+| **Firewall Disabled** | HIGH | Windows Firewall disabled (network exposure) |
+| **MDE Not Onboarded** | MEDIUM | Not enrolled in Microsoft Defender for Endpoint |
+| **MDE Unhealthy** | MEDIUM | MDE onboarded but health check failed |
+| **No Encryption** | MEDIUM | BitLocker not enabled (data at rest exposure) |
+| **Device Non-Compliant** | MEDIUM | Failed compliance policy checks |
+| **High Risk Score** | HIGH | Microsoft 365 Defender assigned high risk score |
+
+**Summary Statistics Example:**
+```
+[*] Security Posture Summary:
+    Total Devices: 22
+    Microsoft Defender for Endpoint (MDE):
+      • Onboarded: 12
+      • Healthy: 12
+    Antivirus/Antimalware:
+      • Enabled: 18
+      • DISABLED: 4
+    Firewall:
+      • Enabled: 0
+      • Disabled: 0
+    Encryption:
+      • Encrypted: 17
+
+[*] Security Recommendations:
+    [!] 4 devices have DISABLED antivirus - HIGH RISK!
+        → gkarpouzas_AndroidForWork_5/19/2025_5:54 AM
+        → Thanasis's MacBook Pro
+        → samsungSM-S908B
+        → DESKTOP-PBLFO5I
+    [!] 1 Windows devices NOT onboarded to Microsoft Defender for Endpoint
+        → DESKTOP-PBLFO5I
+        Consider onboarding to MDE for enhanced threat protection
+    [!] 2 Windows devices NOT encrypted (BitLocker)
+        → LS-MCD-01
+        → DESKTOP-PBLFO5I
+        Enable BitLocker to protect data at rest
+```
+
+**Note:** MDE and BitLocker recommendations only list Windows devices since these are Windows-specific security features. Non-Windows devices (iOS, Android, macOS) are excluded from these recommendations.
+
+**Security Recommendations:**
+- Enable antivirus on all devices (HIGH PRIORITY)
+- Onboard all devices to Microsoft Defender for Endpoint (MDE)
+- Enable Windows Firewall on all devices
+- Enable BitLocker encryption for data at rest protection
+- Implement device compliance policies via Microsoft Intune
+- Configure automatic threat remediation in MDE
+- Review and remediate high-risk devices immediately
+
+**Required Permissions:**
+```powershell
+# Minimum (basic device enumeration):
+Device.Read.All
+
+# Recommended (full security posture):
+Device.Read.All
+DeviceManagementManagedDevices.Read.All       # For Intune data, BitLocker status (requires admin consent)
+DeviceManagementConfiguration.Read.All        # For device compliance, encryption policies
+SecurityEvents.Read.All                        # For MDE status (requires admin consent)
+```
+
+**Detection Methods Used:**
+- **Windows Protection State API** (`/deviceManagement/managedDevices/{id}/windowsProtectionState`) - Most reliable for Intune-enrolled devices
+- **Microsoft 365 Defender API** - For advanced MDE health status
+- **Intune Managed Device Properties** - For `isEncrypted` (BitLocker) status
+
+**Note:** Some permissions require **admin consent**. If you don't see MDE or BitLocker data, an admin may need to grant consent for the application.
+
+**NetExec Comparison:**
+```bash
+# NetExec (On-Premises)
+nxc smb 192.168.1.0/24 -u administrator -p 'Password1' -M enum_av
+
+# Output example:
+# SMB  192.168.1.10  445  DC01  [*] Windows Defender: enabled, updated
+# SMB  192.168.1.20  445  WS01  [*] Kaspersky Endpoint Security: enabled
+# SMB  192.168.1.30  445  WS02  [!] No antivirus detected!
+
+# AZexec (Azure)
+.\azx.ps1 av-enum
+
+# Output example:
+# AZR  7b67c060-eb92-4  443  LS-LPT-06  [*] AV:Microsoft Defender(enabled) v1.443.147.0 | EDR:Microsoft Defender for Endpoint(enabled) | MDE:Onboarded(healthy) | Encryption:BitLocker Enabled
+# AZR  5b397631-d32c-4  443  DESKTOP-PBLFO5I  [*] AV:Unknown(disabled) | MDE:Not Onboarded
+# AZR  53d543a0-b709-4  443  Thanasis's MacBook Pro  [*] AV:Unknown(disabled) | MDE:Not Onboarded
+```
+
+Both enumerate security products, but AZexec provides additional cloud-native security information:
+- Microsoft Defender for Endpoint onboarding status
+- Device compliance policies from Intune
+- Security risk scores from Microsoft 365 Defender
+- Encryption status via device health attestation
+
+**Attack Scenarios:**
+
+**Scenario 1: Identify Vulnerable Targets**
+```powershell
+# Find devices without proper security controls
+.\azx.ps1 av-enum -Filter noncompliant -ExportPath vulnerable-targets.csv
+
+# Review CSV for:
+# - Disabled antivirus (easy malware deployment)
+# - No MDE onboarding (no EDR detection)
+# - Disabled firewall (easy lateral movement)
+# - No encryption (credential theft if device stolen)
+```
+
+**Scenario 2: Map Security Coverage**
+```powershell
+# Generate comprehensive security report
+.\azx.ps1 av-enum -ExportPath security-map.html
+
+# Use HTML report to:
+# - Identify security gaps across the organization
+# - Prioritize remediation efforts (HIGH risk devices first)
+# - Track security posture improvement over time
+```
+
+**Scenario 3: Pre-Attack Reconnaissance**
+```powershell
+# Identify targets with weak security posture for initial access
+.\azx.ps1 av-enum | Select-String "DISABLED"
+
+# Look for:
+# - AV disabled (phishing/malware delivery targets)
+# - FW disabled (network exploitation targets)
+# - MDE not onboarded (no EDR alerting)
+```
+
+**Scenario 4: Post-Compromise Coverage Assessment**
+```powershell
+# After gaining access, assess detection capabilities
+.\azx.ps1 av-enum -ExportPath security-coverage.json
+
+# Analyze:
+# - Which devices have EDR (avoid or disable)
+# - Which devices lack security controls (easy targets)
+# - Overall security maturity of the environment
+```
+
+---
+
 ### Vulnerable Target Enumeration Examples (like nxc smb --gen-relay-list)
 
 ### Example 29: Basic Vulnerability Enumeration (Auto-Detect Domain)
@@ -2960,7 +4227,7 @@ AZR         a1b2c3d4e5f6    443    Corporate Automation SPN               [*] (a
         [-] Microsoft Graph : User.Read Group.Read.All (ConsentType: AllPrincipals)
         [-] Office 365 SharePoint Online : AllSites.Read (ConsentType: AllPrincipals)
     [+] Owners:
-        [-] John Doe [user] (john.doe@contoso.com)
+        [-] John Doe [user] (john.doe@example.com)
 
 AZR         f6e5d4c3b2a1    443    Legacy Service Principal               [*] (appId:98765432-4321-4321-4321-210987654321) (type:Application) (status:Enabled) (pwdCreds:1) (certCreds:1) (appRoles:0) (delegated:0) (owners:0)
 
@@ -3024,13 +4291,29 @@ AZR         1234567890ab    443    High-Risk Admin SPN                    [*] (a
 ```
 AZR         <TenantName>                         443    [*] Password Policy Information
 
+    [*] Azure AD Default Password Requirements (Always Enforced):
+        Minimum Length:            8 characters
+        Maximum Length:            256 characters
+        Complexity:                3 of 4 character types (upper, lower, numbers, symbols)
+        Banned Passwords:          Global banned password list (enforced)
+        Common Password Check:     Fuzzy matching enabled
+        Contextual Check:          Username/display name check enabled
+
     [+] Password Validity Period:     90 days
     [+] Password Notification Window: 14 days
     [+] Verified Domains:             2 domain(s)
         - contoso.com (Default)
         - contoso.onmicrosoft.com (Initial)
     [+] Technical Notification Emails: 1
-        - admin@contoso.com
+        - admin@example.com
+
+[*] Retrieving Smart Lockout Settings (Account Protection)...
+[+] Smart Lockout Configuration:
+    [*] Lockout Threshold:            10 failed attempts (Azure AD default)
+    [*] Lockout Duration:             60 seconds initial, increases with repeated attempts
+    [*] Lockout Counter Reset:        After successful sign-in
+    [*] Account Lockout Detection:    Automated based on sign-in patterns
+    [*] Familiar Location Detection:  Enabled (sign-ins from familiar IPs are less restricted)
 
     [*] MFA Registration Campaign:
         State: enabled
@@ -3043,6 +4326,8 @@ AZR         <TenantName>                         443    [*] Password Policy Info
 
 [+] Security Defaults: ENABLED
     [*] This enforces MFA for administrators and users when needed
+    [*] Blocks legacy authentication protocols
+    [*] Protects privileged activities (Azure portal, PowerShell, etc.)
 
 [+] Found 5 Conditional Access Policies
 
@@ -3058,6 +4343,22 @@ AZR         <TenantName>                         443    [*] Password Policy Info
         Enabled: 3
         Report-Only: 1
         Disabled: 1
+
+[*] ========================================
+[*] Password Policy Summary (NetExec Style)
+[*] ========================================
+[+] Minimum Password Length:     8 characters (Azure AD enforced)
+[+] Password Complexity:         3 of 4 character types required
+[+] Password History:            N/A (Azure AD cloud-only)
+[+] Lockout Threshold:           10 failed attempts (Smart Lockout)
+[+] Lockout Duration:            60 seconds (increases with repeated attempts)
+[+] Lockout Observation Window:  Dynamic based on sign-in patterns
+[+] Maximum Password Age:        90 days
+[+] Minimum Password Age:        N/A (Azure AD cloud-only)
+[+] Banned Password List:        Enabled (Global + Custom if configured)
+[+] Smart Lockout:               Enabled (Azure AD default)
+[+] Security Defaults:           Enabled (MFA enforced)
+[+] Conditional Access:          5 policies configured
 ```
 
 **Color Coding:**
@@ -3066,13 +4367,40 @@ AZR         <TenantName>                         443    [*] Password Policy Info
 - **Cyan**: Informational (policy details, settings)
 - **Dark Gray**: Technical details (authentication methods, domains)
 
-**Information Retrieved:**
+**Information Retrieved (Enhanced - NetExec Style):**
+- **Default Password Requirements**: Minimum/maximum length, complexity, banned passwords (always enforced by Azure AD)
+- **Smart Lockout Settings**: Lockout threshold (10 attempts), duration (60s+), familiar location detection
 - **Password Policies**: Expiration periods, notification windows
 - **Domain Configuration**: Verified domains, default domains
 - **Authentication Methods**: Enabled MFA methods (Authenticator, SMS, FIDO2, etc.)
-- **Security Defaults**: Whether baseline security is enabled
+- **Security Defaults**: Whether baseline security is enabled (MFA, legacy auth blocking)
 - **Conditional Access Policies**: Policies enforcing MFA, device compliance, location restrictions
 - **Technical Contacts**: Admin and security notification emails
+- **NetExec-Style Summary**: Formatted output similar to `nxc smb --pass-pol` with all key password policy settings
+
+**Azure AD vs On-Premises Password Policy Comparison:**
+
+| Policy Setting | On-Premises AD (NetExec) | Azure AD (AZexec) |
+|----------------|--------------------------|-------------------|
+| **Minimum Password Length** | Configurable (default: 7) | **8 characters (enforced)** |
+| **Password Complexity** | Configurable (default: enabled) | **3 of 4 character types (enforced)** |
+| **Password History** | Configurable (default: 24) | N/A (cloud-only, no history tracking) |
+| **Lockout Threshold** | Configurable (default: varies) | **10 failed attempts (Smart Lockout)** |
+| **Lockout Duration** | Configurable (default: 30 min) | **60 seconds (increases with repeated attempts)** |
+| **Lockout Observation Window** | Configurable (default: 30 min) | **Dynamic (based on sign-in patterns)** |
+| **Maximum Password Age** | Configurable (default: 42 days) | Configurable (default: no expiration) |
+| **Minimum Password Age** | Configurable (default: 1 day) | N/A (cloud-only) |
+| **Banned Passwords** | Not available | **Global banned list + custom words (enforced)** |
+| **Common Password Check** | Not available | **Fuzzy matching (enforced)** |
+| **Contextual Check** | Not available | **Username/display name check (enforced)** |
+| **Familiar Location Detection** | Not available | **Enabled (less restrictive for known IPs)** |
+
+**Key Differences:**
+- Azure AD enforces stronger baseline password requirements (min 8 chars, complexity, banned passwords)
+- Azure AD Smart Lockout is more intelligent (familiar location detection, dynamic observation window)
+- Azure AD doesn't support password history (cloud-only limitation)
+- Azure AD's lockout duration increases with repeated attempts (adaptive security)
+- Azure AD banned password list protects against common weak passwords globally
 
 ### Guest Login Enumeration Output (mimics `nxc smb -u 'a' -p ''`)
 
@@ -3937,6 +5265,9 @@ Simply change the file extension from `.csv` or `.json` to `.html`:
 # User profiles HTML report
 .\azx.ps1 user-profiles -ExportPath users.html
 
+# RID bruteforce HTML report (Azure equivalent)
+.\azx.ps1 rid-brute -ExportPath users-rid-brute.html
+
 # Service principal discovery HTML report
 .\azx.ps1 sp-discovery -ExportPath service-principals.html
 
@@ -4492,10 +5823,10 @@ This tool is provided for **legitimate security testing, research, and administr
 ┌─────────────────────────────────────────────────────────────┐
 │  PHASE 3: GUEST ENUMERATION (Low-Noise Reconnaissance)      │
 ├─────────────────────────────────────────────────────────────┤
+│  .\azx.ps1 user-profiles -ExportPath users.csv             │
 │  .\azx.ps1 hosts -ShowOwners -ExportPath loot.json         │
 │  .\azx.ps1 groups -ExportPath groups.json                   │
 │  .\azx.ps1 pass-pol -ExportPath policy.json                 │
-│  Get-MgUser -All | Export-Csv users.csv                     │
 │                                                              │
 │  Detection Risk: LOW (appears as normal collaboration)      │
 └──────────────────────┬──────────────────────────────────────┘
@@ -4527,8 +5858,9 @@ This tool is provided for **legitimate security testing, research, and administr
 | Objective | Command | Authentication | NetExec Equivalent |
 |-----------|---------|----------------|--------------------|
 | Discover tenant | `.\azx.ps1 tenant -Domain target.com` | ❌ None | `nxc smb --enum` |
-| Validate usernames | `.\azx.ps1 users -Domain target.com -CommonUsernames` | ❌ None | `nxc smb --users` |
-| **Enumerate user profiles** | `.\azx.ps1 user-profiles -ExportPath users.csv` | ✅ Guest/Member | `nxc smb --rid-brute` |
+| Validate usernames | `.\azx.ps1 users -Domain target.com -CommonUsernames` | ❌ None | `nxc smb --users` (unauthenticated) |
+| **Enumerate domain users** | `.\azx.ps1 user-profiles -ExportPath users.csv` | ✅ Guest/Member | **`nxc smb/ldap <target> -u <user> -p <pass> --users`** |
+| **Enumerate user profiles (RID brute)** | `.\azx.ps1 rid-brute -ExportPath users.csv` | ✅ Guest/Member | `nxc smb --rid-brute` |
 | **Test null login** | `.\azx.ps1 guest -Domain target.com -Username user -Password ''` | ❌ None | **`nxc smb -u 'a' -p ''`** |
 | **Password spray** | `.\azx.ps1 guest -Domain target.com -UserFile users.txt -Password 'Pass123'` | ❌ None | `nxc smb -u users.txt -p 'Pass123'` |
 | **Username enum + spray** | See [Complete Password Spray Attack](#complete-password-spray-attack-workflow) | ❌ None | `nxc smb -u users.txt -p 'Pass123'` |

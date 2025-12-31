@@ -8,7 +8,9 @@ $commands = @(
     "tenant",
     "users",
     "user-profiles",
+    "rid-brute",
     "groups",
+    "local-groups",
     "pass-pol",
     "guest",
     "vuln-list",
@@ -24,6 +26,8 @@ $commands = @(
     "network-enum",
     "shares-enum",
     "disks-enum",
+    "bitlocker-enum",
+    "av-enum",
     "help"
 )
 

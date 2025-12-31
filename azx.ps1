@@ -39,11 +39,19 @@
       * Security posture assessment
     - Username enumeration (no authentication required, mimics nxc smb --users)
     - Group enumeration from Azure/Entra ID (mimics nxc smb --groups)
+    - Local groups enumeration via Administrative Units (mimics nxc smb --local-group)
+      * Enumerate Azure AD Administrative Units (scoped administration)
+      * Display membership types (Assigned vs Dynamic)
+      * Show member counts and scoped role assignments
+      * Identify privileged administrative boundaries
     - Password policy enumeration (mimics nxc smb --pass-pol)
-      * Password expiration policies
-      * MFA/authentication methods
-      * Security defaults status
-      * Conditional access policies
+      * Azure AD default password requirements (min/max length, complexity, banned passwords)
+      * Smart lockout settings (lockout threshold, duration, familiar location detection)
+      * Password expiration policies (validity period, notification windows)
+      * MFA/authentication methods (Authenticator, SMS, FIDO2, etc.)
+      * Security defaults status (MFA enforcement, legacy auth blocking)
+      * Conditional access policies (MFA, device compliance, location restrictions)
+      * NetExec-style summary with all key password policy settings
     - Guest login enumeration (mimics nxc smb -u 'a' -p '')
       * Test if tenant accepts external/B2B authentication
       * Test credentials with empty/null passwords
@@ -115,6 +123,12 @@
       * Filter by access level (READ, WRITE, READ,WRITE)
       * Show quotas, access tiers, and enabled protocols (SMB/NFS)
       * Multi-subscription support with automatic enumeration
+    - Antivirus/EDR enumeration (mimics nxc smb -M enum_av)
+      * Enumerate antivirus products (Microsoft Defender, etc.)
+      * Detect Microsoft Defender for Endpoint (MDE) onboarding status
+      * Query device compliance and security posture
+      * Identify firewall status and encryption configuration
+      * Security risk assessment and recommendations
     - Netexec-style formatted output
     - Filter by OS, trust type, compliance status
     - Device owner enumeration
@@ -127,7 +141,8 @@
     - hosts: Enumerate devices from Azure/Entra ID
     - tenant: Discover tenant configuration and endpoints
     - users: Enumerate username existence (no authentication required)
-    - user-profiles: Enumerate user profiles with authentication (requires User.Read.All)
+    - user-profiles: Enumerate domain users with full details (authentication required, Azure equivalent of nxc smb/ldap --users)
+    - rid-brute: Enumerate users by bruteforcing RID (Azure equivalent, alias for user-profiles)
     - groups: Enumerate Azure Entra ID groups (authentication required)
     - pass-pol: Enumerate password policies and security defaults (authentication required)
     - guest: Test guest/external authentication (similar to nxc smb -u 'a' -p '')
@@ -144,6 +159,9 @@
     - network-enum: Enumerate Azure Network resources (VNets, NSGs, Public IPs, Load Balancers, Network Interfaces) (multi-subscription support)
     - shares-enum: Enumerate Azure File Shares with access permissions (mimics nxc smb --shares) (multi-subscription support)
     - disks-enum: Enumerate Azure Managed Disks with encryption and security configurations (mimics nxc smb --disks) (multi-subscription support)
+    - bitlocker-enum: Enumerate BitLocker encryption status on Windows Azure VMs (mimics nxc smb -M bitlocker) (multi-subscription support)
+    - local-groups: Enumerate Azure AD Administrative Units (mimics nxc smb --local-group) (authentication required)
+    - av-enum: Enumerate Anti-Virus and EDR products on Azure/Entra devices (mimics nxc smb -M enum_av) (authentication required)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -279,15 +297,23 @@
 
 .EXAMPLE
     .\azx.ps1 user-profiles
-    Enumerate all user profiles in the Azure/Entra tenant (authenticated)
+    Enumerate all domain users in the Azure/Entra tenant (authenticated, Azure equivalent of nxc smb/ldap --users)
 
 .EXAMPLE
     .\azx.ps1 user-profiles -ExportPath users.csv
-    Enumerate user profiles and export to CSV
+    Enumerate domain users and export to CSV (like nxc ldap --users-export users.csv)
 
 .EXAMPLE
     .\azx.ps1 user-profiles -ExportPath users.json
-    Enumerate user profiles and export to JSON with full details
+    Enumerate domain users with full details exported to JSON
+
+.EXAMPLE
+    .\azx.ps1 rid-brute
+    Enumerate users by bruteforcing RID (Azure equivalent - enumerates all users via Graph API)
+
+.EXAMPLE
+    .\azx.ps1 rid-brute -ExportPath users.csv
+    Enumerate users via RID bruteforce method and export to CSV (Azure equivalent)
 
 .EXAMPLE
     .\azx.ps1 groups
@@ -525,9 +551,57 @@
     .\azx.ps1 disks-enum -ExportPath disks.json
     Enumerate Managed Disks across all subscriptions and export to JSON with full details
 
+.EXAMPLE
+    .\azx.ps1 bitlocker-enum
+    Enumerate BitLocker encryption status on all Windows Azure VMs across subscriptions (similar to nxc smb -M bitlocker)
+
+.EXAMPLE
+    .\azx.ps1 bitlocker-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+    Enumerate BitLocker status in a specific subscription
+
+.EXAMPLE
+    .\azx.ps1 bitlocker-enum -ResourceGroup Production-RG -VMFilter running
+    Enumerate BitLocker status on running VMs in a specific resource group
+
+.EXAMPLE
+    .\azx.ps1 bitlocker-enum -ExportPath bitlocker-status.csv
+    Enumerate BitLocker status and export to CSV with volume encryption details
+
+.EXAMPLE
+    .\azx.ps1 local-groups
+    Enumerate Azure AD Administrative Units (local groups equivalent)
+
+.EXAMPLE
+    .\azx.ps1 local-groups -ShowOwners
+    Enumerate Administrative Units with member counts and scoped role counts
+
+.EXAMPLE
+    .\azx.ps1 local-groups -ExportPath admin-units.csv
+    Enumerate Administrative Units and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 local-groups -ExportPath admin-units.json
+    Enumerate Administrative Units with full details exported to JSON
+
+.EXAMPLE
+    .\azx.ps1 av-enum
+    Enumerate antivirus and EDR products on all devices (similar to nxc smb -M enum_av)
+
+.EXAMPLE
+    .\azx.ps1 av-enum -Filter windows
+    Enumerate security posture only on Windows devices
+
+.EXAMPLE
+    .\azx.ps1 av-enum -Filter noncompliant -ExportPath security-gaps.csv
+    Identify non-compliant devices and their security gaps
+
+.EXAMPLE
+    .\azx.ps1 av-enum -ExportPath security-report.html
+    Generate comprehensive HTML security report with statistics
+
 .NOTES
     Requires PowerShell 7+
-    Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies' commands)
+    Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'local-groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies' commands)
     Requires Az PowerShell module (for ARM-based commands: 'vm-loggedon', 'storage-enum', 'keyvault-enum', 'network-enum', 'shares-enum')
     Requires appropriate Azure/Entra permissions (for authenticated commands)
     The 'tenant' and 'users' commands do not require authentication
@@ -536,6 +610,8 @@
     The 'sp-discovery' command requires Application.Read.All and Directory.Read.All permissions (add -IncludeWritePermissions for AppRoleAssignment.ReadWrite.All)
     The 'roles' command requires RoleManagement.Read.Directory and Directory.Read.All permissions (PIM requires RoleEligibilitySchedule.Read.Directory)
     The 'ca-policies' command requires Policy.Read.All permission (guest users cannot access conditional access policies)
+    The 'local-groups' command requires AdministrativeUnit.Read.All or Directory.Read.All permissions (Azure AD Premium P1/P2 required)
+    The 'local-groups' command is the Azure equivalent of NetExec's --local-group (enumerates Administrative Units instead of local groups)
     The 'vm-loggedon' command requires Azure authentication and 'Virtual Machine Contributor' role or 'Reader' + 'Virtual Machine Command Executor' role
     The 'vm-loggedon' command is the Azure equivalent of NetExec's Workstation Service (wkssvc) enumeration
     
@@ -546,9 +622,12 @@
     - 'network-enum': Requires Az.Accounts, Az.Resources, Az.Network (Reader role required)
     - 'shares-enum': Requires Az.Accounts, Az.Resources, Az.Storage (Reader + Storage Account Key Operator or Storage File Data SMB Share Reader)
     - 'disks-enum': Requires Az.Accounts, Az.Resources, Az.Compute (Reader role required)
+    - 'bitlocker-enum': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
     
     The 'shares-enum' command is the Azure equivalent of NetExec's --shares command for SMB share enumeration
     The 'disks-enum' command is the Azure equivalent of NetExec's --disks command for disk enumeration
+    The 'bitlocker-enum' command is the Azure equivalent of NetExec's -M bitlocker module for BitLocker encryption status
+    The 'av-enum' command is the Azure equivalent of NetExec's -M enum_av module for antivirus/EDR enumeration
     
     All ARM-based commands support multi-subscription enumeration:
     - By default, all accessible subscriptions are enumerated automatically
@@ -561,7 +640,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -634,6 +713,7 @@ $FunctionsPath = Join-Path $PSScriptRoot "Functions"
 . "$FunctionsPath\Devices.ps1"
 . "$FunctionsPath\Users.ps1"
 . "$FunctionsPath\Groups.ps1"
+. "$FunctionsPath\AdministrativeUnits.ps1"
 . "$FunctionsPath\Applications.ps1"
 . "$FunctionsPath\ServicePrincipals.ps1"
 . "$FunctionsPath\Roles.ps1"
@@ -642,6 +722,7 @@ $FunctionsPath = Join-Path $PSScriptRoot "Functions"
 . "$FunctionsPath\Sessions.ps1"
 . "$FunctionsPath\Tenant.ps1"
 . "$FunctionsPath\Vulnerabilities.ps1"
+. "$FunctionsPath\Security.ps1"
 . "$FunctionsPath\AzureRM.ps1"
 
 # ============================================
@@ -653,13 +734,15 @@ Show-Banner
 # For tenant discovery and user enumeration, we don't need Graph module
 # For authenticated commands (hosts, groups, pass-pol, sessions), we need Graph module
 # vuln-list handles authentication internally (hybrid unauthenticated + authenticated)
-if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "roles", "apps", "sp-discovery", "ca-policies")) {
+# rid-brute is an alias for user-profiles (Azure equivalent of RID bruteforcing)
+if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "rid-brute", "roles", "apps", "sp-discovery", "ca-policies", "local-groups")) {
     Initialize-GraphModule
     
     # Determine required scopes based on command
     $requiredScopes = switch ($Command) {
         "hosts" { "Device.Read.All" }
         "user-profiles" { "User.Read.All,Directory.Read.All,AuditLog.Read.All" }
+        "rid-brute" { "User.Read.All,Directory.Read.All,AuditLog.Read.All" }
         "groups" { "Group.Read.All,Directory.Read.All" }
         "pass-pol" { "Organization.Read.All,Directory.Read.All,Policy.Read.All" }
         "sessions" { "AuditLog.Read.All,Directory.Read.All" }
@@ -667,6 +750,7 @@ if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "
         "guest-vuln-scan" { "User.Read.All,Group.Read.All,Device.Read.All,Application.Read.All,Directory.Read.All,Policy.Read.All" }
         "apps" { "Application.Read.All,Directory.Read.All" }
         "ca-policies" { "Policy.Read.All,Directory.Read.All" }
+        "local-groups" { "AdministrativeUnit.Read.All,Directory.Read.All" }
         "sp-discovery" { 
             if ($IncludeWritePermissions) {
                 "Application.Read.All,Directory.Read.All,AppRoleAssignment.ReadWrite.All"
@@ -680,13 +764,31 @@ if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "
     Connect-GraphAPI -Scopes $requiredScopes
 }
 
-# vuln-list and guest-vuln-scan require Graph module but handle connection internally
+# vuln-list, guest-vuln-scan, and av-enum require Graph module but handle connection internally
 if ($Command -eq "vuln-list" -or $Command -eq "guest-vuln-scan") {
     Initialize-GraphModule
 }
 
+# av-enum requires Graph module with specific permissions
+if ($Command -eq "av-enum") {
+    Initialize-GraphModule
+    
+    # av-enum needs Device.Read.All at minimum, plus MDE/Intune permissions for full data
+    # DeviceManagementConfiguration.Read.All is needed for some encryption/compliance data
+    $requiredScopes = "Device.Read.All,SecurityEvents.Read.All,DeviceManagementManagedDevices.Read.All,DeviceManagementConfiguration.Read.All"
+    
+    Write-ColorOutput -Message "`n[*] Connecting to Microsoft Graph for Security Enumeration..." -Color "Yellow"
+    Write-ColorOutput -Message "[*] Permissions requested (some require admin consent):" -Color "Cyan"
+    Write-ColorOutput -Message "    • Device.Read.All (required - device enumeration)" -Color "White"
+    Write-ColorOutput -Message "    • DeviceManagementManagedDevices.Read.All (Intune device data, BitLocker status)" -Color "White"
+    Write-ColorOutput -Message "    • DeviceManagementConfiguration.Read.All (device compliance, encryption policies)" -Color "White"
+    Write-ColorOutput -Message "    • SecurityEvents.Read.All (MDE/Defender status - requires admin consent)`n" -Color "Gray"
+    
+    Connect-GraphAPI -Scopes $requiredScopes
+}
+
 # ARM-based commands use Azure Resource Manager (Az modules) with RBAC, not Graph API
-if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum")) {
+if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum")) {
     Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
     Write-ColorOutput -Message "[*] AZURE RESOURCE MANAGER - RBAC REQUIREMENTS" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
@@ -729,6 +831,14 @@ if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum
             Write-ColorOutput -Message "    Minimum: Reader role (to list managed disks)" -Color "Gray"
             Write-ColorOutput -Message "    Recommended: Disk Reader or Contributor (for full details)`n" -Color "Gray"
         }
+        "bitlocker-enum" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for BitLocker Enumeration:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Option 1 (Recommended - Minimal Permissions):" -Color "White"
+            Write-ColorOutput -Message "      • Reader role (to list VMs)" -Color "Gray"
+            Write-ColorOutput -Message "      • Virtual Machine Command Executor role (to query BitLocker status)`n" -Color "Gray"
+            Write-ColorOutput -Message "    Option 2 (Common - Full VM Access):" -Color "White"
+            Write-ColorOutput -Message "      • Virtual Machine Contributor role`n" -Color "Gray"
+        }
     }
     
     Write-ColorOutput -Message "[*] Role assignment scope: Subscription or Resource Group level" -Color "Yellow"
@@ -749,6 +859,13 @@ switch ($Command) {
         Invoke-UserEnumeration -Domain $Domain -Username $Username -UserFile $UserFile -CommonUsernames $CommonUsernames -ExportPath $ExportPath
     }
     "user-profiles" {
+        Invoke-UserProfileEnumeration -ExportPath $ExportPath
+    }
+    "rid-brute" {
+        # Azure equivalent of RID bruteforcing - enumerate all users via Graph API
+        Write-ColorOutput -Message "`n[*] RID Bruteforce Mode (Azure Equivalent)" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Note: Azure AD uses GUIDs instead of sequential RIDs" -Color "Cyan"
+        Write-ColorOutput -Message "[*] Enumerating all users via Microsoft Graph API...`n" -Color "Cyan"
         Invoke-UserProfileEnumeration -ExportPath $ExportPath
     }
     "groups" {
@@ -799,12 +916,21 @@ switch ($Command) {
     "disks-enum" {
         Invoke-DisksEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -ExportPath $ExportPath
     }
+    "bitlocker-enum" {
+        Invoke-BitLockerEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -VMFilter $VMFilter -ExportPath $ExportPath
+    }
+    "local-groups" {
+        Invoke-AdministrativeUnitsEnumeration -ShowMembers $ShowOwners -ExportPath $ExportPath
+    }
+    "av-enum" {
+        Invoke-SecurityEnumeration -Filter $Filter -ExportPath $ExportPath
+    }
     "help" {
         Show-Help
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, help" -Color "Yellow"
     }
 }
 

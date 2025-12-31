@@ -50,6 +50,7 @@ function Show-Help {
         @{Name="tenant"; Auth="Not Required"; Description="Discover tenant configuration and endpoints"}
         @{Name="users"; Auth="Not Required"; Description="Enumerate username existence (no authentication)"}
         @{Name="user-profiles"; Auth="Required"; Description="Enumerate user profiles with full details"}
+        @{Name="rid-brute"; Auth="Required"; Description="Enumerate users by RID bruteforce (Azure equivalent, mimics nxc smb --rid-brute)"}
         @{Name="groups"; Auth="Required"; Description="Enumerate Azure Entra ID groups"}
         @{Name="pass-pol"; Auth="Required"; Description="Enumerate password policies and security defaults"}
         @{Name="guest"; Auth="Not Required"; Description="Test guest/external authentication (mimics nxc smb -u 'a' -p '')"}
@@ -65,6 +66,9 @@ function Show-Help {
         @{Name="keyvault-enum"; Auth="Required"; Description="Enumerate Azure Key Vaults (multi-subscription)"}
         @{Name="network-enum"; Auth="Required"; Description="Enumerate Azure Network resources (multi-subscription)"}
         @{Name="shares-enum"; Auth="Required"; Description="Enumerate Azure File Shares (mimics nxc smb --shares)"}
+        @{Name="disks-enum"; Auth="Required"; Description="Enumerate Azure Managed Disks (mimics nxc smb --disks)"}
+        @{Name="bitlocker-enum"; Auth="Required"; Description="Enumerate BitLocker encryption status on Windows VMs (mimics nxc smb -M bitlocker)"}
+        @{Name="av-enum"; Auth="Required"; Description="Enumerate Anti-Virus & EDR products (mimics nxc smb -M enum_av)"}
         @{Name="help"; Auth="N/A"; Description="Display this help message"}
     )
     
@@ -92,13 +96,17 @@ function Show-Help {
     Write-Host "    .\azx.ps1 hosts                          - Enumerate all devices"
     Write-Host "    .\azx.ps1 tenant -Domain example.com     - Discover tenant configuration"
     Write-Host "    .\azx.ps1 users -CommonUsernames         - Check common usernames"
+    Write-Host "    .\azx.ps1 rid-brute -ExportPath users.csv - Enumerate users (RID brute equivalent)"
     Write-Host "    .\azx.ps1 groups -ExportPath groups.csv  - Export groups to CSV"
+    Write-Host "    .\azx.ps1 bitlocker-enum                 - Enumerate BitLocker on Windows VMs"
     Write-Host "    .\azx.ps1 sp-discovery                   - Discover service principals"
     Write-Host "    .\azx.ps1 roles -ExportPath roles.json   - Export role assignments to JSON"
     Write-Host "    .\azx.ps1 ca-policies                    - Review conditional access policies"
     Write-Host "    .\azx.ps1 vm-loggedon -VMFilter running  - Enumerate logged-on users on running VMs"
     Write-Host "    .\azx.ps1 shares-enum                    - Enumerate Azure File Shares (--shares)"
     Write-Host "    .\azx.ps1 shares-enum -SharesFilter WRITE - Filter shares with WRITE access"
+    Write-Host "    .\azx.ps1 av-enum                        - Enumerate AV/EDR products (-M enum_av)"
+    Write-Host "    .\azx.ps1 av-enum -Filter noncompliant   - Find devices with security gaps"
     
     Write-ColorOutput -Message "`n[*] For detailed help and more examples, see README.md or use Get-Help .\azx.ps1" -Color "Cyan"
     Write-Host ""

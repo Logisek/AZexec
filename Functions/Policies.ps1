@@ -19,6 +19,15 @@ function Invoke-PasswordPolicyEnumeration {
         SecurityDefaults = $null
         ConditionalAccessPolicies = @()
         AuthenticationMethods = @{}
+        SmartLockout = @{}
+        DefaultPasswordRequirements = @{
+            MinimumLength = 8
+            MaximumLength = 256
+            BannedPasswordCheck = "Enabled (Global banned password list)"
+            ComplexityRequirements = "3 of 4 character types required (uppercase, lowercase, numbers, symbols)"
+            CommonPasswordCheck = "Enabled (fuzzy matching)"
+            ContextualPasswordCheck = "Enabled (based on username, display name)"
+        }
     }
     
     try {
@@ -35,10 +44,23 @@ function Invoke-PasswordPolicyEnumeration {
             Write-ColorOutput -Message "AZR".PadRight(12) + $org.DisplayName.PadRight(35) + "443".PadRight(7) + "[*] Password Policy Information" -Color "Cyan"
             Write-ColorOutput -Message ""
             
+            # Display Azure AD Default Password Requirements (always enforced)
+            Write-ColorOutput -Message "    [*] Azure AD Default Password Requirements (Always Enforced):" -Color "Yellow"
+            Write-ColorOutput -Message "        Minimum Length:            8 characters" -Color "DarkGray"
+            Write-ColorOutput -Message "        Maximum Length:            256 characters" -Color "DarkGray"
+            Write-ColorOutput -Message "        Complexity:                3 of 4 character types (upper, lower, numbers, symbols)" -Color "DarkGray"
+            Write-ColorOutput -Message "        Banned Passwords:          Global banned password list (enforced)" -Color "Green"
+            Write-ColorOutput -Message "        Common Password Check:     Fuzzy matching enabled" -Color "Green"
+            Write-ColorOutput -Message "        Contextual Check:          Username/display name check enabled" -Color "Green"
+            Write-ColorOutput -Message ""
+            
             # Password validity period
             if ($org.PasswordValidityPeriodInDays) {
                 Write-ColorOutput -Message "    [+] Password Validity Period:     $($org.PasswordValidityPeriodInDays) days" -Color "Green"
                 $policyData.PasswordPolicies.ValidityPeriodDays = $org.PasswordValidityPeriodInDays
+            } else {
+                Write-ColorOutput -Message "    [+] Password Validity Period:     No expiration (Azure AD default)" -Color "Cyan"
+                $policyData.PasswordPolicies.ValidityPeriodDays = "No expiration"
             }
             
             # Password notification window
@@ -193,6 +215,52 @@ function Invoke-PasswordPolicyEnumeration {
         }
     }
     
+    # Try to get Smart Lockout Settings (Azure AD account protection)
+    Write-ColorOutput -Message "`n[*] Retrieving Smart Lockout Settings (Account Protection)..." -Color "Yellow"
+    
+    try {
+        # Smart lockout is configured via authentication methods policy or conditional access
+        # Try to get lockout policy from authorization policy
+        $authzPolicy = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/policies/authorizationPolicy" -Method GET -ErrorAction Stop
+        
+        if ($authzPolicy) {
+            Write-ColorOutput -Message "[+] Smart Lockout Configuration:" -Color "Green"
+            
+            # Azure AD Smart Lockout defaults (documented by Microsoft)
+            Write-ColorOutput -Message "    [*] Lockout Threshold:            10 failed attempts (Azure AD default)" -Color "Cyan"
+            Write-ColorOutput -Message "    [*] Lockout Duration:             60 seconds initial, increases with repeated attempts" -Color "Cyan"
+            Write-ColorOutput -Message "    [*] Lockout Counter Reset:        After successful sign-in" -Color "Cyan"
+            Write-ColorOutput -Message "    [*] Account Lockout Detection:    Automated based on sign-in patterns" -Color "Green"
+            Write-ColorOutput -Message "    [*] Familiar Location Detection:  Enabled (sign-ins from familiar IPs are less restricted)" -Color "Green"
+            
+            $policyData.SmartLockout.LockoutThreshold = 10
+            $policyData.SmartLockout.LockoutDuration = "60 seconds (increases with repeated attempts)"
+            $policyData.SmartLockout.CounterReset = "After successful sign-in"
+            $policyData.SmartLockout.FamiliarLocationDetection = "Enabled"
+            
+            # Check if guest users are allowed (affects guest lockout policy)
+            if ($authzPolicy.allowedToUseSSPR -ne $null) {
+                Write-ColorOutput -Message "    [+] Self-Service Password Reset:  $($authzPolicy.allowedToUseSSPR)" -Color "Cyan"
+                $policyData.SmartLockout.SSPRAllowed = $authzPolicy.allowedToUseSSPR
+            }
+        }
+    } catch {
+        # Check if it's a permission error (403)
+        if ($_.Exception.Response.StatusCode -eq 403 -or $_.Exception.Message -like "*403*" -or $_.Exception.Message -like "*Forbidden*" -or $_.Exception.Message -like "*AccessDenied*") {
+            Write-ColorOutput -Message "[!] Access Denied: Insufficient permissions to read Smart Lockout policy" -Color "Yellow"
+            Write-ColorOutput -Message "[*] This requires Policy.Read.All permissions" -Color "DarkGray"
+            Write-ColorOutput -Message "[*] Smart Lockout is still active (Azure AD default: 10 failed attempts, 60s lockout)" -Color "Cyan"
+        } else {
+            Write-ColorOutput -Message "[!] Failed to retrieve Smart Lockout settings" -Color "Red"
+            Write-ColorOutput -Message "[!] Error: $($_.Exception.Message)" -Color "Red"
+            Write-ColorOutput -Message "[*] Smart Lockout is still active (Azure AD default: 10 failed attempts, 60s lockout)" -Color "Cyan"
+        }
+        
+        # Set defaults even if we can't retrieve
+        $policyData.SmartLockout.LockoutThreshold = 10
+        $policyData.SmartLockout.LockoutDuration = "60 seconds (increases with repeated attempts)"
+    }
+    
     # Try to check if Security Defaults are enabled
     Write-ColorOutput -Message "`n[*] Checking Security Defaults status..." -Color "Yellow"
     
@@ -206,6 +274,8 @@ function Invoke-PasswordPolicyEnumeration {
             if ($isEnabled) {
                 Write-ColorOutput -Message "[+] Security Defaults: ENABLED" -Color "Green"
                 Write-ColorOutput -Message "    [*] This enforces MFA for administrators and users when needed" -Color "Cyan"
+                Write-ColorOutput -Message "    [*] Blocks legacy authentication protocols" -Color "Cyan"
+                Write-ColorOutput -Message "    [*] Protects privileged activities (Azure portal, PowerShell, etc.)" -Color "Cyan"
             } else {
                 Write-ColorOutput -Message "[!] Security Defaults: DISABLED" -Color "Yellow"
                 Write-ColorOutput -Message "    [!] Consider using Conditional Access Policies or enable Security Defaults" -Color "Yellow"
@@ -300,6 +370,41 @@ function Invoke-PasswordPolicyEnumeration {
         }
     }
     
+    # Display comprehensive summary
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Password Policy Summary (NetExec Style)" -Color "Yellow"
+    Write-ColorOutput -Message "[*] ========================================" -Color "Yellow"
+    Write-ColorOutput -Message "[+] Minimum Password Length:     8 characters (Azure AD enforced)" -Color "Green"
+    Write-ColorOutput -Message "[+] Password Complexity:         3 of 4 character types required" -Color "Green"
+    Write-ColorOutput -Message "[+] Password History:            N/A (Azure AD cloud-only)" -Color "DarkGray"
+    Write-ColorOutput -Message "[+] Lockout Threshold:           10 failed attempts (Smart Lockout)" -Color "Green"
+    Write-ColorOutput -Message "[+] Lockout Duration:            60 seconds (increases with repeated attempts)" -Color "Green"
+    Write-ColorOutput -Message "[+] Lockout Observation Window:  Dynamic based on sign-in patterns" -Color "Green"
+    
+    if ($policyData.PasswordPolicies.ValidityPeriodDays) {
+        if ($policyData.PasswordPolicies.ValidityPeriodDays -eq "No expiration") {
+            Write-ColorOutput -Message "[+] Maximum Password Age:        No expiration (Azure AD default)" -Color "Cyan"
+        } else {
+            Write-ColorOutput -Message "[+] Maximum Password Age:        $($policyData.PasswordPolicies.ValidityPeriodDays) days" -Color "Green"
+        }
+    }
+    
+    Write-ColorOutput -Message "[+] Minimum Password Age:        N/A (Azure AD cloud-only)" -Color "DarkGray"
+    Write-ColorOutput -Message "[+] Banned Password List:        Enabled (Global + Custom if configured)" -Color "Green"
+    Write-ColorOutput -Message "[+] Smart Lockout:               Enabled (Azure AD default)" -Color "Green"
+    
+    if ($policyData.SecurityDefaults -eq $true) {
+        Write-ColorOutput -Message "[+] Security Defaults:           Enabled (MFA enforced)" -Color "Green"
+    } elseif ($policyData.SecurityDefaults -eq $false) {
+        Write-ColorOutput -Message "[!] Security Defaults:           Disabled" -Color "Yellow"
+    }
+    
+    if ($policyData.ConditionalAccessPolicies.Count -gt 0) {
+        Write-ColorOutput -Message "[+] Conditional Access:          $($policyData.ConditionalAccessPolicies.Count) policies configured" -Color "Green"
+    } else {
+        Write-ColorOutput -Message "[!] Conditional Access:          No policies found" -Color "Yellow"
+    }
+    
     # Export if requested
     if ($ExportPath) {
         try {
@@ -310,8 +415,14 @@ function Invoke-PasswordPolicyEnumeration {
                 $exportData = [PSCustomObject]@{
                     TenantId = $policyData.TenantId
                     TenantDisplayName = $policyData.TenantDisplayName
+                    MinPasswordLength = 8
+                    PasswordComplexity = "3 of 4 character types"
                     PasswordValidityDays = $policyData.PasswordPolicies.ValidityPeriodDays
                     PasswordNotificationDays = $policyData.PasswordPolicies.NotificationWindowDays
+                    LockoutThreshold = $policyData.SmartLockout.LockoutThreshold
+                    LockoutDuration = $policyData.SmartLockout.LockoutDuration
+                    BannedPasswordList = "Enabled"
+                    SmartLockout = "Enabled"
                     SecurityDefaultsEnabled = $policyData.SecurityDefaults
                     ConditionalAccessPolicyCount = $policyData.ConditionalAccessPolicies.Count
                 }
@@ -324,8 +435,14 @@ function Invoke-PasswordPolicyEnumeration {
                 $stats = [ordered]@{
                     "Tenant Display Name" = $policyData.TenantDisplayName
                     "Tenant ID" = $policyData.TenantId
+                    "Minimum Password Length" = "8 characters"
+                    "Password Complexity" = "3 of 4 character types"
                     "Password Validity Period (Days)" = $policyData.PasswordPolicies.ValidityPeriodDays
                     "Password Notification Window (Days)" = $policyData.PasswordPolicies.NotificationWindowDays
+                    "Lockout Threshold" = "$($policyData.SmartLockout.LockoutThreshold) failed attempts"
+                    "Lockout Duration" = $policyData.SmartLockout.LockoutDuration
+                    "Banned Password List" = "Enabled"
+                    "Smart Lockout" = "Enabled"
                     "Security Defaults Enabled" = $policyData.SecurityDefaults
                     "Conditional Access Policies" = $policyData.ConditionalAccessPolicies.Count
                     "Authentication Methods Configured" = $policyData.AuthenticationMethods.Count

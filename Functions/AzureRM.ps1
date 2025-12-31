@@ -1935,3 +1935,504 @@ function Invoke-DisksEnumeration {
     
     return $exportData
 }
+
+# ============================================
+# BITLOCKER ENUMERATION (NetExec --bitlocker equivalent)
+# ============================================
+function Invoke-BitLockerEnumeration {
+    param(
+        [string]$ResourceGroup,
+        [string]$SubscriptionId,
+        [ValidateSet("all", "running", "stopped")]
+        [string]$VMFilter = "running",
+        [string]$ExportPath
+    )
+    
+    Write-ColorOutput -Message "`n[*] AZX - Azure BitLocker Enumeration" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Command: bitlocker-enum" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Enumerating BitLocker encryption status`n" -Color "Cyan"
+    
+    # ============================================
+    # SECTION 1: INTUNE-MANAGED DEVICES (Graph API)
+    # ============================================
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] SECTION 1: INTUNE-MANAGED DEVICES" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    $intuneDevicesFound = $false
+    $intuneEncrypted = 0
+    $intuneNotEncrypted = 0
+    $intuneExportData = @()
+    $notEncryptedDevices = @()
+    
+    try {
+        # Check if Microsoft.Graph module is available
+        if (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication) {
+            Import-Module Microsoft.Graph.Authentication -ErrorAction SilentlyContinue
+            
+            # Try to connect to Graph with Intune permissions
+            Write-ColorOutput -Message "[*] Connecting to Microsoft Graph for Intune device data..." -Color "Yellow"
+            Connect-MgGraph -Scopes "DeviceManagementManagedDevices.Read.All" -NoWelcome -ErrorAction Stop
+            
+            $context = Get-MgContext
+            if ($context) {
+                Write-ColorOutput -Message "[+] Connected to Graph as: $($context.Account)" -Color "Green"
+                
+                # Query Intune for Windows devices with encryption status
+                $uri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?`$filter=operatingSystem eq 'Windows'&`$select=id,deviceName,azureADDeviceId,isEncrypted,complianceState,userPrincipalName,lastSyncDateTime"
+                $intuneDevices = Invoke-MgGraphRequest -Uri $uri -Method GET -ErrorAction Stop
+                
+                if ($intuneDevices.value -and $intuneDevices.value.Count -gt 0) {
+                    $intuneDevicesFound = $true
+                    Write-ColorOutput -Message "[+] Found $($intuneDevices.value.Count) Windows devices in Intune`n" -Color "Green"
+                    
+                    foreach ($device in $intuneDevices.value) {
+                        $deviceName = $device.deviceName
+                        $isEncrypted = $device.isEncrypted
+                        $compliance = $device.complianceState
+                        $user = $device.userPrincipalName
+                        $lastSync = $device.lastSyncDateTime
+                        
+                        # Determine color based on encryption status
+                        if ($isEncrypted -eq $true) {
+                            $color = "Green"
+                            $status = "BitLocker ENABLED"
+                            $intuneEncrypted++
+                        } else {
+                            $color = "Red"
+                            $status = "NOT ENCRYPTED"
+                            $intuneNotEncrypted++
+                            $notEncryptedDevices += $deviceName
+                        }
+                        
+                        # NetExec-style output
+                        Write-Host "AZR".PadRight(12) -ForegroundColor "Cyan" -NoNewline
+                        Write-Host $device.azureADDeviceId.Substring(0, [Math]::Min(14, $device.azureADDeviceId.Length)).PadRight(17) -NoNewline
+                        Write-Host "443".PadRight(7) -NoNewline
+                        Write-Host $deviceName.PadRight(35) -NoNewline
+                        Write-Host "[*] " -ForegroundColor $color -NoNewline
+                        Write-Host $status -ForegroundColor $color -NoNewline
+                        Write-Host " | Compliance: $compliance" -ForegroundColor "Gray"
+                        
+                        # Collect for export
+                        $intuneExportData += [PSCustomObject]@{
+                            Source = "Intune"
+                            DeviceName = $deviceName
+                            AzureADDeviceId = $device.azureADDeviceId
+                            IsEncrypted = $isEncrypted
+                            ComplianceState = $compliance
+                            UserPrincipalName = $user
+                            LastSyncDateTime = $lastSync
+                        }
+                    }
+                    
+                    # Summary for Intune devices
+                    Write-ColorOutput -Message "`n[*] Intune Device Summary:" -Color "Cyan"
+                    Write-ColorOutput -Message "    Total Windows Devices: $($intuneDevices.value.Count)" -Color "White"
+                    Write-ColorOutput -Message "    BitLocker Enabled: $intuneEncrypted" -Color "Green"
+                    if ($intuneNotEncrypted -gt 0) {
+                        Write-ColorOutput -Message "    NOT Encrypted: $intuneNotEncrypted" -Color "Red"
+                        Write-ColorOutput -Message "`n[!] Devices without BitLocker:" -Color "Red"
+                        foreach ($deviceName in $notEncryptedDevices) {
+                            Write-ColorOutput -Message "    → $deviceName" -Color "Red"
+                        }
+                    }
+                } else {
+                    Write-ColorOutput -Message "[*] No Windows devices found in Intune" -Color "Yellow"
+                }
+            }
+        } else {
+            Write-ColorOutput -Message "[*] Microsoft.Graph module not available - skipping Intune enumeration" -Color "Yellow"
+            Write-ColorOutput -Message "[*] Install with: Install-Module Microsoft.Graph -Scope CurrentUser" -Color "Gray"
+        }
+    } catch {
+        Write-ColorOutput -Message "[!] Failed to query Intune devices: $($_.Exception.Message)" -Color "Yellow"
+        Write-ColorOutput -Message "[*] This may require DeviceManagementManagedDevices.Read.All permission with admin consent" -Color "Gray"
+    }
+    
+    # ============================================
+    # SECTION 2: AZURE VMs (ARM API)
+    # ============================================
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] SECTION 2: AZURE VMs (via Run Command)" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    # Initialize required modules
+    $requiredModules = @('Az.Accounts', 'Az.Compute', 'Az.Resources')
+    if (-not (Initialize-AzureRMModules -RequiredModules $requiredModules)) {
+        return
+    }
+    
+    # Connect to Azure
+    $azContext = Connect-AzureRM
+    if (-not $azContext) { return }
+    
+    # Get subscriptions to enumerate
+    $subscriptionsToScan = Get-SubscriptionsToEnumerate -SubscriptionId $SubscriptionId -CurrentContext $azContext
+    if (-not $subscriptionsToScan) { return }
+    
+    # Global counters
+    $exportData = @()
+    $totalVMs = 0
+    $queriedVMs = 0
+    $successfulQueries = 0
+    $failedQueries = 0
+    $windowsVMs = 0
+    $encryptedVolumes = 0
+    $unencryptedVolumes = 0
+    $totalVolumes = 0
+    
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] MULTI-SUBSCRIPTION BITLOCKER ENUMERATION" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    # Loop through each subscription
+    foreach ($subscription in $subscriptionsToScan) {
+        if (-not (Set-SubscriptionContext -Subscription $subscription)) {
+            continue
+        }
+        
+        Write-ColorOutput -Message "[*] Retrieving VMs..." -Color "Yellow"
+        
+        try {
+            $vms = @()
+            if ($ResourceGroup) {
+                $vms = @(Get-AzVM -ResourceGroupName $ResourceGroup -Status -ErrorAction Stop)
+                Write-ColorOutput -Message "[+] Retrieved $($vms.Count) VM(s) from resource group: $ResourceGroup" -Color "Green"
+            } else {
+                $vms = @(Get-AzVM -Status -ErrorAction Stop)
+                Write-ColorOutput -Message "[+] Retrieved $($vms.Count) VM(s) across all resource groups" -Color "Green"
+            }
+        } catch {
+            $errorMessage = $_.Exception.Message
+            if ($errorMessage -like "*AuthorizationFailed*") {
+                Write-ColorOutput -Message "[!] Authorization failed for subscription: $($subscription.Name)" -Color "Red"
+                Write-ColorOutput -Message "[*] Skipping to next subscription...`n" -Color "Yellow"
+            } else {
+                Write-ColorOutput -Message "[!] Error retrieving VMs: $errorMessage" -Color "Red"
+            }
+            continue
+        }
+        
+        # Filter by power state
+        $filteredVMs = switch ($VMFilter) {
+            "running" {
+                $vms | Where-Object { $_.PowerState -eq "VM running" }
+            }
+            "stopped" {
+                $vms | Where-Object { $_.PowerState -ne "VM running" }
+            }
+            default {
+                $vms
+            }
+        }
+        
+        # Filter Windows VMs only (BitLocker is Windows-specific)
+        $windowsVMsList = $filteredVMs | Where-Object { 
+            $_.StorageProfile.OsDisk.OsType -eq "Windows" 
+        }
+        
+        if ($windowsVMsList.Count -eq 0) {
+            Write-ColorOutput -Message "[*] No Windows VMs found matching filter criteria in this subscription`n" -Color "Yellow"
+            continue
+        }
+        
+        $totalVMs += $windowsVMsList.Count
+        $windowsVMs += $windowsVMsList.Count
+        
+        Write-ColorOutput -Message "`n[*] Windows VMs Found: $($windowsVMsList.Count)" -Color "Cyan"
+        Write-ColorOutput -Message "[*] VM Filter: $VMFilter" -Color "Cyan"
+        Write-ColorOutput -Message "[*] --------------------------------------------------`n" -Color "Cyan"
+        
+        foreach ($vm in $windowsVMsList) {
+            $vmName = $vm.Name
+            $vmRG = $vm.ResourceGroupName
+            $vmLocation = $vm.Location
+            $vmPowerState = $vm.PowerState
+            $vmSize = $vm.HardwareProfile.VmSize
+            
+            Write-ColorOutput -Message "[*] Querying VM: $vmName ($vmPowerState)" -Color "Yellow"
+            
+            # Skip if VM is not running
+            if ($vmPowerState -ne "VM running") {
+                Write-ColorOutput -Message "    [!] VM is not running - skipping BitLocker query" -Color "DarkGray"
+                Write-ColorOutput -Message "    [*] RG: $vmRG | Location: $vmLocation`n" -Color "DarkGray"
+                continue
+            }
+            
+            $queriedVMs++
+            
+            # PowerShell script to query BitLocker status
+            $bitlockerScript = @'
+# Query BitLocker status for all volumes
+try {
+    $volumes = Get-BitLockerVolume -ErrorAction Stop
+    $results = @()
+    
+    foreach ($vol in $volumes) {
+        $result = [PSCustomObject]@{
+            MountPoint = $vol.MountPoint
+            VolumeStatus = $vol.VolumeStatus
+            EncryptionPercentage = $vol.EncryptionPercentage
+            EncryptionMethod = if ($vol.EncryptionMethod) { $vol.EncryptionMethod.ToString() } else { "None" }
+            ProtectionStatus = $vol.ProtectionStatus
+            KeyProtector = if ($vol.KeyProtector.Count -gt 0) { 
+                ($vol.KeyProtector | ForEach-Object { $_.KeyProtectorType }) -join ", " 
+            } else { 
+                "None" 
+            }
+            CapacityGB = [Math]::Round($vol.CapacityGB, 2)
+            LockStatus = $vol.LockStatus
+        }
+        $results += $result
+    }
+    
+    # Return as JSON
+    $results | ConvertTo-Json -Compress
+    
+} catch {
+    Write-Output "ERROR: $($_.Exception.Message)"
+}
+'@
+            
+            # Execute Run Command
+            try {
+                Write-ColorOutput -Message "    [*] Executing BitLocker query via VM Run Command..." -Color "Gray"
+                
+                $runResult = Invoke-AzVMRunCommand `
+                    -ResourceGroupName $vmRG `
+                    -VMName $vmName `
+                    -CommandId 'RunPowerShellScript' `
+                    -ScriptString $bitlockerScript `
+                    -ErrorAction Stop
+                
+                $output = $runResult.Value[0].Message
+                
+                # Check for errors
+                if ($output -like "ERROR:*") {
+                    Write-ColorOutput -Message "    [!] Failed to query BitLocker: $($output -replace 'ERROR: ', '')" -Color "Red"
+                    $failedQueries++
+                    Write-ColorOutput -Message "    [*] This may indicate BitLocker is not available or the VM agent is not responding`n" -Color "Yellow"
+                    continue
+                }
+                
+                # Parse JSON output
+                $volumes = $output | ConvertFrom-Json
+                
+                if (-not $volumes) {
+                    Write-ColorOutput -Message "    [!] No volumes found or failed to parse output" -Color "Red"
+                    $failedQueries++
+                    continue
+                }
+                
+                $successfulQueries++
+                
+                # NetExec-style output header
+                Write-Host "    " -NoNewline
+                Write-Host "AZR".PadRight(8) -ForegroundColor "Magenta" -NoNewline
+                Write-Host $vmName.Substring(0, [Math]::Min(30, $vmName.Length)).PadRight(32) -NoNewline
+                Write-Host "443".PadRight(7) -NoNewline
+                Write-Host "Windows".PadRight(12) -NoNewline
+                Write-Host "[*] " -ForegroundColor "Cyan" -NoNewline
+                Write-Host "BitLocker Status" -ForegroundColor "White"
+                
+                # Display volume information
+                foreach ($vol in $volumes) {
+                    $totalVolumes++
+                    $mountPoint = $vol.MountPoint
+                    $volumeStatus = $vol.VolumeStatus
+                    $encryptionPct = $vol.EncryptionPercentage
+                    $encryptionMethod = $vol.EncryptionMethod
+                    $protectionStatus = $vol.ProtectionStatus
+                    $keyProtector = $vol.KeyProtector
+                    $capacityGB = $vol.CapacityGB
+                    $lockStatus = $vol.LockStatus
+                    
+                    # Determine if volume is encrypted
+                    $isEncrypted = $volumeStatus -eq "FullyEncrypted" -or $encryptionPct -eq 100
+                    $isProtected = $protectionStatus -eq "On"
+                    
+                    if ($isEncrypted) {
+                        $encryptedVolumes++
+                    } else {
+                        $unencryptedVolumes++
+                    }
+                    
+                    # Color coding based on encryption status
+                    $statusColor = if ($isEncrypted -and $isProtected) { 
+                        "Green" 
+                    } elseif ($isEncrypted -and -not $isProtected) { 
+                        "Yellow" 
+                    } else { 
+                        "Red" 
+                    }
+                    
+                    # Display volume details (NetExec style)
+                    Write-Host "        " -NoNewline
+                    Write-Host "[$mountPoint]".PadRight(10) -NoNewline -ForegroundColor "Cyan"
+                    Write-Host "Status: " -NoNewline
+                    Write-Host $volumeStatus.PadRight(20) -NoNewline -ForegroundColor $statusColor
+                    Write-Host "Encryption: " -NoNewline
+                    Write-Host "$encryptionPct%".PadRight(8) -NoNewline -ForegroundColor $statusColor
+                    Write-Host "Protection: " -NoNewline
+                    Write-Host $protectionStatus -ForegroundColor $statusColor
+                    
+                    if ($isEncrypted) {
+                        Write-Host "        " -NoNewline
+                        Write-Host "    Method: $encryptionMethod | " -NoNewline -ForegroundColor "Gray"
+                        Write-Host "Key Protector: $keyProtector | " -NoNewline -ForegroundColor "Gray"
+                        Write-Host "Capacity: $($capacityGB)GB" -ForegroundColor "Gray"
+                    }
+                    
+                    # Risk assessment
+                    $riskLevel = "LOW"
+                    $securityIssues = @()
+                    
+                    if (-not $isEncrypted) {
+                        $riskLevel = "HIGH"
+                        $securityIssues += "Volume not encrypted"
+                    } elseif (-not $isProtected) {
+                        $riskLevel = "MEDIUM"
+                        $securityIssues += "BitLocker protection disabled"
+                    }
+                    
+                    if ($lockStatus -eq "Unlocked" -and -not $isEncrypted) {
+                        $securityIssues += "Unencrypted and unlocked"
+                    }
+                    
+                    if ($securityIssues.Count -gt 0) {
+                        $riskColor = switch ($riskLevel) {
+                            "HIGH" { "Red" }
+                            "MEDIUM" { "Yellow" }
+                            default { "Green" }
+                        }
+                        Write-Host "        " -NoNewline
+                        Write-Host "    [RISK: $riskLevel] " -NoNewline -ForegroundColor $riskColor
+                        Write-Host "$($securityIssues -join ', ')" -ForegroundColor "Gray"
+                    }
+                    
+                    # Build export object
+                    $exportData += [PSCustomObject]@{
+                        Subscription = $subscription.Name
+                        SubscriptionId = $subscription.Id
+                        ResourceGroup = $vmRG
+                        VMName = $vmName
+                        Location = $vmLocation
+                        VMSize = $vmSize
+                        PowerState = $vmPowerState
+                        MountPoint = $mountPoint
+                        VolumeStatus = $volumeStatus
+                        EncryptionPercentage = $encryptionPct
+                        EncryptionMethod = $encryptionMethod
+                        ProtectionStatus = $protectionStatus
+                        KeyProtector = $keyProtector
+                        CapacityGB = $capacityGB
+                        LockStatus = $lockStatus
+                        IsEncrypted = $isEncrypted
+                        IsProtected = $isProtected
+                        RiskLevel = $riskLevel
+                        SecurityIssues = $securityIssues -join '; '
+                    }
+                }
+                
+                Write-Host ""
+                
+            } catch {
+                $failedQueries++
+                Write-ColorOutput -Message "    [!] Failed to execute Run Command: $($_.Exception.Message)" -Color "Red"
+                Write-ColorOutput -Message "    [*] Ensure VM has Azure VM Agent installed and you have proper permissions`n" -Color "Yellow"
+            }
+        }
+    }
+    
+    # Summary statistics
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] BITLOCKER ENUMERATION SUMMARY" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    # Intune summary
+    if ($intuneDevicesFound) {
+        Write-ColorOutput -Message "[*] INTUNE-MANAGED DEVICES:" -Color "Yellow"
+        Write-ColorOutput -Message "    Total Windows Devices: $($intuneEncrypted + $intuneNotEncrypted)" -Color "White"
+        Write-ColorOutput -Message "    BitLocker Enabled: $intuneEncrypted" -Color "Green"
+        Write-ColorOutput -Message "    NOT Encrypted: $intuneNotEncrypted" -Color $(if ($intuneNotEncrypted -gt 0) { "Red" } else { "Green" })
+        if ($notEncryptedDevices.Count -gt 0) {
+            Write-ColorOutput -Message "    Devices needing BitLocker:" -Color "Red"
+            foreach ($deviceName in $notEncryptedDevices) {
+                Write-ColorOutput -Message "        → $deviceName" -Color "Red"
+            }
+        }
+        Write-ColorOutput -Message "" -Color "White"
+    }
+    
+    # Azure VM summary
+    Write-ColorOutput -Message "[*] AZURE VMs:" -Color "Yellow"
+    Write-ColorOutput -Message "    Total Windows VMs: $totalVMs" -Color "White"
+    Write-ColorOutput -Message "    VMs Queried: $queriedVMs" -Color "White"
+    Write-ColorOutput -Message "    Successful Queries: $successfulQueries" -Color "Green"
+    Write-ColorOutput -Message "    Failed Queries: $failedQueries" -Color $(if ($failedQueries -gt 0) { "Red" } else { "Green" })
+    Write-ColorOutput -Message "    Total Volumes Found: $totalVolumes" -Color "White"
+    Write-ColorOutput -Message "    Encrypted Volumes: $encryptedVolumes" -Color "Green"
+    Write-ColorOutput -Message "    Unencrypted Volumes: $unencryptedVolumes" -Color $(if ($unencryptedVolumes -gt 0) { "Red" } else { "Green" })
+    
+    if ($totalVolumes -gt 0) {
+        $encryptionRate = [Math]::Round(($encryptedVolumes / $totalVolumes) * 100, 2)
+        Write-ColorOutput -Message "[*] Encryption Rate: $encryptionRate%" -Color $(if ($encryptionRate -eq 100) { "Green" } elseif ($encryptionRate -ge 80) { "Yellow" } else { "Red" })
+    }
+    
+    # Export results if requested
+    $allExportData = @()
+    if ($intuneExportData.Count -gt 0) {
+        $allExportData += $intuneExportData
+    }
+    if ($exportData.Count -gt 0) {
+        $allExportData += $exportData
+    }
+    
+    if ($ExportPath -and $allExportData.Count -gt 0) {
+        $stats = [ordered]@{
+            "Intune Devices - Encrypted" = $intuneEncrypted
+            "Intune Devices - NOT Encrypted" = $intuneNotEncrypted
+            "Azure VMs - Total" = $totalVMs
+            "Azure VMs - Queried" = $queriedVMs
+            "Azure VMs - Encrypted Volumes" = $encryptedVolumes
+            "Azure VMs - Unencrypted Volumes (HIGH RISK)" = $unencryptedVolumes
+        }
+        Export-EnumerationResults -Data $allExportData -ExportPath $ExportPath -Title "BitLocker Enumeration (Intune + Azure VMs)" -Statistics $stats -CommandName "bitlocker-enum" -Description "Azure equivalent of NetExec -M bitlocker. Enumerates BitLocker encryption status on Intune-managed devices and Azure VMs."
+    }
+    
+    # Security recommendations
+    if ($unencryptedVolumes -gt 0 -or $intuneNotEncrypted -gt 0) {
+        Write-ColorOutput -Message "`n[*] SECURITY RECOMMENDATIONS:" -Color "Cyan"
+        if ($intuneNotEncrypted -gt 0) {
+            Write-ColorOutput -Message "    INTUNE DEVICES:" -Color "Yellow"
+            Write-ColorOutput -Message "    - Enable BitLocker on $intuneNotEncrypted unencrypted device(s) (HIGH PRIORITY)" -Color "Cyan"
+            Write-ColorOutput -Message "    - Deploy BitLocker policy via Intune Endpoint Security" -Color "Cyan"
+            Write-ColorOutput -Message "    - Store recovery keys in Azure AD (automatic with Intune)" -Color "Cyan"
+            Write-ColorOutput -Message "    - Enable silent encryption for devices without TPM" -Color "Cyan"
+        }
+        if ($unencryptedVolumes -gt 0) {
+            Write-ColorOutput -Message "    AZURE VMs:" -Color "Yellow"
+            Write-ColorOutput -Message "    - Enable BitLocker on all unencrypted volumes (HIGH PRIORITY)" -Color "Cyan"
+            Write-ColorOutput -Message "    - Use strong encryption methods (XTS-AES 256)" -Color "Cyan"
+            Write-ColorOutput -Message "    - Store recovery keys in Azure Key Vault" -Color "Cyan"
+            Write-ColorOutput -Message "    - Enable automatic BitLocker encryption via Azure Policy" -Color "Cyan"
+            Write-ColorOutput -Message "    - Consider using Azure Disk Encryption (ADE) for VM disks" -Color "Cyan"
+        }
+        Write-ColorOutput -Message "    GENERAL:" -Color "Yellow"
+        Write-ColorOutput -Message "    - Implement conditional access policies for encrypted devices only" -Color "Cyan"
+    }
+    
+    # NetExec comparison help
+    Write-ColorOutput -Message "`n[*] NETEXEC COMPARISON:" -Color "Yellow"
+    Write-ColorOutput -Message "    NetExec: nxc smb 192.168.1.0/24 -u username -p password -M bitlocker" -Color "Gray"
+    Write-ColorOutput -Message "    AZexec:  .\azx.ps1 bitlocker-enum" -Color "Gray"
+    Write-ColorOutput -Message "`n    NetExec queries BitLocker status via SMB/WMI on remote Windows hosts" -Color "Gray"
+    Write-ColorOutput -Message "    AZexec queries BitLocker status via Azure VM Run Command on Azure VMs" -Color "Gray"
+    Write-ColorOutput -Message "`n[*] Additional Info:" -Color "Yellow"
+    Write-ColorOutput -Message "    - BitLocker enumeration requires VMs to be in 'running' state" -Color "Gray"
+    Write-ColorOutput -Message "    - Requires 'Virtual Machine Contributor' or 'VM Command Executor' role" -Color "Gray"
+    Write-ColorOutput -Message "    - All queries are logged in Azure Activity Logs" -Color "Gray"
+    
+    return $exportData
+}
