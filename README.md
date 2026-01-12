@@ -64,6 +64,7 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb --disks` | `.\azx.ps1 disks-enum` | ✅ Required | **Enumerate Azure Managed Disks** (encryption, attachment state) |
 | `nxc smb -M bitlocker` | `.\azx.ps1 bitlocker-enum` | ✅ Required | **Enumerate BitLocker encryption status** (Intune devices + Azure VMs) |
 | `nxc smb -M enum_av` | `.\azx.ps1 av-enum` | ✅ Required | **Enumerate Anti-Virus & EDR products** (security posture assessment) |
+| `nxc smb --tasklist` | `.\azx.ps1 process-enum` | ✅ Required | **Enumerate remote processes** (Windows tasklist / Linux ps aux) |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1806,6 +1807,7 @@ Each command in `azx.ps1` is implemented in a dedicated function file:
 | `roles` | `Roles.ps1` | `Invoke-RoleAssignmentEnumeration` |
 | `ca-policies` | `Policies.ps1` | `Invoke-ConditionalAccessPolicyReview` |
 | `vm-loggedon` | `Sessions.ps1` | `Invoke-VMLoggedOnUsersEnumeration` |
+| `process-enum` | `AzureRM.ps1` | `Invoke-VMProcessEnumeration` |
 | `storage-enum` | `AzureRM.ps1` | `Invoke-StorageEnumeration` |
 | `keyvault-enum` | `AzureRM.ps1` | `Invoke-KeyVaultEnumeration` |
 | `network-enum` | `AzureRM.ps1` | `Invoke-NetworkEnumeration` |
@@ -1828,6 +1830,7 @@ The following commands use Azure Resource Manager API (Az PowerShell modules) in
 | `shares-enum` | Enumerate Azure File Shares (mimics nxc --shares) | Az.Accounts, Az.Resources, Az.Storage | Reader + Storage Account Key Operator or Storage File Data SMB Share Reader |
 | `disks-enum` | Enumerate Azure Managed Disks (mimics nxc --disks) | Az.Accounts, Az.Resources, Az.Compute | Reader (Disk Reader or Contributor for full details) |
 | `bitlocker-enum` | Enumerate BitLocker encryption status on Intune devices + Azure VMs (mimics nxc -M bitlocker) | Microsoft.Graph (Intune) + Az.Accounts, Az.Compute, Az.Resources (VMs) | DeviceManagementManagedDevices.Read.All (Intune) + VM Contributor (Azure VMs) |
+| `process-enum` | Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist) | Az.Accounts, Az.Compute, Az.Resources | VM Contributor or Reader + VM Command Executor |
 
 **Multi-Subscription Support**: All ARM commands automatically enumerate all accessible subscriptions. Use `-SubscriptionId` to target a specific subscription, or `-ResourceGroup` to filter within subscriptions.
 
@@ -1872,6 +1875,7 @@ The test script will:
 [*] Testing command: roles ... PASS (Auth Required)
 [*] Testing command: ca-policies ... PASS (Auth Required)
 [*] Testing command: vm-loggedon ... PASS (Auth Required)
+[*] Testing command: process-enum ... PASS (Auth Required)
 [*] Testing command: storage-enum ... PASS (Auth Required)
 [*] Testing command: keyvault-enum ... PASS (Auth Required)
 [*] Testing command: network-enum ... PASS (Auth Required)
@@ -1898,6 +1902,7 @@ sp-discovery    PASS (Auth) 30.21s
 roles           PASS        20.24s
 ca-policies     PASS        5.20s
 vm-loggedon     PASS (Auth) 54.46s
+process-enum    PASS (Auth) 48.32s
 storage-enum    PASS (Auth) 32.15s
 keyvault-enum   PASS (Auth) 28.92s
 network-enum    PASS (Auth) 35.67s
@@ -2179,6 +2184,9 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 
 # BitLocker enumeration on Windows VMs (multi-subscription support) - Azure authentication required
 .\azx.ps1 bitlocker-enum [-ResourceGroup <RGName>] [-SubscriptionId <SubId>] [-VMFilter <all|running|stopped>] [-ExportPath <Path>]
+
+# Process enumeration on Azure VMs (multi-subscription support) - Azure authentication required
+.\azx.ps1 process-enum [-ResourceGroup <RGName>] [-SubscriptionId <SubId>] [-VMFilter <all|running|stopped>] [-ProcessName <ProcessName>] [-ExportPath <Path>]
 
 # Vulnerable target enumeration (like nxc smb --gen-relay-list) - domain auto-detected if not specified
 .\azx.ps1 vuln-list [-Domain <DomainName>] [-NoColor] [-ExportPath <Path>]
@@ -3907,6 +3915,89 @@ Both enumerate security products, but AZexec provides additional cloud-native se
 # - Which devices lack security controls (easy targets)
 # - Overall security maturity of the environment
 ```
+
+---
+
+### Process Enumeration: `process-enum`
+
+The Azure equivalent of NetExec's `--tasklist` command. Enumerate running processes on Azure VMs:
+
+```powershell
+# Enumerate all processes on all Azure VMs (like nxc smb --tasklist)
+.\azx.ps1 process-enum
+
+# Filter by process name (like nxc smb --tasklist keepass.exe)
+.\azx.ps1 process-enum -ProcessName "keepass.exe"
+
+# Target specific subscription or resource group
+.\azx.ps1 process-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+.\azx.ps1 process-enum -ResourceGroup Production-RG
+
+# Filter by VM power state (default: running only)
+.\azx.ps1 process-enum -VMFilter running
+.\azx.ps1 process-enum -VMFilter all
+
+# Export results to CSV/JSON
+.\azx.ps1 process-enum -ExportPath processes.csv
+.\azx.ps1 process-enum -ExportPath processes.json
+```
+
+**Information Enumerated**:
+- **Process Name** - Executable name (e.g., `notepad.exe`, `python`)
+- **Process ID (PID)** - Unique process identifier
+- **Memory Usage** - Current memory consumption
+- **CPU Usage** - Current CPU percentage (Linux only)
+- **User** - User account running the process
+- **Session** - Session identifier (Windows only)
+- **Command Line** - Full command line arguments (Linux only)
+
+**NetExec Comparison**:
+
+| NetExec Command | AZexec Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `nxc smb 192.168.1.0/24 -u admin -p pass --tasklist` | `.\azx.ps1 process-enum` | Enumerate all processes |
+| `nxc smb 192.168.1.0/24 -u admin -p pass --tasklist keepass.exe` | `.\azx.ps1 process-enum -ProcessName "keepass.exe"` | Filter by process name |
+| NetExec queries via SMB/WMI on remote Windows hosts | AZexec queries via Azure VM Run Command | Cloud vs On-Prem |
+
+**How It Works**:
+- Uses Azure VM Run Command (same as `vm-loggedon` command)
+- Windows VMs: Executes `tasklist` command (equivalent to NetExec's SMB query)
+- Linux VMs: Executes `ps aux` command (process list with details)
+- Requires **Virtual Machine Contributor** or **VM Command Executor** role
+- Queries are logged in Azure Activity Logs (audit trail)
+- Supports both Windows and Linux VMs
+
+**Use Cases**:
+
+| Scenario | Description | Command |
+|----------|-------------|---------|
+| **Credential Hunting** | Find password managers (KeePass, LastPass, etc.) | `.\azx.ps1 process-enum -ProcessName "keepass"` |
+| **Malware Detection** | Identify suspicious processes | `.\azx.ps1 process-enum -ExportPath processes.csv` (analyze in Excel) |
+| **Lateral Movement** | Find processes running as privileged users | Filter CSV for processes with admin users |
+| **Incident Response** | Document running processes during compromise | `.\azx.ps1 process-enum -VMFilter running -ExportPath incident-processes.json` |
+| **Compliance Audit** | Verify approved software only | Compare process list against approved software inventory |
+
+**Example Output**:
+```
+[*] AZX - Remote Process Enumeration
+[*] Command: process-enum (Similar to: nxc smb --tasklist)
+[*] Azure equivalent of NetExec's remote process enumeration
+
+[*] VM: web-server-01
+    Resource Group: Production-RG
+    OS Type: Windows
+    Power State: running
+    [*] Querying processes...
+    [+] Found 45 process(es):
+AZR         web-server-01  443     System                          [*] PID:4 MEM:1,234 K SESSION:Services USER:System
+AZR         web-server-01  443     svchost.exe                     [*] PID:1234 MEM:45,678 K SESSION:Services USER:SYSTEM
+AZR         web-server-01  443     keepass.exe                      [*] PID:5678 MEM:12,345 K SESSION:Console USER:admin
+```
+
+**Troubleshooting**:
+- **"VM is not in running state"**: Process enumeration only works on running VMs. Use `-VMFilter running` to skip stopped VMs.
+- **"AuthorizationFailed"**: Ensure you have `Virtual Machine Contributor` or `VM Command Executor` role assigned.
+- **"No processes found"**: The process name filter may be too restrictive. Try without `-ProcessName` to see all processes.
 
 ---
 
