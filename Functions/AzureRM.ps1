@@ -2436,3 +2436,448 @@ try {
     
     return $exportData
 }
+
+<#
+.SYNOPSIS
+    Enumerate remote processes on Azure VMs (Azure equivalent of nxc smb --tasklist).
+.DESCRIPTION
+    Queries running processes on Azure VMs using VM Run Command.
+    Supports both Windows (tasklist) and Linux (ps aux) VMs.
+    Can filter by process name (similar to nxc smb --tasklist process.exe).
+.PARAMETER ResourceGroup
+    Optional resource group filter.
+.PARAMETER SubscriptionId
+    Optional subscription ID to target specific subscription.
+.PARAMETER VMFilter
+    Filter by VM power state: all, running, stopped.
+.PARAMETER ProcessName
+    Optional process name filter (e.g., "keepass.exe", "ssh", "python").
+.PARAMETER ExportPath
+    Optional path to export results (CSV, JSON, HTML).
+#>
+function Invoke-VMProcessEnumeration {
+    param(
+        [string]$ResourceGroup,
+        [string]$SubscriptionId,
+        [string]$VMFilter = "all",
+        [string]$ProcessName,
+        [string]$ExportPath
+    )
+    
+    Write-ColorOutput -Message "`n[*] AZX - Remote Process Enumeration" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Command: process-enum (Similar to: nxc smb --tasklist)" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Azure equivalent of NetExec's remote process enumeration`n" -Color "Cyan"
+    
+    Write-ColorOutput -Message "[*] This command enumerates:" -Color "Cyan"
+    Write-ColorOutput -Message "    • Running processes on Azure VMs" -Color "Gray"
+    Write-ColorOutput -Message "    • Process details (PID, name, memory, CPU)" -Color "Gray"
+    Write-ColorOutput -Message "    • Support for Windows (tasklist) and Linux (ps aux)" -Color "Gray"
+    if ($ProcessName) {
+        Write-ColorOutput -Message "    • Filtering for process: $ProcessName" -Color "Gray"
+    }
+    Write-ColorOutput -Message ""
+    
+    # Use shared helper functions from AzureRM.ps1
+    $requiredModules = @('Az.Accounts', 'Az.Compute', 'Az.Resources')
+    if (-not (Initialize-AzureRMModules -RequiredModules $requiredModules)) {
+        return
+    }
+    
+    # Connect to Azure using shared helper
+    $azContext = Connect-AzureRM
+    if (-not $azContext) { return }
+    
+    # Get subscriptions to enumerate using shared helper
+    $subscriptionsToScan = Get-SubscriptionsToEnumerate -SubscriptionId $SubscriptionId -CurrentContext $azContext
+    if (-not $subscriptionsToScan) { return }
+    
+    # Global counters across all subscriptions
+    $exportData = @()
+    $totalProcesses = 0
+    $successfulQueries = 0
+    $failedQueries = 0
+    $totalVMsFound = 0
+    $totalVMsQueried = 0
+    
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] MULTI-SUBSCRIPTION VM ENUMERATION" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+    
+    # Loop through each subscription
+    foreach ($subscription in $subscriptionsToScan) {
+        # Use shared helper for subscription context switching
+        if (-not (Set-SubscriptionContext -Subscription $subscription)) {
+            continue
+        }
+        
+        # Get VMs in this subscription
+        Write-ColorOutput -Message "[*] Retrieving Azure VMs..." -Color "Yellow"
+        
+        try {
+            $vms = @()
+            if ($ResourceGroup) {
+                $vms = @(Get-AzVM -ResourceGroupName $ResourceGroup -Status -ErrorAction Stop)
+                if ($vms.Count -gt 0) {
+                    Write-ColorOutput -Message "[+] Retrieved $($vms.Count) VM(s) from resource group: $ResourceGroup" -Color "Green"
+                } else {
+                    Write-ColorOutput -Message "[*] No VMs found in resource group: $ResourceGroup" -Color "Yellow"
+                }
+            } else {
+                $vms = @(Get-AzVM -Status -ErrorAction Stop)
+                if ($vms.Count -gt 0) {
+                    Write-ColorOutput -Message "[+] Retrieved $($vms.Count) VM(s) across all resource groups" -Color "Green"
+                } else {
+                    Write-ColorOutput -Message "[*] No VMs found in this subscription" -Color "Yellow"
+                }
+            }
+        } catch {
+            $errorMessage = $_.Exception.Message
+            
+            # Parse Azure authorization error for cleaner display
+            if ($errorMessage -like "*AuthorizationFailed*" -or $errorMessage -like "*does not have authorization*") {
+                Write-ColorOutput -Message "[!] Authorization failed for subscription: $($subscription.Name)" -Color "Red"
+                Write-ColorOutput -Message "[*] You don't have permission to list VMs in this subscription" -Color "Yellow"
+                Write-ColorOutput -Message "[*] Skipping to next subscription...`n" -Color "Yellow"
+            } else {
+                Write-ColorOutput -Message "[!] Error retrieving VMs: $errorMessage" -Color "Red"
+                Write-ColorOutput -Message "[*] Skipping to next subscription...`n" -Color "Yellow"
+            }
+            continue
+        }
+        
+        if ($vms.Count -eq 0) {
+            Write-ColorOutput -Message "[*] No VMs to enumerate in this subscription`n" -Color "Yellow"
+            continue
+        }
+        
+        $totalVMsFound += $vms.Count
+        
+        # Apply VM filter
+        $filteredVMs = $vms
+        if ($VMFilter -ne "all") {
+            $filteredVMs = @($vms | Where-Object {
+                $powerState = ($_.PowerState -split ' ')[-1]
+                if ($VMFilter -eq "running") {
+                    # Match running or available states
+                    $powerState -match "running|available"
+                } elseif ($VMFilter -eq "stopped") {
+                    # Not running/available
+                    $powerState -notmatch "running|available"
+                } else {
+                    $true
+                }
+            })
+            Write-ColorOutput -Message "[*] Filtered to $($filteredVMs.Count) VM(s) with status: $VMFilter`n" -Color "Cyan"
+        }
+        
+        if ($filteredVMs.Count -eq 0) {
+            Write-ColorOutput -Message "[*] No VMs matching filter: $VMFilter`n" -Color "Yellow"
+            continue
+        }
+        
+        $totalVMsQueried += $filteredVMs.Count
+        
+        # Enumerate VMs in this subscription
+        foreach ($vm in $filteredVMs) {
+            $vmName = $vm.Name
+            $vmResourceGroup = $vm.ResourceGroupName
+            $powerState = ($vm.PowerState -split ' ')[-1]
+            $osType = $vm.StorageProfile.OsDisk.OsType
+            
+            # Check if VM is in a running/available state
+            $isRunning = $powerState -match "running|available"
+            $stateColor = if ($isRunning) { "Green" } else { "Yellow" }
+            
+            Write-ColorOutput -Message "[*] VM: $vmName" -Color "White"
+            Write-ColorOutput -Message "    Resource Group: $vmResourceGroup" -Color "Gray"
+            Write-ColorOutput -Message "    OS Type: $osType" -Color "Gray"
+            Write-ColorOutput -Message "    Power State: $powerState" -Color $stateColor
+            
+            # Only query running/available VMs
+            if (-not $isRunning) {
+                Write-ColorOutput -Message "    [!] VM is not in running state - skipping query" -Color "Yellow"
+                $failedQueries++
+                Write-Host ""
+                continue
+            }
+            
+            # Prepare script based on OS type
+            $scriptContent = ""
+            $scriptId = ""
+            
+            if ($osType -eq "Windows") {
+                # Windows: Use tasklist command
+                if ($ProcessName) {
+                    # Filter by process name
+                    $scriptContent = @"
+# Query processes using tasklist (filtered by name)
+try {
+    `$processName = '$ProcessName'
+    `$processes = tasklist /FO CSV /NH 2>&1 | Where-Object { `$_ -match `$processName }
+    if (`$processes) {
+        `$processes | ForEach-Object {
+            # Parse CSV format: "Image Name","PID","Session Name","Session#","Mem Usage"
+            if (`$_ -match '^"([^"]+)","(\d+)","([^"]+)","(\d+)","([^"]+)"') {
+                `$imageName = `$matches[1]
+                `$pid = `$matches[2]
+                `$sessionName = `$matches[3]
+                `$sessionNum = `$matches[4]
+                `$memUsage = `$matches[5]
+                Write-Output "PROCESS:`$imageName|PID:`$pid|SESSION:`$sessionName|MEM:`$memUsage"
+            }
+        }
+    } else {
+        Write-Output "NO_PROCESSES_FOUND"
+    }
+} catch {
+    Write-Output "ERROR:`$(`$_.Exception.Message)"
+}
+"@
+                } else {
+                    # List all processes
+                    $scriptContent = @"
+# Query all processes using tasklist
+try {
+    `$processes = tasklist /FO CSV /NH 2>&1
+    if (`$processes) {
+        `$processes | ForEach-Object {
+            # Parse CSV format: "Image Name","PID","Session Name","Session#","Mem Usage"
+            if (`$_ -match '^"([^"]+)","(\d+)","([^"]+)","(\d+)","([^"]+)"') {
+                `$imageName = `$matches[1]
+                `$pid = `$matches[2]
+                `$sessionName = `$matches[3]
+                `$sessionNum = `$matches[4]
+                `$memUsage = `$matches[5]
+                Write-Output "PROCESS:`$imageName|PID:`$pid|SESSION:`$sessionName|MEM:`$memUsage"
+            }
+        }
+    } else {
+        Write-Output "NO_PROCESSES_FOUND"
+    }
+} catch {
+    Write-Output "ERROR:`$(`$_.Exception.Message)"
+}
+"@
+                }
+                $scriptId = "RunPowerShellScript"
+            } else {
+                # Linux: Use ps aux command
+                if ($ProcessName) {
+                    # Filter by process name
+                    $scriptContent = @"
+#!/bin/bash
+# Query processes using ps aux (filtered by name)
+process_name='$ProcessName'
+ps_output=`$(ps aux 2>&1 | grep -i "`$process_name" | grep -v grep)
+if [ `$? -eq 0 ] && [ -n "`$ps_output" ]; then
+    echo "`$ps_output" | awk '{print "PROCESS:" `$11 "|PID:" `$2 "|CPU:" `$3 "%|MEM:" `$4 "%|USER:" `$1 "|COMMAND:" substr(`$0, index(`$0,`$11))}'
+else
+    echo "NO_PROCESSES_FOUND"
+fi
+"@
+                } else {
+                    # List all processes
+                    $scriptContent = @"
+#!/bin/bash
+# Query all processes using ps aux
+ps_output=`$(ps aux 2>&1)
+if [ `$? -eq 0 ] && [ -n "`$ps_output" ]; then
+    echo "`$ps_output" | awk 'NR>1 {print "PROCESS:" `$11 "|PID:" `$2 "|CPU:" `$3 "%|MEM:" `$4 "%|USER:" `$1 "|COMMAND:" substr(`$0, index(`$0,`$11))}'
+else
+    echo "NO_PROCESSES_FOUND"
+fi
+"@
+                }
+                $scriptId = "RunShellScript"
+            }
+            
+            # Execute Run Command
+            Write-ColorOutput -Message "    [*] Querying processes..." -Color "Yellow"
+            
+            try {
+                $result = Invoke-AzVMRunCommand -ResourceGroupName $vmResourceGroup -VMName $vmName -CommandId $scriptId -ScriptString $scriptContent -ErrorAction Stop
+                
+                $output = $result.Value[0].Message
+                
+                # Clean up Azure RunCommand output artifacts
+                $output = $output -replace "Enable succeeded:", ""
+                $output = $output -replace "\[stdout\]", ""
+                $output = $output -replace "\[stderr\]", ""
+                $output = $output.Trim()
+                
+                if ($output -match "NO_PROCESSES_FOUND") {
+                    if ($ProcessName) {
+                        Write-ColorOutput -Message "    [+] Query successful - Process '$ProcessName' not found" -Color "Cyan"
+                    } else {
+                        Write-ColorOutput -Message "    [+] Query successful - No processes found" -Color "Cyan"
+                    }
+                    $successfulQueries++
+                } elseif ($output -match "ERROR:") {
+                    Write-ColorOutput -Message "    [!] Error querying processes: $output" -Color "Red"
+                    $failedQueries++
+                } else {
+                    # Parse and display processes
+                    $processLines = $output -split "`n" | Where-Object { $_ -match "^PROCESS:" }
+                    $processCount = $processLines.Count
+                    $totalProcesses += $processCount
+                    
+                    if ($processCount -gt 0) {
+                        Write-ColorOutput -Message "    [+] Found $processCount process(es):" -Color "Green"
+                        
+                        foreach ($line in $processLines) {
+                            # Parse process line
+                            $procInfo = @{}
+                            $parts = $line -split '\|'
+                            foreach ($part in $parts) {
+                                if ($part -match '^([^:]+):(.+)$') {
+                                    $key = $matches[1]
+                                    $value = $matches[2]
+                                    $procInfo[$key] = $value
+                                }
+                            }
+                            
+                            # Format output in NetExec style
+                            $procName = if ($procInfo.PROCESS) { $procInfo.PROCESS } else { "UNKNOWN" }
+                            $processId = if ($procInfo.PID) { $procInfo.PID } else { "N/A" }
+                            $mem = if ($procInfo.MEM) { $procInfo.MEM } else { "N/A" }
+                            $cpu = if ($procInfo.CPU) { $procInfo.CPU } else { "N/A" }
+                            $user = if ($procInfo.USER) { $procInfo.USER } else { "N/A" }
+                            $session = if ($procInfo.SESSION) { $procInfo.SESSION } else { "N/A" }
+                            
+                            # Truncate long process names
+                            $maxNameLength = 30
+                            $displayName = if ($procName.Length -gt $maxNameLength) {
+                                $procName.Substring(0, $maxNameLength - 3) + "..."
+                            } else {
+                                $procName
+                            }
+                            
+                            # NetExec-style output: PROTOCOL IP PORT PROCESS_NAME [*] PID:xxx MEM:xxx CPU:xxx USER:xxx
+                            $outputLine = "AZR".PadRight(12) + 
+                                         $vmName.PadRight(17) + 
+                                         "443".PadRight(7) + 
+                                         $displayName.PadRight(38) + 
+                                         "[*] PID:$processId MEM:$mem"
+                            
+                            if ($cpu -ne "N/A") {
+                                $outputLine += " CPU:$cpu"
+                            }
+                            if ($user -ne "N/A") {
+                                $outputLine += " USER:$user"
+                            }
+                            if ($session -ne "N/A" -and $osType -eq "Windows") {
+                                $outputLine += " SESSION:$session"
+                            }
+                            
+                            Write-ColorOutput -Message $outputLine -Color "Cyan"
+                            
+                            # Collect for export
+                            if ($ExportPath) {
+                                $exportData += [PSCustomObject]@{
+                                    SubscriptionName = $subscription.Name
+                                    SubscriptionId = $subscription.Id
+                                    VMName = $vmName
+                                    ResourceGroup = $vmResourceGroup
+                                    OSType = $osType
+                                    ProcessName = $procName
+                                    PID = $processId
+                                    MemoryUsage = $mem
+                                    CPUUsage = $cpu
+                                    User = $user
+                                    Session = $session
+                                    CommandLine = if ($procInfo.COMMAND) { $procInfo.COMMAND } else { $null }
+                                }
+                            }
+                        }
+                    } else {
+                        Write-ColorOutput -Message "    [+] Query successful - No processes found" -Color "Cyan"
+                    }
+                    $successfulQueries++
+                }
+            } catch {
+                $errorMessage = $_.Exception.Message
+                Write-ColorOutput -Message "    [!] Failed to query processes: $errorMessage" -Color "Red"
+                
+                # Check for common authorization errors
+                if ($errorMessage -like "*AuthorizationFailed*" -or $errorMessage -like "*does not have authorization*") {
+                    Write-ColorOutput -Message "    [!] Insufficient permissions - requires 'Virtual Machine Contributor' or 'VM Command Executor' role" -Color "Yellow"
+                }
+                
+                $failedQueries++
+            }
+            
+            Write-Host ""
+        }
+    }
+    
+    # Summary
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ENUMERATION SUMMARY" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "    Total VMs Found: $totalVMsFound" -Color "White"
+    Write-ColorOutput -Message "    VMs Queried: $totalVMsQueried" -Color "White"
+    Write-ColorOutput -Message "    Successful Queries: $successfulQueries" -Color "Green"
+    Write-ColorOutput -Message "    Failed Queries: $failedQueries" -Color $(if ($failedQueries -gt 0) { "Red" } else { "Green" })
+    Write-ColorOutput -Message "    Total Processes Found: $totalProcesses" -Color "Cyan"
+    
+    # Export if requested
+    if ($ExportPath) {
+        try {
+            $extension = [System.IO.Path]::GetExtension($ExportPath).ToLower()
+            
+            if ($extension -eq ".csv") {
+                $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".json") {
+                $exportData | ConvertTo-Json -Depth 5 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".html") {
+                $stats = [ordered]@{
+                    "Total VMs Found" = $totalVMsFound
+                    "VMs Queried" = $totalVMsQueried
+                    "Successful Queries" = $successfulQueries
+                    "Failed Queries" = $failedQueries
+                    "Total Processes Found" = $totalProcesses
+                }
+                
+                $description = "Remote process enumeration on Azure VMs. Azure equivalent of NetExec's 'nxc smb --tasklist' command."
+                if ($ProcessName) {
+                    $description += " Filtered for process: $ProcessName"
+                }
+                
+                $success = Export-HtmlReport -Data $exportData -OutputPath $ExportPath -Title "Process Enumeration Report" -Statistics $stats -CommandName "process-enum" -Description $description
+                
+                if ($success) {
+                    Write-ColorOutput -Message "`n[+] HTML report exported to: $ExportPath" -Color "Green"
+                }
+            } else {
+                # Default to CSV
+                $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            }
+        } catch {
+            Write-ColorOutput -Message "`n[!] Failed to export results: $_" -Color "Red"
+        }
+    }
+    
+    # NetExec comparison help
+    Write-ColorOutput -Message "`n[*] NETEXEC COMPARISON:" -Color "Yellow"
+    if ($ProcessName) {
+        Write-ColorOutput -Message "    NetExec: nxc smb 192.168.1.0/24 -u username -p password --tasklist $ProcessName" -Color "Gray"
+    } else {
+        Write-ColorOutput -Message "    NetExec: nxc smb 192.168.1.0/24 -u username -p password --tasklist" -Color "Gray"
+    }
+    Write-ColorOutput -Message "    AZexec:  .\azx.ps1 process-enum" -Color "Gray"
+    if ($ProcessName) {
+        Write-ColorOutput -Message "    AZexec:  .\azx.ps1 process-enum -ProcessName '$ProcessName'" -Color "Gray"
+    }
+    Write-ColorOutput -Message "`n    NetExec queries processes via SMB/WMI on remote Windows hosts" -Color "Gray"
+    Write-ColorOutput -Message "    AZexec queries processes via Azure VM Run Command on Azure VMs" -Color "Gray"
+    Write-ColorOutput -Message "`n[*] Additional Info:" -Color "Yellow"
+    Write-ColorOutput -Message "    - Process enumeration requires VMs to be in 'running' state" -Color "Gray"
+    Write-ColorOutput -Message "    - Requires 'Virtual Machine Contributor' or 'VM Command Executor' role" -Color "Gray"
+    Write-ColorOutput -Message "    - Supports both Windows (tasklist) and Linux (ps aux) VMs" -Color "Gray"
+    Write-ColorOutput -Message "    - All queries are logged in Azure Activity Logs" -Color "Gray"
+    
+    return $exportData
+}
