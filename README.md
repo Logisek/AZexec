@@ -18,7 +18,7 @@
 > 1. **Phase 1** - `users` command: Stealthy username enumeration via GetCredentialType API (no auth logs!)
 > 2. **Phase 2** - `guest` command: ROPC-based credential testing with MFA detection
 > 
-> This two-phase approach is more effective and safer than traditional spraying - only validated usernames are tested, reducing account lockout risk. [See complete workflow →](#password-spray-attack-examples-getcredentialtype--ropc)
+> This two-phase approach is more effective and safer than traditional spraying - only validated usernames are tested, reducing account lockout risk. [See complete workflow →](#password-spray-attack-examples-getcredentialtype--ropc).
 
 ---
 
