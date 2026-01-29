@@ -66,6 +66,7 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb -M enum_av` | `.\azx.ps1 av-enum` | ✅ Required | **Enumerate Anti-Virus & EDR products** (security posture assessment) |
 | `nxc smb --tasklist` | `.\azx.ps1 process-enum` | ✅ Required | **Enumerate remote processes** (Windows tasklist / Linux ps aux) |
 | `nxc smb -M lockscreendoors` | `.\azx.ps1 lockscreen-enum` | ✅ Required | **Detect lockscreen backdoors** (accessibility executable hijacking) |
+| `nxc smb -M sccm-recon6` | `.\azx.ps1 intune-enum` | ✅ Required | **Enumerate Intune/Endpoint Manager** (Azure equivalent of SCCM reconnaissance) |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1833,6 +1834,7 @@ The following commands use Azure Resource Manager API (Az PowerShell modules) in
 | `bitlocker-enum` | Enumerate BitLocker encryption status on Intune devices + Azure VMs (mimics nxc -M bitlocker) | Microsoft.Graph (Intune) + Az.Accounts, Az.Compute, Az.Resources (VMs) | DeviceManagementManagedDevices.Read.All (Intune) + VM Contributor (Azure VMs) |
 | `process-enum` | Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist) | Az.Accounts, Az.Compute, Az.Resources | VM Contributor or Reader + VM Command Executor |
 | `lockscreen-enum` | Detect lockscreen backdoors on Azure VMs (mimics nxc smb -M lockscreendoors) | Az.Accounts, Az.Compute, Az.Resources | VM Contributor or Reader + VM Command Executor |
+| `intune-enum` | Enumerate Intune/Endpoint Manager configuration (mimics nxc smb -M sccm-recon6) | Microsoft.Graph | DeviceManagementConfiguration.Read.All, DeviceManagementRBAC.Read.All, DeviceManagementManagedDevices.Read.All |
 
 **Multi-Subscription Support**: All ARM commands automatically enumerate all accessible subscriptions. Use `-SubscriptionId` to target a specific subscription, or `-ResourceGroup` to filter within subscriptions.
 
@@ -4105,6 +4107,146 @@ AZR         web-server-01  443     osk.exe                            [+] CLEAN 
 - **"AuthorizationFailed"**: Ensure you have `Virtual Machine Contributor` or `VM Command Executor` role assigned.
 - **"Skipping - Lockscreen enumeration is Windows-only"**: Linux VMs don't have Windows accessibility features and are automatically skipped.
 - **"NOT FOUND"**: Some executables may not exist on all Windows versions (e.g., voiceaccess.exe is Windows 11+ only).
+
+---
+
+### Intune/Endpoint Manager Enumeration: `intune-enum`
+
+The Azure equivalent of NetExec's `-M sccm-recon6` module. Enumerate Microsoft Intune/Endpoint Manager infrastructure configuration:
+
+```powershell
+# Enumerate Intune configuration (like nxc smb -M sccm-recon6)
+.\azx.ps1 intune-enum
+
+# Export results to file
+.\azx.ps1 intune-enum -ExportPath intune-report.csv
+.\azx.ps1 intune-enum -ExportPath intune-report.json
+.\azx.ps1 intune-enum -ExportPath intune-report.html
+```
+
+**What is SCCM vs Intune?**
+
+SCCM (System Center Configuration Manager) is Microsoft's on-premises endpoint management solution. In Azure/cloud environments, SCCM has been replaced by **Microsoft Intune** (part of Microsoft Endpoint Manager). This command provides the cloud equivalent of SCCM reconnaissance.
+
+**NetExec sccm-recon6 vs AZexec intune-enum:**
+
+| Aspect | On-Premises (NetExec sccm-recon6) | Azure (AZexec intune-enum) |
+|--------|-----------------------------------|----------------------------|
+| **Command** | `nxc smb <target> -u User -p Pass -M sccm-recon6` | `.\azx.ps1 intune-enum` |
+| **Protocol** | SMB/Registry (port 445) | Microsoft Graph API (HTTPS/443) |
+| **Target** | SCCM Primary Site Server | Microsoft Intune tenant |
+| **Data Source** | `HKLM\SOFTWARE\Microsoft\SMS` registry | Graph `/deviceManagement/*` endpoints |
+| **Infrastructure** | Distribution Points, Management Points | Enrollment configs, Compliance policies |
+| **Role Info** | Site server roles | Intune RBAC role definitions & assignments |
+| **Deployment** | PXE boot, Task Sequences | Autopilot profiles, Configuration profiles |
+
+**What intune-enum Enumerates:**
+
+| Category | SCCM Equivalent | Description |
+|----------|-----------------|-------------|
+| **Enrollment Configurations** | Distribution Points | Device enrollment limits, platform restrictions |
+| **Compliance Policies** | Management Point security policies | Required security settings per platform |
+| **Configuration Profiles** | Task Sequences | WiFi, VPN, certificates, custom configs |
+| **RBAC Role Definitions** | Site Admin Roles | Built-in and custom Intune admin roles |
+| **Role Assignments** | Role Memberships | Who has what Intune permissions |
+| **Autopilot Profiles** | PXE Boot / OS Deployment | Windows device provisioning settings |
+| **Managed Device Summary** | Site Status | Total enrolled devices by platform |
+
+**Required Permissions:**
+
+```
+DeviceManagementConfiguration.Read.All  - Read device configurations and policies
+DeviceManagementRBAC.Read.All           - Read Intune role assignments
+DeviceManagementManagedDevices.Read.All - Read managed device info
+```
+
+**Example Output:**
+```
+[*] AZX - Intune/Endpoint Manager Enumeration
+[*] Command: intune-enum (Similar to: nxc smb -M sccm-recon6)
+[*] Azure equivalent of NetExec's SCCM reconnaissance
+
+[*] ========================================
+[*] ENROLLMENT CONFIGURATION
+[*] ========================================
+
+AZR         INTUNE          443    Windows Enrollment                 [*] Type: Enrollment Limit | Limit: 15 devices
+AZR         INTUNE          443    iOS Enrollment                     [*] Type: Platform Restrictions
+AZR         INTUNE          443    Android Enrollment                 [!] HIGH LIMIT - Type: Enrollment Limit | Limit: 50 devices
+
+[*] ========================================
+[*] COMPLIANCE POLICIES
+[*] ========================================
+
+AZR         INTUNE          443    Windows-Security-Baseline          [*] Platform: Windows 10/11 | BitLocker:Required | Firewall:Required
+AZR         INTUNE          443    iOS-Corporate-Policy               [*] Platform: iOS/iPadOS | Password:Required | MinLen:6
+AZR         INTUNE          443    Android-Basic-Policy               [!] NO SECURITY REQUIREMENTS - Platform: Android
+
+[*] ========================================
+[*] INTUNE RBAC ROLES
+[*] ========================================
+
+AZR         INTUNE          443    Intune Administrator               [!] HIGH PRIV - Full Intune access
+AZR         INTUNE          443    Help Desk Operator                 [*] Built-in | Permissions: 45
+AZR         INTUNE          443    Custom Device Admin                [*] Custom | Permissions: 23
+
+[*] ========================================
+[*] CONFIGURATION PROFILES
+[*] ========================================
+
+AZR         INTUNE          443    Corporate-WiFi                     [!] SENSITIVE - WiFi
+AZR         INTUNE          443    VPN-AlwaysOn                       [!] SENSITIVE - VPN
+AZR         INTUNE          443    Certificate-SCEP                   [!] SENSITIVE - Certificate
+AZR         INTUNE          443    Windows-Baseline                   [*] Type: Windows General
+
+[*] ========================================
+[*] AUTOPILOT PROFILES
+[*] ========================================
+
+AZR         INTUNE          443    Standard-Deployment                [*] Mode: User-Driven | OOBE: SkipEULA | SkipPrivacy
+AZR         INTUNE          443    Kiosk-Deployment                   [!] LOCAL ADMIN - Mode: Self-Deploying | OOBE: LocalAdmin
+
+[*] ========================================
+[*] MANAGED DEVICES SUMMARY
+[*] ========================================
+
+    Total Enrolled Devices: 1,234
+    Windows Devices: 892
+    iOS/iPadOS Devices: 256
+    Android Devices: 78
+    macOS Devices: 8
+```
+
+**Security Analysis Features:**
+
+| Check | Risk Level | Description |
+|-------|------------|-------------|
+| High Enrollment Limits | MEDIUM | Device limits >10 may indicate weak controls |
+| No Security Requirements | HIGH | Compliance policies without security settings |
+| High Privilege Roles | HIGH | Roles with full Intune admin access |
+| Sensitive Config Profiles | INFO | VPN, WiFi, Certificate profiles (credential exposure risk) |
+| Local Admin Autopilot | MEDIUM | Autopilot profiles granting local admin rights |
+
+**Use Cases:**
+
+| Scenario | Description | Command |
+|----------|-------------|---------|
+| **Security Audit** | Review Intune configuration posture | `.\azx.ps1 intune-enum -ExportPath audit.html` |
+| **Penetration Testing** | Identify weak policies and high-priv roles | `.\azx.ps1 intune-enum` |
+| **Compliance Check** | Verify security requirements are enforced | `.\azx.ps1 intune-enum -ExportPath compliance.csv` |
+| **Attack Surface Analysis** | Identify sensitive configuration profiles | Review exported data for VPN/WiFi/Cert profiles |
+
+**Attack Context:**
+1. Enumerate Intune configuration to understand device management posture
+2. Identify compliance policies without security requirements (potential bypass)
+3. Find high-privilege role assignments (privilege escalation targets)
+4. Locate sensitive configuration profiles (credential harvesting opportunity)
+5. Analyze Autopilot profiles for local admin grants (initial access vector)
+
+**Troubleshooting**:
+- **"Failed to retrieve enrollment configurations"**: Ensure you have `DeviceManagementConfiguration.Read.All` permission.
+- **"Failed to retrieve role definitions"**: Ensure you have `DeviceManagementRBAC.Read.All` permission.
+- **"No managed device data available"**: Ensure you have `DeviceManagementManagedDevices.Read.All` permission or devices are enrolled in Intune.
 
 ---
 

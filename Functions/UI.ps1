@@ -71,6 +71,7 @@ function Show-Help {
         @{Name="av-enum"; Auth="Required"; Description="Enumerate Anti-Virus & EDR products (mimics nxc smb -M enum_av)"}
         @{Name="process-enum"; Auth="Required"; Description="Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist)"}
         @{Name="lockscreen-enum"; Auth="Required"; Description="Detect lockscreen backdoors on Azure VMs (mimics nxc smb -M lockscreendoors)"}
+        @{Name="intune-enum"; Auth="Required"; Description="Enumerate Intune/Endpoint Manager configuration (mimics nxc smb -M sccm-recon6)"}
         @{Name="help"; Auth="N/A"; Description="Display this help message"}
     )
     
@@ -111,6 +112,7 @@ function Show-Help {
     Write-Host "    .\azx.ps1 av-enum -Filter noncompliant   - Find devices with security gaps"
     Write-Host "    .\azx.ps1 process-enum                   - Enumerate remote processes (--tasklist)"
     Write-Host "    .\azx.ps1 lockscreen-enum                - Detect lockscreen backdoors (-M lockscreendoors)"
+    Write-Host "    .\azx.ps1 intune-enum                    - Enumerate Intune/Endpoint Manager (-M sccm-recon6)"
 
     Write-ColorOutput -Message "`n[*] For detailed help and more examples, see README.md or use Get-Help .\azx.ps1" -Color "Cyan"
     Write-Host ""

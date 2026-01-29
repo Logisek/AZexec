@@ -441,25 +441,87 @@ function Export-HtmlReport {
 
 
 function Initialize-GraphModule {
-    Write-ColorOutput -Message "[*] Checking Microsoft.Graph module..." -Color "Yellow"
-    
-    if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
-        Write-ColorOutput -Message "[!] Microsoft.Graph module not found. Installing..." -Color "Yellow"
-        try {
-            Install-Module Microsoft.Graph -Scope CurrentUser -Force -AllowClobber
-            Write-ColorOutput -Message "[+] Microsoft.Graph module installed successfully" -Color "Green"
-        } catch {
-            Write-ColorOutput -Message "[!] Failed to install Microsoft.Graph module: $_" -Color "Red"
-            exit 1
+    param(
+        [string[]]$RequiredModules = @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+    )
+
+    Write-ColorOutput -Message "[*] Checking Microsoft.Graph modules..." -Color "Yellow"
+
+    # Always ensure Authentication is first (dependency for all other modules)
+    if ($RequiredModules -notcontains "Microsoft.Graph.Authentication") {
+        $RequiredModules = @("Microsoft.Graph.Authentication") + $RequiredModules
+    } else {
+        # Move Authentication to the front
+        $RequiredModules = @("Microsoft.Graph.Authentication") + ($RequiredModules | Where-Object { $_ -ne "Microsoft.Graph.Authentication" })
+    }
+
+    # First pass: Check all modules are installed and get the highest required version
+    $highestVersion = $null
+    foreach ($moduleName in $RequiredModules) {
+        $installedModule = Get-Module -ListAvailable -Name $moduleName | Sort-Object Version -Descending | Select-Object -First 1
+        if ($installedModule) {
+            if ($null -eq $highestVersion -or $installedModule.Version -gt $highestVersion) {
+                $highestVersion = $installedModule.Version
+            }
         }
     }
-    
-    try {
-        Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
-        Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction Stop
-    } catch {
-        Write-ColorOutput -Message "[!] Failed to import Microsoft.Graph modules: $_" -Color "Red"
-        exit 1
+
+    # Check if Authentication module needs to be updated to match other modules
+    $authModule = Get-Module -ListAvailable -Name "Microsoft.Graph.Authentication" | Sort-Object Version -Descending | Select-Object -First 1
+    if ($authModule -and $highestVersion -and $authModule.Version -lt $highestVersion) {
+        Write-ColorOutput -Message "[!] Microsoft.Graph.Authentication ($($authModule.Version)) needs update to match other modules ($highestVersion)" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Updating Microsoft.Graph.Authentication..." -Color "Yellow"
+        try {
+            Update-Module Microsoft.Graph.Authentication -Force -ErrorAction Stop
+            Write-ColorOutput -Message "[+] Microsoft.Graph.Authentication updated successfully" -Color "Green"
+        } catch {
+            Write-ColorOutput -Message "[!] Failed to update module. Attempting fresh install..." -Color "Yellow"
+            try {
+                Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+                Write-ColorOutput -Message "[+] Microsoft.Graph.Authentication installed successfully" -Color "Green"
+            } catch {
+                Write-ColorOutput -Message "[!] Failed to install Microsoft.Graph.Authentication: $_" -Color "Red"
+                exit 1
+            }
+        }
+    }
+
+    foreach ($moduleName in $RequiredModules) {
+        # Check if module is available (installed)
+        if (-not (Get-Module -ListAvailable -Name $moduleName)) {
+            Write-ColorOutput -Message "[!] Module $moduleName not found. Installing..." -Color "Yellow"
+            try {
+                Install-Module $moduleName -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+                Write-ColorOutput -Message "[+] Module $moduleName installed successfully" -Color "Green"
+            } catch {
+                Write-ColorOutput -Message "[!] Failed to install module $moduleName : $_" -Color "Red"
+                exit 1
+            }
+        }
+
+        # Import module if not already loaded
+        if (-not (Get-Module -Name $moduleName)) {
+            try {
+                Import-Module $moduleName -ErrorAction Stop
+                Write-ColorOutput -Message "[+] Loaded module: $moduleName" -Color "Green"
+            } catch {
+                # If import fails due to version mismatch, try updating the module
+                if ($_ -match "RequiredModules" -or $_ -match "is not loaded") {
+                    Write-ColorOutput -Message "[!] Module version conflict detected. Updating $moduleName..." -Color "Yellow"
+                    try {
+                        Update-Module $moduleName -Force -ErrorAction Stop
+                        Import-Module $moduleName -ErrorAction Stop
+                        Write-ColorOutput -Message "[+] Loaded module: $moduleName (after update)" -Color "Green"
+                    } catch {
+                        Write-ColorOutput -Message "[!] Failed to update/import module $moduleName : $_" -Color "Red"
+                        exit 1
+                    }
+                } else {
+                    Write-ColorOutput -Message "[!] Failed to import module $moduleName : $_" -Color "Red"
+                    exit 1
+                }
+            }
+        }
     }
 }
 

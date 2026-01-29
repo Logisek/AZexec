@@ -173,6 +173,7 @@
     - av-enum: Enumerate Anti-Virus and EDR products on Azure/Entra devices (mimics nxc smb -M enum_av) (authentication required)
     - process-enum: Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist) (multi-subscription support)
     - lockscreen-enum: Detect accessibility backdoors on Azure VMs (mimics nxc smb -M lockscreendoors) (multi-subscription support)
+    - intune-enum: Enumerate Intune/Endpoint Manager configuration (mimics nxc smb -M sccm-recon6) (authentication required)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -642,9 +643,21 @@
     .\azx.ps1 lockscreen-enum -ResourceGroup Production-RG -ExportPath lockscreen-report.html
     Check VMs in specific resource group and export HTML report
 
+.EXAMPLE
+    .\azx.ps1 intune-enum
+    Enumerate Intune/Endpoint Manager configuration (similar to nxc smb -M sccm-recon6)
+
+.EXAMPLE
+    .\azx.ps1 intune-enum -ExportPath intune-report.csv
+    Enumerate Intune configuration and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 intune-enum -ExportPath intune-report.html
+    Enumerate Intune configuration and generate HTML report
+
 .NOTES
     Requires PowerShell 7+
-    Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'local-groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies' commands)
+    Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'local-groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies', 'intune-enum' commands)
     Requires Az PowerShell module (for ARM-based commands: 'vm-loggedon', 'storage-enum', 'keyvault-enum', 'network-enum', 'shares-enum')
     Requires appropriate Azure/Entra permissions (for authenticated commands)
     The 'tenant' and 'users' commands do not require authentication
@@ -675,6 +688,8 @@
     The 'av-enum' command is the Azure equivalent of NetExec's -M enum_av module for antivirus/EDR enumeration
     The 'process-enum' command is the Azure equivalent of NetExec's --tasklist command for remote process enumeration
     The 'lockscreen-enum' command is the Azure equivalent of NetExec's -M lockscreendoors module for detecting accessibility backdoors
+    The 'intune-enum' command is the Azure equivalent of NetExec's -M sccm-recon6 module for SCCM/Intune infrastructure reconnaissance
+    The 'intune-enum' command requires DeviceManagementConfiguration.Read.All, DeviceManagementRBAC.Read.All, and DeviceManagementManagedDevices.Read.All permissions
 
     All ARM-based commands support multi-subscription enumeration:
     - By default, all accessible subscriptions are enumerated automatically
@@ -687,7 +702,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -774,6 +789,7 @@ $FunctionsPath = Join-Path $PSScriptRoot "Functions"
 . "$FunctionsPath\Vulnerabilities.ps1"
 . "$FunctionsPath\Security.ps1"
 . "$FunctionsPath\AzureRM.ps1"
+. "$FunctionsPath\Intune.ps1"
 
 # ============================================
 # MAIN EXECUTION
@@ -785,9 +801,48 @@ Show-Banner
 # For authenticated commands (hosts, groups, pass-pol, sessions), we need Graph module
 # vuln-list handles authentication internally (hybrid unauthenticated + authenticated)
 # rid-brute is an alias for user-profiles (Azure equivalent of RID bruteforcing)
-if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "rid-brute", "roles", "apps", "sp-discovery", "ca-policies", "local-groups")) {
-    Initialize-GraphModule
-    
+if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "rid-brute", "roles", "apps", "sp-discovery", "ca-policies", "local-groups", "intune-enum")) {
+    # Determine required Graph modules based on command
+    $graphModules = switch ($Command) {
+        "hosts" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+        { $_ -in @("user-profiles", "rid-brute") } {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Users")
+        }
+        "groups" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Groups")
+        }
+        "pass-pol" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+        "sessions" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Reports")
+        }
+        "roles" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+        "apps" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Applications")
+        }
+        "sp-discovery" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Applications")
+        }
+        "ca-policies" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.SignIns")
+        }
+        "local-groups" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+        "intune-enum" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.DeviceManagement", "Microsoft.Graph.DeviceManagement.Administration")
+        }
+        default {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+    }
+    Initialize-GraphModule -RequiredModules $graphModules
+
     # Determine required scopes based on command
     $requiredScopes = switch ($Command) {
         "hosts" { "Device.Read.All" }
@@ -801,39 +856,42 @@ if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "
         "apps" { "Application.Read.All,Directory.Read.All" }
         "ca-policies" { "Policy.Read.All,Directory.Read.All" }
         "local-groups" { "AdministrativeUnit.Read.All,Directory.Read.All" }
-        "sp-discovery" { 
+        "sp-discovery" {
             if ($IncludeWritePermissions) {
                 "Application.Read.All,Directory.Read.All,AppRoleAssignment.ReadWrite.All"
             } else {
                 "Application.Read.All,Directory.Read.All"
             }
         }
+        "intune-enum" { "DeviceManagementConfiguration.Read.All,DeviceManagementRBAC.Read.All,DeviceManagementManagedDevices.Read.All,DeviceManagementServiceConfig.Read.All" }
         default { $Scopes }
     }
-    
+
     Connect-GraphAPI -Scopes $requiredScopes
 }
 
 # vuln-list, guest-vuln-scan, and av-enum require Graph module but handle connection internally
 if ($Command -eq "vuln-list" -or $Command -eq "guest-vuln-scan") {
-    Initialize-GraphModule
+    $graphModules = @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement", "Microsoft.Graph.Users", "Microsoft.Graph.Groups", "Microsoft.Graph.Applications")
+    Initialize-GraphModule -RequiredModules $graphModules
 }
 
 # av-enum requires Graph module with specific permissions
 if ($Command -eq "av-enum") {
-    Initialize-GraphModule
-    
+    $graphModules = @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement", "Microsoft.Graph.DeviceManagement")
+    Initialize-GraphModule -RequiredModules $graphModules
+
     # av-enum needs Device.Read.All at minimum, plus MDE/Intune permissions for full data
     # DeviceManagementConfiguration.Read.All is needed for some encryption/compliance data
     $requiredScopes = "Device.Read.All,SecurityEvents.Read.All,DeviceManagementManagedDevices.Read.All,DeviceManagementConfiguration.Read.All"
-    
+
     Write-ColorOutput -Message "`n[*] Connecting to Microsoft Graph for Security Enumeration..." -Color "Yellow"
     Write-ColorOutput -Message "[*] Permissions requested (some require admin consent):" -Color "Cyan"
     Write-ColorOutput -Message "    • Device.Read.All (required - device enumeration)" -Color "White"
     Write-ColorOutput -Message "    • DeviceManagementManagedDevices.Read.All (Intune device data, BitLocker status)" -Color "White"
     Write-ColorOutput -Message "    • DeviceManagementConfiguration.Read.All (device compliance, encryption policies)" -Color "White"
     Write-ColorOutput -Message "    • SecurityEvents.Read.All (MDE/Defender status - requires admin consent)`n" -Color "Gray"
-    
+
     Connect-GraphAPI -Scopes $requiredScopes
 }
 
@@ -997,12 +1055,15 @@ switch ($Command) {
     "av-enum" {
         Invoke-SecurityEnumeration -Filter $Filter -ExportPath $ExportPath
     }
+    "intune-enum" {
+        Invoke-IntuneEnumeration -ExportPath $ExportPath
+    }
     "help" {
         Show-Help
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, help" -Color "Yellow"
     }
 }
 
