@@ -174,6 +174,7 @@
     - process-enum: Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist) (multi-subscription support)
     - lockscreen-enum: Detect accessibility backdoors on Azure VMs (mimics nxc smb -M lockscreendoors) (multi-subscription support)
     - intune-enum: Enumerate Intune/Endpoint Manager configuration (mimics nxc smb -M sccm-recon6) (authentication required)
+    - delegation-enum: Enumerate OAuth2 delegation/impersonation paths (mimics nxc smb --delegate) (authentication required)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -655,6 +656,18 @@
     .\azx.ps1 intune-enum -ExportPath intune-report.html
     Enumerate Intune configuration and generate HTML report
 
+.EXAMPLE
+    .\azx.ps1 delegation-enum
+    Enumerate OAuth2 delegated permissions and identify impersonation paths (Azure equivalent of nxc smb --delegate)
+
+.EXAMPLE
+    .\azx.ps1 delegation-enum -ExportPath delegation.csv
+    Enumerate OAuth2 delegation and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 delegation-enum -ExportPath delegation.json
+    Enumerate OAuth2 delegation with full details exported to JSON
+
 .NOTES
     Requires PowerShell 7+
     Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'local-groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies', 'intune-enum' commands)
@@ -690,6 +703,7 @@
     The 'lockscreen-enum' command is the Azure equivalent of NetExec's -M lockscreendoors module for detecting accessibility backdoors
     The 'intune-enum' command is the Azure equivalent of NetExec's -M sccm-recon6 module for SCCM/Intune infrastructure reconnaissance
     The 'intune-enum' command requires DeviceManagementConfiguration.Read.All, DeviceManagementRBAC.Read.All, and DeviceManagementManagedDevices.Read.All permissions
+    The 'delegation-enum' command requires Application.Read.All and Directory.Read.All permissions (Azure equivalent of NetExec --delegate)
 
     All ARM-based commands support multi-subscription enumeration:
     - By default, all accessible subscriptions are enumerated automatically
@@ -702,7 +716,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "delegation-enum", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -812,6 +826,7 @@ $FunctionsPath = Join-Path $PSScriptRoot "Functions"
 . "$FunctionsPath\Security.ps1"
 . "$FunctionsPath\AzureRM.ps1"
 . "$FunctionsPath\Intune.ps1"
+. "$FunctionsPath\Delegation.ps1"
 
 # ============================================
 # MAIN EXECUTION
@@ -823,7 +838,7 @@ Show-Banner
 # For authenticated commands (hosts, groups, pass-pol, sessions), we need Graph module
 # vuln-list handles authentication internally (hybrid unauthenticated + authenticated)
 # rid-brute is an alias for user-profiles (Azure equivalent of RID bruteforcing)
-if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "rid-brute", "roles", "apps", "sp-discovery", "ca-policies", "local-groups", "intune-enum")) {
+if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "rid-brute", "roles", "apps", "sp-discovery", "ca-policies", "local-groups", "intune-enum", "delegation-enum")) {
     # Determine required Graph modules based on command
     $graphModules = switch ($Command) {
         "hosts" {
@@ -859,6 +874,9 @@ if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "
         "intune-enum" {
             @("Microsoft.Graph.Authentication", "Microsoft.Graph.DeviceManagement", "Microsoft.Graph.DeviceManagement.Administration")
         }
+        "delegation-enum" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Applications")
+        }
         default {
             @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
         }
@@ -886,6 +904,7 @@ if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "
             }
         }
         "intune-enum" { "DeviceManagementConfiguration.Read.All,DeviceManagementRBAC.Read.All,DeviceManagementManagedDevices.Read.All,DeviceManagementServiceConfig.Read.All" }
+        "delegation-enum" { "Application.Read.All,Directory.Read.All" }
         default { $Scopes }
     }
 
@@ -1083,12 +1102,15 @@ switch ($Command) {
     "intune-enum" {
         Invoke-IntuneEnumeration -ExportPath $ExportPath
     }
+    "delegation-enum" {
+        Invoke-DelegationEnumeration -ExportPath $ExportPath
+    }
     "help" {
         Show-Help
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, delegation-enum, help" -Color "Yellow"
     }
 }
 

@@ -74,6 +74,7 @@ function Show-Help {
         @{Name="process-enum"; Auth="Required"; Description="Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist)"}
         @{Name="lockscreen-enum"; Auth="Required"; Description="Detect lockscreen backdoors on Azure VMs (mimics nxc smb -M lockscreendoors)"}
         @{Name="intune-enum"; Auth="Required"; Description="Enumerate Intune/Endpoint Manager configuration (mimics nxc smb -M sccm-recon6)"}
+        @{Name="delegation-enum"; Auth="Required"; Description="Enumerate OAuth2 delegation/impersonation paths (mimics nxc smb --delegate)"}
         @{Name="help"; Auth="N/A"; Description="Display this help message"}
     )
     
@@ -115,6 +116,7 @@ function Show-Help {
     Write-Host "    .\azx.ps1 process-enum                   - Enumerate remote processes (--tasklist)"
     Write-Host "    .\azx.ps1 lockscreen-enum                - Detect lockscreen backdoors (-M lockscreendoors)"
     Write-Host "    .\azx.ps1 intune-enum                    - Enumerate Intune/Endpoint Manager (-M sccm-recon6)"
+    Write-Host "    .\azx.ps1 delegation-enum                - Enumerate OAuth2 delegation (--delegate)"
 
     Write-ColorOutput -Message "`n[*] Password Spray Examples (NetExec-style):" -Color "Yellow"
     Write-Host "    .\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Summer2024!'"

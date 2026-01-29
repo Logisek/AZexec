@@ -75,6 +75,7 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb --tasklist` | `.\azx.ps1 process-enum` | ✅ Required | **Enumerate remote processes** (Windows tasklist / Linux ps aux) |
 | `nxc smb -M lockscreendoors` | `.\azx.ps1 lockscreen-enum` | ✅ Required | **Detect lockscreen backdoors** (accessibility executable hijacking) |
 | `nxc smb -M sccm-recon6` | `.\azx.ps1 intune-enum` | ✅ Required | **Enumerate Intune/Endpoint Manager** (Azure equivalent of SCCM reconnaissance) |
+| `nxc smb --delegate` | `.\azx.ps1 delegation-enum` | ✅ Required | **Enumerate OAuth2 delegation** (impersonation paths via consent grants) |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1848,6 +1849,7 @@ The following commands use Azure Resource Manager API (Az PowerShell modules) in
 | `process-enum` | Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist) | Az.Accounts, Az.Compute, Az.Resources | VM Contributor or Reader + VM Command Executor |
 | `lockscreen-enum` | Detect lockscreen backdoors on Azure VMs (mimics nxc smb -M lockscreendoors) | Az.Accounts, Az.Compute, Az.Resources | VM Contributor or Reader + VM Command Executor |
 | `intune-enum` | Enumerate Intune/Endpoint Manager configuration (mimics nxc smb -M sccm-recon6) | Microsoft.Graph | DeviceManagementConfiguration.Read.All, DeviceManagementRBAC.Read.All, DeviceManagementManagedDevices.Read.All |
+| `delegation-enum` | Enumerate OAuth2 delegation/impersonation paths (mimics nxc smb --delegate) | Microsoft.Graph | Application.Read.All, Directory.Read.All |
 
 **Multi-Subscription Support**: All ARM commands automatically enumerate all accessible subscriptions. Use `-SubscriptionId` to target a specific subscription, or `-ResourceGroup` to filter within subscriptions.
 
@@ -4261,6 +4263,147 @@ AZR         INTUNE          443    Kiosk-Deployment                   [!] LOCAL 
 - **"Failed to retrieve enrollment configurations"**: Ensure you have `DeviceManagementConfiguration.Read.All` permission.
 - **"Failed to retrieve role definitions"**: Ensure you have `DeviceManagementRBAC.Read.All` permission.
 - **"No managed device data available"**: Ensure you have `DeviceManagementManagedDevices.Read.All` permission or devices are enrolled in Intune.
+
+---
+
+### OAuth2 Delegation Enumeration: `delegation-enum`
+
+The Azure equivalent of NetExec's `--delegate` flag. Enumerate OAuth2 consent grants to identify applications that can act on behalf of users (impersonation paths).
+
+```powershell
+# Enumerate OAuth2 delegation (like nxc smb --delegate)
+.\azx.ps1 delegation-enum
+
+# Export results to file
+.\azx.ps1 delegation-enum -ExportPath delegation.csv
+.\azx.ps1 delegation-enum -ExportPath delegation.json
+.\azx.ps1 delegation-enum -ExportPath delegation.html
+```
+
+**What is Kerberos Delegation vs OAuth2 Delegation?**
+
+In on-premises Active Directory, Kerberos delegation allows services to impersonate users. In Azure/cloud environments, OAuth2 consent grants serve a similar purpose - allowing applications to act on behalf of users.
+
+**NetExec --delegate vs AZexec delegation-enum:**
+
+| Aspect | On-Premises (NetExec --delegate) | Azure (AZexec delegation-enum) |
+|--------|----------------------------------|--------------------------------|
+| **Command** | `nxc smb <target> -u User -p Pass --delegate` | `.\azx.ps1 delegation-enum` |
+| **Protocol** | Kerberos (port 88) / LDAP (port 389) | Microsoft Graph API (HTTPS/443) |
+| **Mechanism** | RBCD, Constrained/Unconstrained Delegation | OAuth2 Consent Grants |
+| **User Attribute** | `msDS-AllowedToActOnBehalfOfOtherIdentity` | `oauth2PermissionGrants.consentType` |
+| **Impersonation Scope** | Specific services/SPNs | Specific API scopes (Mail.Send, etc.) |
+| **Tenant-Wide** | Unconstrained Delegation | Admin Consent (`AllPrincipals`) |
+
+**Kerberos to OAuth2 Concept Mapping:**
+
+| Kerberos Delegation | OAuth2 Equivalent | Risk Level |
+|---------------------|-------------------|------------|
+| **RBCD** (Resource-Based Constrained Delegation) | Admin Consent (`AllPrincipals`) | HIGH - Tenant-wide impersonation |
+| **S4U2Self** (Service for User to Self) | Delegated permissions with user context | MEDIUM - Per-user impersonation |
+| **Constrained Delegation** | Specific scope grants (e.g., `Mail.Send`) | MEDIUM - Limited to specific APIs |
+| **Unconstrained Delegation** | `Directory.AccessAsUser.All` | CRITICAL - Full directory as any user |
+
+**What delegation-enum Detects:**
+
+| Permission | Risk Level | Description |
+|------------|------------|-------------|
+| `Directory.AccessAsUser.All` | CRITICAL | Full directory access as any user (unconstrained delegation equivalent) |
+| `RoleManagement.ReadWrite.Directory` | CRITICAL | Can assign any directory role including Global Admin |
+| `AppRoleAssignment.ReadWrite.All` | CRITICAL | Can grant any permission to any application |
+| `Application.ReadWrite.All` | CRITICAL | Can modify any application including adding credentials |
+| `Mail.Send` | HIGH | Send email as users (phishing, BEC) |
+| `Mail.ReadWrite` / `Mail.ReadWrite.All` | HIGH | Full mailbox access (data exfiltration) |
+| `Files.ReadWrite.All` | HIGH | Access all OneDrive/SharePoint files |
+| `Group.ReadWrite.All` | HIGH | Modify any group membership |
+
+**Key Risk Factor:** `consentType = "AllPrincipals"` = Admin consent = Acts on behalf of ALL users in tenant
+
+**Required Permissions:**
+
+```
+Application.Read.All  - Read service principals and consent grants
+Directory.Read.All    - Read directory data for permission resolution
+```
+
+**Example Output:**
+```
+[*] AZX - Azure OAuth2 Delegation Enumeration
+[*] Command: OAuth2 Permission Grant Analysis (Impersonation Paths)
+[*] Azure equivalent of NetExec's --delegate flag
+
+[*] ========================================
+[*] PHASE 3: Admin Consent Grants (Tenant-Wide Impersonation)
+[*] ========================================
+
+[!] Admin consent grants allow apps to act on behalf of ALL users in the tenant
+[!] This is the Azure equivalent of RBCD (Resource-Based Constrained Delegation)
+
+AZR         00000003-0000...    443    Mail-Integration-App               [!] AllPrincipals:Mail.Send,Mail.ReadWrite (CRITICAL)
+    [+] Mail.Send [HIGH]
+    [+] Mail.ReadWrite [HIGH]
+    [!] Can send/read email as ANY user in tenant
+    [+] Resource: Microsoft Graph
+    [+] Consent: Admin (tenant-wide impersonation)
+
+AZR         12345678-abcd...    443    Legacy-Portal                      [!] AllPrincipals:Directory.AccessAsUser.All (CRITICAL)
+    [+] Directory.AccessAsUser.All [CRITICAL]
+    [!] FULL DIRECTORY ACCESS as any user - Azure equivalent of unconstrained delegation
+    [+] Resource: Microsoft Graph
+    [+] Consent: Admin (tenant-wide impersonation)
+
+[*] ========================================
+[*] PHASE 4: User Consent Grants (Per-User Impersonation)
+[*] ========================================
+
+[*] User consent grants allow apps to act on behalf of specific users who consented
+
+AZR         87654321-dcba...    443    HR-App                             [*] Principal:User.Read (LOW)
+    [*] Per-user consent only (15 users)
+    [+] User.Read [LOW]
+
+[*] ========================================
+[*] DELEGATION SUMMARY
+[*] ========================================
+    [!] CRITICAL IMPERSONATION APPS: 2
+    [!] HIGH RISK IMPERSONATION APPS: 3
+    [*] MEDIUM RISK APPS: 8
+    [*] LOW RISK APPS: 22
+    [*] Total OAuth2 Grants: 34
+    [*] Admin Consent Grants: 5 (3 unique apps)
+    [*] User Consent Grants: 29
+```
+
+**Security Analysis Features:**
+
+| Check | Risk Level | Description |
+|-------|------------|-------------|
+| Directory.AccessAsUser.All | CRITICAL | Equivalent to unconstrained delegation |
+| Mail permissions with AllPrincipals | CRITICAL | Tenant-wide email impersonation |
+| RoleManagement.ReadWrite.Directory | CRITICAL | Can grant any role |
+| High-risk permissions with admin consent | HIGH | Elevated due to tenant-wide scope |
+| User consent grants | MEDIUM/LOW | Risk depends on number of consenting users |
+
+**Use Cases:**
+
+| Scenario | Description | Command |
+|----------|-------------|---------|
+| **Security Audit** | Review OAuth2 consent posture | `.\azx.ps1 delegation-enum -ExportPath audit.html` |
+| **Penetration Testing** | Identify impersonation paths | `.\azx.ps1 delegation-enum` |
+| **Compliance Check** | Verify consent grant policies | `.\azx.ps1 delegation-enum -ExportPath consent.csv` |
+| **Privilege Escalation** | Find apps that can escalate privileges | Review CRITICAL findings |
+
+**Attack Context:**
+1. Enumerate OAuth2 consent grants to identify impersonation opportunities
+2. Focus on admin consent grants (`AllPrincipals`) - these can impersonate ANY user
+3. Identify apps with `Directory.AccessAsUser.All` (unconstrained delegation equivalent)
+4. Look for apps with `Mail.Send` + admin consent (tenant-wide email spoofing)
+5. If an app with dangerous consent is compromised, attacker can impersonate users
+
+**Troubleshooting**:
+- **"Failed to retrieve service principals"**: Ensure you have `Application.Read.All` or `Directory.Read.All` permission.
+- **"Failed to retrieve OAuth2 permission grants"**: Ensure you have `Directory.Read.All` permission.
+- **Guest users may have limited access**: Guest accounts often cannot view consent grants due to restricted permissions.
 
 ---
 

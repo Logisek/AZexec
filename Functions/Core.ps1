@@ -559,18 +559,47 @@ function Connect-GraphAPI {
     param(
         [string]$Scopes
     )
-    
+
     Write-ColorOutput -Message "[*] Connecting to Microsoft Graph..." -Color "Yellow"
-    
+
     try {
         $scopeArray = $Scopes -split ','
-        
+
         # Check if already connected
         $context = Get-MgContext
         if ($context) {
-            Write-ColorOutput -Message "[+] Already connected to tenant: $($context.TenantId)" -Color "Green"
-            Write-ColorOutput -Message "[+] Account: $($context.Account)" -Color "Green"
-            
+            # Check if the current session has all required scopes
+            $currentScopes = $context.Scopes
+            $missingScopes = @()
+
+            foreach ($requiredScope in $scopeArray) {
+                $requiredScope = $requiredScope.Trim()
+                # Check if scope is present (case-insensitive, handle .Default suffix)
+                $scopeFound = $currentScopes | Where-Object {
+                    $_ -ieq $requiredScope -or
+                    $_ -ieq "$requiredScope" -or
+                    $_ -like "*$requiredScope*"
+                }
+                if (-not $scopeFound) {
+                    $missingScopes += $requiredScope
+                }
+            }
+
+            if ($missingScopes.Count -gt 0) {
+                Write-ColorOutput -Message "[!] Current session missing required scopes: $($missingScopes -join ', ')" -Color "Yellow"
+                Write-ColorOutput -Message "[*] Reconnecting with required scopes..." -Color "Yellow"
+
+                # Disconnect and reconnect with new scopes
+                Disconnect-MgGraph -ErrorAction SilentlyContinue
+                Connect-MgGraph -Scopes $scopeArray -ErrorAction Stop
+                $context = Get-MgContext
+                Write-ColorOutput -Message "[+] Connected to tenant: $($context.TenantId)" -Color "Green"
+                Write-ColorOutput -Message "[+] Account: $($context.Account)" -Color "Green"
+            } else {
+                Write-ColorOutput -Message "[+] Already connected to tenant: $($context.TenantId)" -Color "Green"
+                Write-ColorOutput -Message "[+] Account: $($context.Account)" -Color "Green"
+            }
+
             # Check if user is a guest
             $isGuest = Test-IsGuestUser -UserPrincipalName $context.Account
             if ($isGuest) {
@@ -585,7 +614,7 @@ function Connect-GraphAPI {
             $context = Get-MgContext
             Write-ColorOutput -Message "[+] Connected to tenant: $($context.TenantId)" -Color "Green"
             Write-ColorOutput -Message "[+] Account: $($context.Account)" -Color "Green"
-            
+
             # Check if user is a guest
             $isGuest = Test-IsGuestUser -UserPrincipalName $context.Account
             if ($isGuest) {
