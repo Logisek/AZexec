@@ -702,7 +702,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -760,7 +760,24 @@ param(
     [string]$SharesFilter = "all",
     
     [Parameter(Mandatory = $false)]
-    [string]$ProcessName
+    [string]$ProcessName,
+
+    # Password spray options (NetExec-style)
+    [Parameter(Mandatory = $false)]
+    [switch]$ContinueOnSuccess,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$NoBruteforce,
+
+    [Parameter(Mandatory = $false)]
+    [string]$PasswordFile,
+
+    [Parameter(Mandatory = $false)]
+    [int]$Delay = 0,
+
+    # Token-based authentication (Azure's Pass-the-Hash equivalent)
+    [Parameter(Mandatory = $false)]
+    [string]$AccessToken
 )
 
 
@@ -999,7 +1016,10 @@ switch ($Command) {
         Invoke-PasswordPolicyEnumeration -ExportPath $ExportPath
     }
     "guest" {
-        Invoke-GuestEnumeration -Domain $Domain -Username $Username -Password $Password -UserFile $UserFile -ExportPath $ExportPath
+        Invoke-GuestEnumeration -Domain $Domain -Username $Username -Password $Password -UserFile $UserFile -PasswordFile $PasswordFile -ContinueOnSuccess $ContinueOnSuccess -NoBruteforce $NoBruteforce -Delay $Delay -ExportPath $ExportPath -AccessToken $AccessToken
+    }
+    "spray" {
+        Invoke-PasswordSpray -Domain $Domain -UserFile $UserFile -Password $Password -PasswordFile $PasswordFile -ContinueOnSuccess $ContinueOnSuccess -NoBruteforce $NoBruteforce -Delay $Delay -ExportPath $ExportPath
     }
     "vuln-list" {
         Invoke-VulnListEnumeration -Domain $Domain -ExportPath $ExportPath
@@ -1063,7 +1083,7 @@ switch ($Command) {
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, help" -Color "Yellow"
     }
 }
 

