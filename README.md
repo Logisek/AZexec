@@ -51,6 +51,7 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb -u users.txt -p 'Pass'` | `.\azx.ps1 spray -Domain example.com -UserFile users.txt -Password 'Pass'` | ❌ None | **Password spray attack** (NetExec-style) |
 | `nxc smb -u users.txt -p @pass.txt --no-bruteforce` | `.\azx.ps1 spray ... -PasswordFile pass.txt -NoBruteforce` | ❌ None | **Linear pairing** spray (user1:pass1) |
 | `nxc smb -u users.txt -p 'Pass' --continue-on-success` | `.\azx.ps1 spray ... -ContinueOnSuccess` | ❌ None | **Continue after valid creds** found |
+| `nxc smb -u users.txt -p 'Pass' --local-auth` | `.\azx.ps1 spray ... -LocalAuth` | ❌ None | **Cloud-only** spray (skip federated) |
 | `nxc smb --groups` | `.\azx.ps1 groups` | ✅ Required | Enumerate groups |
 | `nxc smb --local-group` | `.\azx.ps1 local-groups` | ✅ Required | **Enumerate local groups** (Administrative Units) |
 | `nxc smb --pass-pol` | `.\azx.ps1 pass-pol` | ✅ Required | Display password policies |
@@ -6317,6 +6318,7 @@ AZexec now includes a dedicated `spray` command with NetExec-style options for e
 | `-NoBruteforce` | `--no-bruteforce` | Linear pairing (user1:pass1, user2:pass2) instead of matrix |
 | `-PasswordFile` | `-p @file.txt` | Load multiple passwords from file |
 | `-Delay` | N/A | Seconds between password rounds (lockout protection) |
+| `-LocalAuth` | `--local-auth` | Only spray managed (cloud-only) domains, skip federated |
 
 #### Usage Examples
 
@@ -6333,6 +6335,9 @@ AZexec now includes a dedicated `spray` command with NetExec-style options for e
 # Linear pairing mode (user1 with pass1, user2 with pass2, etc.)
 .\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -NoBruteforce
 
+# Cloud-only spray - skip federated domains (Azure equivalent of --local-auth)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass123' -LocalAuth
+
 # Full attack with HTML report
 .\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -Delay 1800 -ContinueOnSuccess -ExportPath spray-report.html
 ```
@@ -6345,6 +6350,7 @@ AZexec now includes a dedicated `spray` command with NetExec-style options for e
 | `nxc smb <target> -u users.txt -p 'Pass' --continue-on-success` | `.\azx.ps1 spray ... -ContinueOnSuccess` |
 | `nxc smb <target> -u users.txt -p @pass.txt` | `.\azx.ps1 spray ... -PasswordFile pass.txt` |
 | `nxc smb <target> -u users.txt -p @pass.txt --no-bruteforce` | `.\azx.ps1 spray ... -PasswordFile pass.txt -NoBruteforce` |
+| `nxc smb <target> -u users.txt -p 'Pass' --local-auth` | `.\azx.ps1 spray ... -LocalAuth` |
 
 #### OPSEC Considerations
 
@@ -6400,6 +6406,52 @@ The spray command supports multiple export formats:
 | CSV | `-ExportPath results.csv` | Quick analysis, Excel |
 | JSON | `-ExportPath results.json` | Programmatic processing |
 | HTML | `-ExportPath report.html` | Reports, presentations |
+
+#### Local Authentication Mode (-LocalAuth)
+
+Use `-LocalAuth` to only spray managed (cloud-only) domains, skipping federated domains. This is the Azure equivalent of NetExec's `--local-auth` flag.
+
+```powershell
+# Cloud-only spray (skips federated domains)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass123' -LocalAuth
+```
+
+**Why Use This?**
+
+Federated domains redirect ROPC authentication to on-premises identity providers (AD FS, Okta, Ping, etc.) which may:
+- Block ROPC entirely (AADSTS7000218)
+- Have different lockout policies
+- Log authentication attempts in the on-prem IdP
+- Require different attack vectors
+
+**Managed Domain with -LocalAuth:**
+```
+AZR         managed.com                        443    [*] Mode: Cloud-only auth (LocalAuth)
+AZR         managed.com                        443    [+] Tenant exists
+AZR         managed.com                        443    [*] NameSpaceType: Managed
+AZR         managed.com                        443    [*] Federation: Managed (Cloud-only)
+...
+AZR         managed.com                        443    user@managed.com                   [+] SUCCESS! (Cloud) Got access token
+```
+
+**Federated Domain with -LocalAuth:**
+```
+AZR         federated.com                      443    [!] SKIPPED - Federated domain (use without -LocalAuth to spray)
+[*] Domain uses federation: AD FS
+[*] Auth would redirect to: https://sts.company.com/adfs/ls/
+```
+
+**Technical Background:**
+
+Unlike SMB where `--local-auth` bypasses domain entirely, Azure has constraints:
+1. Cannot force cloud-only auth for federated domains - tenant policy controls this
+2. Federated domains redirect ROPC to federation provider
+3. Some federated setups block ROPC entirely
+
+The `-LocalAuth` flag checks the domain's `NameSpaceType` (Managed/Federated) and skips federated domains to avoid:
+- Wasted attempts against ROPC-blocked domains
+- Triggering alerts in on-premises IdPs
+- Unpredictable lockout behavior from external IdPs
 
 ---
 

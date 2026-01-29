@@ -777,7 +777,12 @@ param(
 
     # Token-based authentication (Azure's Pass-the-Hash equivalent)
     [Parameter(Mandatory = $false)]
-    [string]$AccessToken
+    [string]$AccessToken,
+
+    # Local authentication mode (Azure equivalent of netexec --local-auth)
+    # Only spray managed (cloud-only) domains, skip federated domains
+    [Parameter(Mandatory = $false)]
+    [switch]$LocalAuth
 )
 
 
@@ -1016,10 +1021,10 @@ switch ($Command) {
         Invoke-PasswordPolicyEnumeration -ExportPath $ExportPath
     }
     "guest" {
-        Invoke-GuestEnumeration -Domain $Domain -Username $Username -Password $Password -UserFile $UserFile -PasswordFile $PasswordFile -ContinueOnSuccess $ContinueOnSuccess -NoBruteforce $NoBruteforce -Delay $Delay -ExportPath $ExportPath -AccessToken $AccessToken
+        Invoke-GuestEnumeration -Domain $Domain -Username $Username -Password $Password -UserFile $UserFile -PasswordFile $PasswordFile -ContinueOnSuccess $ContinueOnSuccess -NoBruteforce $NoBruteforce -Delay $Delay -ExportPath $ExportPath -AccessToken $AccessToken -LocalAuth $LocalAuth
     }
     "spray" {
-        Invoke-PasswordSpray -Domain $Domain -UserFile $UserFile -Password $Password -PasswordFile $PasswordFile -ContinueOnSuccess $ContinueOnSuccess -NoBruteforce $NoBruteforce -Delay $Delay -ExportPath $ExportPath
+        Invoke-PasswordSpray -Domain $Domain -UserFile $UserFile -Password $Password -PasswordFile $PasswordFile -ContinueOnSuccess $ContinueOnSuccess -NoBruteforce $NoBruteforce -Delay $Delay -ExportPath $ExportPath -LocalAuth $LocalAuth
     }
     "vuln-list" {
         Invoke-VulnListEnumeration -Domain $Domain -ExportPath $ExportPath

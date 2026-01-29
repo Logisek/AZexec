@@ -345,7 +345,8 @@ function Invoke-PasswordSpray {
         [bool]$ContinueOnSuccess = $false,
         [bool]$NoBruteforce = $false,
         [int]$Delay = 0,
-        [string]$ExportPath
+        [string]$ExportPath,
+        [bool]$LocalAuth = $false  # Azure equivalent of netexec --local-auth
     )
 
     Write-ColorOutput -Message "`n[*] AZX - Password Spray Attack" -Color "Yellow"
@@ -366,7 +367,7 @@ function Invoke-PasswordSpray {
     }
 
     # Call the enhanced guest enumeration with spray parameters
-    Invoke-GuestEnumeration -Domain $Domain -UserFile $UserFile -Password $Password -PasswordFile $PasswordFile -ContinueOnSuccess $ContinueOnSuccess -NoBruteforce $NoBruteforce -Delay $Delay -ExportPath $ExportPath -SprayMode $true
+    Invoke-GuestEnumeration -Domain $Domain -UserFile $UserFile -Password $Password -PasswordFile $PasswordFile -ContinueOnSuccess $ContinueOnSuccess -NoBruteforce $NoBruteforce -Delay $Delay -ExportPath $ExportPath -SprayMode $true -LocalAuth $LocalAuth
 }
 
 function Test-GuestLoginEnabled {
@@ -675,7 +676,8 @@ function Invoke-GuestEnumeration {
         [int]$Delay = 0,
         [string]$ExportPath,
         [bool]$SprayMode = $false,
-        [string]$AccessToken  # Token-based auth (Azure's Pass-the-Hash equivalent)
+        [string]$AccessToken,  # Token-based auth (Azure's Pass-the-Hash equivalent)
+        [bool]$LocalAuth = $false  # Azure equivalent of netexec --local-auth (cloud-only domains)
     )
 
     Write-ColorOutput -Message "`n[*] AZX - Azure/Entra Guest Login Enumeration" -Color "Yellow"
@@ -873,9 +875,28 @@ function Invoke-GuestEnumeration {
         Write-ColorOutput -Message ("AZR".PadRight(12) + $Domain.PadRight(35) + "443".PadRight(7) + "[-] Tenant not found or not accessible") -Color "Red"
         return
     }
-    
+
+    # Check for LocalAuth mode (Azure equivalent of netexec --local-auth)
+    # If enabled, only spray managed (cloud-only) domains, skip federated domains
+    if ($LocalAuth -and $guestConfig.IsFederated) {
+        Write-ColorOutput -Message "" -Color "Yellow"
+        Write-ColorOutput -Message ("AZR".PadRight(12) + $Domain.PadRight(35) + "443".PadRight(7) + "[!] SKIPPED - Federated domain (use without -LocalAuth to spray)") -Color "Yellow"
+        Write-ColorOutput -Message "[*] Domain uses federation: $($guestConfig.FederationType)" -Color "DarkGray"
+        if ($guestConfig.AuthUrl) {
+            Write-ColorOutput -Message "[*] Auth would redirect to: $($guestConfig.AuthUrl)" -Color "DarkGray"
+        }
+        Write-ColorOutput -Message "[*] Federated domains redirect ROPC to external identity providers (AD FS, Okta, Ping, etc.)" -Color "DarkGray"
+        Write-ColorOutput -Message "[*] To spray federated domains, run without the -LocalAuth flag" -Color "Cyan"
+        return
+    }
+
+    # Display auth mode indicator when LocalAuth is active
+    if ($LocalAuth) {
+        Write-ColorOutput -Message ("AZR".PadRight(12) + $Domain.PadRight(35) + "443".PadRight(7) + "[*] Mode: Cloud-only auth (LocalAuth)") -Color "Cyan"
+    }
+
     Write-ColorOutput -Message ""
-    
+
     # Phase 2: Test authentication if credentials provided
     if ($Username -or $UserFile) {
         Write-ColorOutput -Message "[*] Phase 2: Testing guest authentication..." -Color "Yellow"
@@ -1052,16 +1073,19 @@ function Invoke-GuestEnumeration {
                 if ($privLevel -eq "CRITICAL") { $outputColor = "Red" }
                 elseif ($privLevel -eq "HIGH") { $outputColor = "Yellow" }
 
+                # Build auth mode indicator for LocalAuth (Azure equivalent of --local-auth)
+                $authMode = if ($LocalAuth) { " (Cloud)" } else { "" }
+
                 if ($authResult.MFARequired) {
                     # Valid creds but MFA needed - still check for admin status
                     # Note: Can't check privileges without a token, but credentials ARE valid
-                    Write-ColorOutput -Message ("AZR".PadRight(12) + $Domain.PadRight(35) + "443".PadRight(7) + $displayUser.PadRight(38) + "[+] Valid credentials - MFA REQUIRED") -Color "Yellow"
+                    Write-ColorOutput -Message ("AZR".PadRight(12) + $Domain.PadRight(35) + "443".PadRight(7) + $displayUser.PadRight(38) + "[+] Valid credentials$authMode - MFA REQUIRED") -Color "Yellow"
                 } elseif ($authResult.ConsentRequired) {
                     # Valid creds but consent needed
-                    Write-ColorOutput -Message ("AZR".PadRight(12) + $Domain.PadRight(35) + "443".PadRight(7) + $displayUser.PadRight(38) + "[+] Valid credentials - CONSENT REQUIRED") -Color "Yellow"
+                    Write-ColorOutput -Message ("AZR".PadRight(12) + $Domain.PadRight(35) + "443".PadRight(7) + $displayUser.PadRight(38) + "[+] Valid credentials$authMode - CONSENT REQUIRED") -Color "Yellow"
                 } else {
                     # Full success - we got a token! Show privilege indicator if admin
-                    Write-ColorOutput -Message ("AZR".PadRight(12) + $Domain.PadRight(35) + "443".PadRight(7) + $displayUser.PadRight(38) + "[+] SUCCESS! Got access token$privIndicator") -Color $outputColor
+                    Write-ColorOutput -Message ("AZR".PadRight(12) + $Domain.PadRight(35) + "443".PadRight(7) + $displayUser.PadRight(38) + "[+] SUCCESS!$authMode Got access token$privIndicator") -Color $outputColor
                 }
 
                 $results += [PSCustomObject]@{
@@ -1147,6 +1171,7 @@ function Invoke-GuestEnumeration {
                     TenantConfig = $guestConfig
                     SprayConfig = @{
                         Mode = if ($NoBruteforce) { "Linear" } else { "Matrix" }
+                        LocalAuth = $LocalAuth  # Azure equivalent of netexec --local-auth
                         ContinueOnSuccess = $ContinueOnSuccess
                         DelayBetweenRounds = $Delay
                         UniqueUsers = $usernames.Count
