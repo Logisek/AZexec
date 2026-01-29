@@ -3635,8 +3635,8 @@ Enumerate BitLocker encryption status on Intune-managed devices AND Azure VMs:
 [*] SECTION 1: INTUNE-MANAGED DEVICES
 [+] Found 12 Windows devices in Intune
 
-AZR  5905c343-84f7-  443  LS-LPT-05  [*] BitLocker ENABLED | Compliance: compliant
-AZR  b15754a0-0a2b-  443  LS-MCD-01  [*] NOT ENCRYPTED | Compliance: noncompliant
+AZR  5905c343-84f7-  443  T-05  [*] BitLocker ENABLED | Compliance: compliant
+AZR  b15754a0-0a2b-  443  D-01  [*] NOT ENCRYPTED | Compliance: noncompliant
 
 [*] Intune Device Summary:
     Total Windows Devices: 12
@@ -3644,7 +3644,7 @@ AZR  b15754a0-0a2b-  443  LS-MCD-01  [*] NOT ENCRYPTED | Compliance: noncomplian
     NOT Encrypted: 1
 
 [!] Devices without BitLocker:
-    → LS-MCD-01
+    → D-01
 ```
 
 ### Example 34-bitlocker-b: Target Specific Subscription
@@ -3821,16 +3821,16 @@ Find devices with disabled antivirus or firewall:
 
 [*] Security Recommendations:
     [!] 4 devices have DISABLED antivirus - HIGH RISK!
-        → gkarpouzas_AndroidForWork_5/19/2025_5:54 AM
-        → Thanasis's MacBook Pro
-        → samsungSM-S908B
-        → DESKTOP-PBLFO5I
+        → AndroidForWork
+        → MacBook Pro
+        → 908B
+        → FO5I
     [!] 1 Windows devices NOT onboarded to Microsoft Defender for Endpoint
-        → DESKTOP-PBLFO5I
+        → LFO5I
         Consider onboarding to MDE for enhanced threat protection
     [!] 2 Windows devices NOT encrypted (BitLocker)
-        → LS-MCD-01
-        → DESKTOP-PBLFO5I
+        → 01
+        → LFO5I
         Enable BitLocker to protect data at rest
 ```
 
@@ -3878,9 +3878,9 @@ nxc smb 192.168.1.0/24 -u administrator -p 'Password1' -M enum_av
 .\azx.ps1 av-enum
 
 # Output example:
-# AZR  7b67c060-eb92-4  443  LS-LPT-06  [*] AV:Microsoft Defender(enabled) v1.443.147.0 | EDR:Microsoft Defender for Endpoint(enabled) | MDE:Onboarded(healthy) | Encryption:BitLocker Enabled
-# AZR  5b397631-d32c-4  443  DESKTOP-PBLFO5I  [*] AV:Unknown(disabled) | MDE:Not Onboarded
-# AZR  53d543a0-b709-4  443  Thanasis's MacBook Pro  [*] AV:Unknown(disabled) | MDE:Not Onboarded
+# AZR  60-eb92-4  443  T-06  [*] AV:Microsoft Defender(enabled) v1.443.147.0 | EDR:Microsoft Defender for Endpoint(enabled) | MDE:Onboarded(healthy) | Encryption:BitLocker Enabled
+# AZR  31-d32c-4  443  O5I  [*] AV:Unknown(disabled) | MDE:Not Onboarded
+# AZR  a0-b709-4  443  MacBook Pro  [*] AV:Unknown(disabled) | MDE:Not Onboarded
 ```
 
 Both enumerate security products, but AZexec provides additional cloud-native security information:
@@ -6232,7 +6232,7 @@ For full service principal discovery, you need:
 This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
 
 ```
-Copyright (C) 2025 Logisek
+Copyright (C) 2025-2026 Logisek
 https://github.com/Logisek/AZexec
 
 This program is free software: you can redistribute it and/or modify

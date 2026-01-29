@@ -1,6 +1,6 @@
 <#
     This file is part of the toolkit EvilMist
-    Copyright (C) 2025 Logisek
+    Copyright (C) 2025-2026 Logisek
     https://github.com/Logisek/AZexec
 
     AZexec - The Azure Execution Tool.
