@@ -2878,6 +2878,496 @@ fi
     Write-ColorOutput -Message "    - Requires 'Virtual Machine Contributor' or 'VM Command Executor' role" -Color "Gray"
     Write-ColorOutput -Message "    - Supports both Windows (tasklist) and Linux (ps aux) VMs" -Color "Gray"
     Write-ColorOutput -Message "    - All queries are logged in Azure Activity Logs" -Color "Gray"
-    
+
+    return $exportData
+}
+
+
+# ============================================
+# LOCKSCREEN BACKDOOR ENUMERATION
+# ============================================
+
+<#
+.SYNOPSIS
+    Enumerate lockscreen backdoors on Windows Azure VMs.
+.DESCRIPTION
+    Detects when Windows accessibility executables have been replaced with backdoors.
+    This is the Azure equivalent of NetExec's lockscreendoors module.
+
+    Attackers can replace Windows accessibility tools (utilman.exe, sethc.exe, etc.)
+    with cmd.exe or powershell.exe to gain SYSTEM access from the lock screen without
+    authentication.
+
+    The module checks the FileDescription metadata of accessibility executables to detect:
+    - CLEAN: FileDescription matches expected accessibility tool name
+    - SUSPICIOUS: FileDescription differs from expected value
+    - BACKDOORED: FileDescription is "Windows PowerShell" or "Windows Command Processor"
+.PARAMETER ResourceGroup
+    Optional. Target a specific resource group.
+.PARAMETER SubscriptionId
+    Optional. Target a specific subscription. If not provided, all accessible subscriptions are enumerated.
+.PARAMETER VMFilter
+    Filter VMs by power state: all, running, stopped. Default is "all".
+.PARAMETER ExportPath
+    Optional. Export results to CSV, JSON, or HTML file.
+#>
+function Invoke-LockscreenEnumeration {
+    param(
+        [string]$ResourceGroup,
+        [string]$SubscriptionId,
+        [string]$VMFilter = "all",
+        [string]$ExportPath
+    )
+
+    Write-ColorOutput -Message "`n[*] AZX - Lockscreen Backdoor Enumeration" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Command: lockscreen-enum (Similar to: nxc smb -M lockscreendoors)" -Color "Yellow"
+    Write-ColorOutput -Message "[*] Azure equivalent of NetExec's lockscreendoors module`n" -Color "Cyan"
+
+    Write-ColorOutput -Message "[*] This command detects:" -Color "Cyan"
+    Write-ColorOutput -Message "    • Accessibility executables replaced with backdoors" -Color "Gray"
+    Write-ColorOutput -Message "    • utilman.exe, sethc.exe, narrator.exe, osk.exe, etc." -Color "Gray"
+    Write-ColorOutput -Message "    • Detection via FileDescription metadata analysis" -Color "Gray"
+    Write-ColorOutput -Message "    • CLEAN = Expected description | SUSPICIOUS = Unknown | BACKDOORED = cmd/powershell" -Color "Gray"
+    Write-ColorOutput -Message ""
+
+    # Use shared helper functions from AzureRM.ps1
+    $requiredModules = @('Az.Accounts', 'Az.Compute', 'Az.Resources')
+    if (-not (Initialize-AzureRMModules -RequiredModules $requiredModules)) {
+        return
+    }
+
+    # Connect to Azure using shared helper
+    $azContext = Connect-AzureRM
+    if (-not $azContext) { return }
+
+    # Get subscriptions to enumerate using shared helper
+    $subscriptionsToScan = Get-SubscriptionsToEnumerate -SubscriptionId $SubscriptionId -CurrentContext $azContext
+    if (-not $subscriptionsToScan) { return }
+
+    # Global counters across all subscriptions
+    $exportData = @()
+    $totalFilesChecked = 0
+    $cleanFiles = 0
+    $suspiciousFiles = 0
+    $backdooredFiles = 0
+    $notFoundFiles = 0
+    $successfulQueries = 0
+    $failedQueries = 0
+    $totalVMsFound = 0
+    $totalVMsQueried = 0
+    $skippedLinuxVMs = 0
+
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] MULTI-SUBSCRIPTION LOCKSCREEN ENUMERATION" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
+
+    # PowerShell script to execute on Windows VMs
+    $lockscreenScript = @'
+# Lockscreen backdoor detection script
+# Checks FileDescription of accessibility executables
+
+$executables = @{
+    'utilman.exe' = 'Utility Manager'
+    'narrator.exe' = 'Screen Reader'
+    'sethc.exe' = 'Accessibility Shortcut Keys'
+    'osk.exe' = 'Accessibility On-Screen Keyboard'
+    'magnify.exe' = 'Microsoft Screen Magnifier'
+    'EaseOfAccessDialog.exe' = 'Ease of Access Dialog'
+    'voiceaccess.exe' = 'Windows Voice Access'
+    'displayswitch.exe' = 'Display Switch'
+    'atbroker.exe' = 'Assistive Technology Service'
+}
+
+foreach ($exe in $executables.Keys) {
+    $path = "C:\Windows\System32\$exe"
+    if (Test-Path $path) {
+        try {
+            $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path)
+            $desc = $info.FileDescription
+            if ([string]::IsNullOrEmpty($desc)) {
+                $desc = "EMPTY"
+            }
+            Write-Output "FILE:$exe|DESC:$desc|EXPECTED:$($executables[$exe])"
+        } catch {
+            Write-Output "FILE:$exe|STATUS:ERROR|MESSAGE:$($_.Exception.Message)"
+        }
+    } else {
+        Write-Output "FILE:$exe|STATUS:NOT_FOUND"
+    }
+}
+'@
+
+    # Loop through each subscription
+    foreach ($subscription in $subscriptionsToScan) {
+        # Use shared helper for subscription context switching
+        if (-not (Set-SubscriptionContext -Subscription $subscription)) {
+            continue
+        }
+
+        # Get VMs in this subscription
+        Write-ColorOutput -Message "[*] Retrieving Azure VMs..." -Color "Yellow"
+
+        try {
+            $vms = @()
+            if ($ResourceGroup) {
+                $vms = @(Get-AzVM -ResourceGroupName $ResourceGroup -Status -ErrorAction Stop)
+                if ($vms.Count -gt 0) {
+                    Write-ColorOutput -Message "[+] Retrieved $($vms.Count) VM(s) from resource group: $ResourceGroup" -Color "Green"
+                } else {
+                    Write-ColorOutput -Message "[*] No VMs found in resource group: $ResourceGroup" -Color "Yellow"
+                }
+            } else {
+                $vms = @(Get-AzVM -Status -ErrorAction Stop)
+                if ($vms.Count -gt 0) {
+                    Write-ColorOutput -Message "[+] Retrieved $($vms.Count) VM(s) across all resource groups" -Color "Green"
+                } else {
+                    Write-ColorOutput -Message "[*] No VMs found in this subscription" -Color "Yellow"
+                }
+            }
+        } catch {
+            $errorMessage = $_.Exception.Message
+
+            # Parse Azure authorization error for cleaner display
+            if ($errorMessage -like "*AuthorizationFailed*" -or $errorMessage -like "*does not have authorization*") {
+                Write-ColorOutput -Message "[!] Authorization failed for subscription: $($subscription.Name)" -Color "Red"
+                Write-ColorOutput -Message "[*] You don't have permission to list VMs in this subscription" -Color "Yellow"
+                Write-ColorOutput -Message "[*] Skipping to next subscription...`n" -Color "Yellow"
+            } else {
+                Write-ColorOutput -Message "[!] Error retrieving VMs: $errorMessage" -Color "Red"
+                Write-ColorOutput -Message "[*] Skipping to next subscription...`n" -Color "Yellow"
+            }
+            continue
+        }
+
+        if ($vms.Count -eq 0) {
+            Write-ColorOutput -Message "[*] No VMs to enumerate in this subscription`n" -Color "Yellow"
+            continue
+        }
+
+        $totalVMsFound += $vms.Count
+
+        # Apply VM filter
+        $filteredVMs = $vms
+        if ($VMFilter -ne "all") {
+            $filteredVMs = @($vms | Where-Object {
+                $powerState = ($_.PowerState -split ' ')[-1]
+                if ($VMFilter -eq "running") {
+                    # Match running or available states
+                    $powerState -match "running|available"
+                } elseif ($VMFilter -eq "stopped") {
+                    # Not running/available
+                    $powerState -notmatch "running|available"
+                } else {
+                    $true
+                }
+            })
+            Write-ColorOutput -Message "[*] Filtered to $($filteredVMs.Count) VM(s) with status: $VMFilter`n" -Color "Cyan"
+        }
+
+        if ($filteredVMs.Count -eq 0) {
+            Write-ColorOutput -Message "[*] No VMs matching filter: $VMFilter`n" -Color "Yellow"
+            continue
+        }
+
+        # Enumerate VMs in this subscription
+        foreach ($vm in $filteredVMs) {
+            $vmName = $vm.Name
+            $vmResourceGroup = $vm.ResourceGroupName
+            $powerState = ($vm.PowerState -split ' ')[-1]
+            $osType = $vm.StorageProfile.OsDisk.OsType
+
+            # Check if VM is Windows
+            if ($osType -ne "Windows") {
+                Write-ColorOutput -Message "[*] VM: $vmName" -Color "White"
+                Write-ColorOutput -Message "    Resource Group: $vmResourceGroup" -Color "Gray"
+                Write-ColorOutput -Message "    OS Type: $osType" -Color "Gray"
+                Write-ColorOutput -Message "    [!] Skipping - Lockscreen enumeration is Windows-only" -Color "Yellow"
+                Write-Host ""
+                $skippedLinuxVMs++
+                continue
+            }
+
+            $totalVMsQueried++
+
+            # Check if VM is in a running/available state
+            $isRunning = $powerState -match "running|available"
+            $stateColor = if ($isRunning) { "Green" } else { "Yellow" }
+
+            Write-ColorOutput -Message "[*] VM: $vmName" -Color "White"
+            Write-ColorOutput -Message "    Resource Group: $vmResourceGroup" -Color "Gray"
+            Write-ColorOutput -Message "    OS Type: $osType" -Color "Gray"
+            Write-ColorOutput -Message "    Power State: $powerState" -Color $stateColor
+
+            # Only query running/available VMs
+            if (-not $isRunning) {
+                Write-ColorOutput -Message "    [!] VM is not in running state - skipping query" -Color "Yellow"
+                $failedQueries++
+                Write-Host ""
+                continue
+            }
+
+            # Execute Run Command
+            Write-ColorOutput -Message "    [*] Checking accessibility executables..." -Color "Yellow"
+
+            try {
+                $result = Invoke-AzVMRunCommand -ResourceGroupName $vmResourceGroup -VMName $vmName -CommandId "RunPowerShellScript" -ScriptString $lockscreenScript -ErrorAction Stop
+
+                $output = $result.Value[0].Message
+
+                # Clean up Azure RunCommand output artifacts
+                $output = $output -replace "Enable succeeded:", ""
+                $output = $output -replace "\[stdout\]", ""
+                $output = $output -replace "\[stderr\]", ""
+                $output = $output.Trim()
+
+                if ([string]::IsNullOrEmpty($output)) {
+                    Write-ColorOutput -Message "    [!] Empty response from VM" -Color "Red"
+                    $failedQueries++
+                } else {
+                    # Parse and display results
+                    $fileLines = $output -split "`n" | Where-Object { $_ -match "^FILE:" }
+
+                    if ($fileLines.Count -gt 0) {
+                        $successfulQueries++
+                        $vmBackdoorCount = 0
+                        $vmSuspiciousCount = 0
+                        $vmCleanCount = 0
+                        $vmNotFoundCount = 0
+
+                        foreach ($line in $fileLines) {
+                            $line = $line.Trim()
+
+                            # Parse file info
+                            $fileName = ""
+                            $fileDesc = ""
+                            $expectedDesc = ""
+                            $status = ""
+
+                            if ($line -match "FILE:([^|]+)\|DESC:([^|]+)\|EXPECTED:(.+)") {
+                                $fileName = $matches[1]
+                                $fileDesc = $matches[2]
+                                $expectedDesc = $matches[3]
+
+                                $totalFilesChecked++
+
+                                # Determine status based on FileDescription
+                                $statusSymbol = ""
+                                $statusText = ""
+                                $statusColor = ""
+
+                                if ($fileDesc -eq "Windows Command Processor" -or $fileDesc -eq "Windows PowerShell") {
+                                    # BACKDOORED - cmd.exe or powershell.exe
+                                    $status = "BACKDOORED"
+                                    $statusSymbol = "[!]"
+                                    $statusText = "BACKDOORED"
+                                    $statusColor = "Red"
+                                    $backdooredFiles++
+                                    $vmBackdoorCount++
+                                } elseif ($fileDesc -eq $expectedDesc -or $fileDesc -match [regex]::Escape($expectedDesc) -or $expectedDesc -match [regex]::Escape($fileDesc)) {
+                                    # CLEAN - matches expected
+                                    $status = "CLEAN"
+                                    $statusSymbol = "[+]"
+                                    $statusText = "CLEAN"
+                                    $statusColor = "Green"
+                                    $cleanFiles++
+                                    $vmCleanCount++
+                                } elseif ($fileDesc -eq "EMPTY") {
+                                    # SUSPICIOUS - empty description
+                                    $status = "SUSPICIOUS"
+                                    $statusSymbol = "[?]"
+                                    $statusText = "SUSPICIOUS"
+                                    $statusColor = "Yellow"
+                                    $suspiciousFiles++
+                                    $vmSuspiciousCount++
+                                } else {
+                                    # SUSPICIOUS - unexpected description
+                                    $status = "SUSPICIOUS"
+                                    $statusSymbol = "[?]"
+                                    $statusText = "SUSPICIOUS"
+                                    $statusColor = "Yellow"
+                                    $suspiciousFiles++
+                                    $vmSuspiciousCount++
+                                }
+
+                                # NetExec-style output
+                                $outputLine = "AZR".PadRight(12) +
+                                             $vmName.PadRight(17) +
+                                             "443".PadRight(7) +
+                                             $fileName.PadRight(38) +
+                                             "$statusSymbol $statusText (desc:$fileDesc)"
+
+                                Write-ColorOutput -Message $outputLine -Color $statusColor
+
+                                # Collect for export
+                                $exportData += [PSCustomObject]@{
+                                    SubscriptionName = $subscription.Name
+                                    SubscriptionId = $subscription.Id
+                                    VMName = $vmName
+                                    ResourceGroup = $vmResourceGroup
+                                    FileName = $fileName
+                                    FileDescription = $fileDesc
+                                    ExpectedDescription = $expectedDesc
+                                    Status = $status
+                                    RiskLevel = if ($status -eq "BACKDOORED") { "CRITICAL" } elseif ($status -eq "SUSPICIOUS") { "MEDIUM" } else { "LOW" }
+                                }
+
+                            } elseif ($line -match "FILE:([^|]+)\|STATUS:NOT_FOUND") {
+                                $fileName = $matches[1]
+                                $status = "NOT_FOUND"
+                                $notFoundFiles++
+                                $vmNotFoundCount++
+                                $totalFilesChecked++
+
+                                # NetExec-style output for not found
+                                $outputLine = "AZR".PadRight(12) +
+                                             $vmName.PadRight(17) +
+                                             "443".PadRight(7) +
+                                             $fileName.PadRight(38) +
+                                             "[-] NOT FOUND"
+
+                                Write-ColorOutput -Message $outputLine -Color "DarkGray"
+
+                                # Collect for export
+                                $exportData += [PSCustomObject]@{
+                                    SubscriptionName = $subscription.Name
+                                    SubscriptionId = $subscription.Id
+                                    VMName = $vmName
+                                    ResourceGroup = $vmResourceGroup
+                                    FileName = $fileName
+                                    FileDescription = "N/A"
+                                    ExpectedDescription = "N/A"
+                                    Status = "NOT_FOUND"
+                                    RiskLevel = "INFO"
+                                }
+                            }
+                        }
+
+                        # VM summary
+                        if ($vmBackdoorCount -gt 0) {
+                            Write-ColorOutput -Message "    [!!!] CRITICAL: $vmBackdoorCount BACKDOORED executable(s) detected!" -Color "Red"
+                        }
+                        if ($vmSuspiciousCount -gt 0) {
+                            Write-ColorOutput -Message "    [!] WARNING: $vmSuspiciousCount suspicious executable(s) detected" -Color "Yellow"
+                        }
+                        if ($vmBackdoorCount -eq 0 -and $vmSuspiciousCount -eq 0 -and $vmCleanCount -gt 0) {
+                            Write-ColorOutput -Message "    [+] All checked executables appear clean" -Color "Green"
+                        }
+                    } else {
+                        Write-ColorOutput -Message "    [!] No valid output from lockscreen check" -Color "Red"
+                        $failedQueries++
+                    }
+                }
+            } catch {
+                $errorMessage = $_.Exception.Message
+                Write-ColorOutput -Message "    [!] Failed to query VM: $errorMessage" -Color "Red"
+
+                # Check for common authorization errors
+                if ($errorMessage -like "*AuthorizationFailed*" -or $errorMessage -like "*does not have authorization*") {
+                    Write-ColorOutput -Message "    [!] Insufficient permissions - requires 'Virtual Machine Contributor' or 'VM Command Executor' role" -Color "Yellow"
+                }
+
+                $failedQueries++
+            }
+
+            Write-Host ""
+        }
+    }
+
+    # Summary
+    Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "[*] LOCKSCREEN ENUMERATION SUMMARY" -Color "Cyan"
+    Write-ColorOutput -Message "[*] ========================================" -Color "Cyan"
+    Write-ColorOutput -Message "    Total VMs Found: $totalVMsFound" -Color "White"
+    Write-ColorOutput -Message "    Windows VMs Queried: $totalVMsQueried" -Color "White"
+    Write-ColorOutput -Message "    Linux VMs Skipped: $skippedLinuxVMs" -Color "Gray"
+    Write-ColorOutput -Message "    Successful Queries: $successfulQueries" -Color "Green"
+    Write-ColorOutput -Message "    Failed Queries: $failedQueries" -Color $(if ($failedQueries -gt 0) { "Red" } else { "Green" })
+
+    Write-ColorOutput -Message "`n[*] FILES CHECKED:" -Color "Yellow"
+    Write-ColorOutput -Message "    Total Files: $totalFilesChecked" -Color "White"
+    Write-ColorOutput -Message "    BACKDOORED: $backdooredFiles" -Color $(if ($backdooredFiles -gt 0) { "Red" } else { "Green" })
+    Write-ColorOutput -Message "    SUSPICIOUS: $suspiciousFiles" -Color $(if ($suspiciousFiles -gt 0) { "Yellow" } else { "Green" })
+    Write-ColorOutput -Message "    CLEAN: $cleanFiles" -Color "Green"
+    Write-ColorOutput -Message "    NOT FOUND: $notFoundFiles" -Color "Gray"
+
+    # Critical alert if backdoors found
+    if ($backdooredFiles -gt 0) {
+        Write-ColorOutput -Message "`n[!!!] ========================================" -Color "Red"
+        Write-ColorOutput -Message "[!!!] CRITICAL SECURITY ALERT" -Color "Red"
+        Write-ColorOutput -Message "[!!!] ========================================" -Color "Red"
+        Write-ColorOutput -Message "[!!!] $backdooredFiles BACKDOORED executable(s) detected!" -Color "Red"
+        Write-ColorOutput -Message "[!!!] Accessibility executables have been replaced with cmd.exe or PowerShell" -Color "Red"
+        Write-ColorOutput -Message "[!!!] This indicates active compromise - SYSTEM shell available from lock screen" -Color "Red"
+        Write-ColorOutput -Message "[!!!] IMMEDIATE INCIDENT RESPONSE REQUIRED" -Color "Red"
+    }
+
+    # Export if requested
+    if ($ExportPath) {
+        try {
+            $extension = [System.IO.Path]::GetExtension($ExportPath).ToLower()
+
+            if ($extension -eq ".csv") {
+                $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".json") {
+                $exportData | ConvertTo-Json -Depth 5 | Out-File -FilePath $ExportPath -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            } elseif ($extension -eq ".html") {
+                $stats = [ordered]@{
+                    "Total VMs Found" = $totalVMsFound
+                    "Windows VMs Queried" = $totalVMsQueried
+                    "Linux VMs Skipped" = $skippedLinuxVMs
+                    "Successful Queries" = $successfulQueries
+                    "Failed Queries" = $failedQueries
+                    "Total Files Checked" = $totalFilesChecked
+                    "BACKDOORED Files" = $backdooredFiles
+                    "SUSPICIOUS Files" = $suspiciousFiles
+                    "CLEAN Files" = $cleanFiles
+                    "NOT FOUND Files" = $notFoundFiles
+                }
+
+                $description = "Lockscreen backdoor enumeration on Azure VMs. Azure equivalent of NetExec's 'nxc smb -M lockscreendoors' module. Detects accessibility executables replaced with cmd.exe or PowerShell."
+
+                $success = Export-HtmlReport -Data $exportData -OutputPath $ExportPath -Title "Lockscreen Backdoor Enumeration Report" -Statistics $stats -CommandName "lockscreen-enum" -Description $description
+
+                if ($success) {
+                    Write-ColorOutput -Message "`n[+] HTML report exported to: $ExportPath" -Color "Green"
+                }
+            } else {
+                # Default to CSV
+                $exportData | Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                Write-ColorOutput -Message "`n[+] Results exported to: $ExportPath" -Color "Green"
+            }
+        } catch {
+            Write-ColorOutput -Message "`n[!] Failed to export results: $_" -Color "Red"
+        }
+    }
+
+    # NetExec comparison help
+    Write-ColorOutput -Message "`n[*] NETEXEC COMPARISON:" -Color "Yellow"
+    Write-ColorOutput -Message "    NetExec: nxc smb 192.168.1.0/24 -u username -p password -M lockscreendoors" -Color "Gray"
+    Write-ColorOutput -Message "    AZexec:  .\azx.ps1 lockscreen-enum" -Color "Gray"
+    Write-ColorOutput -Message "`n    NetExec checks via SMB/WMI on remote Windows hosts" -Color "Gray"
+    Write-ColorOutput -Message "    AZexec checks via Azure VM Run Command on Azure VMs" -Color "Gray"
+
+    Write-ColorOutput -Message "`n[*] ATTACK CONTEXT:" -Color "Yellow"
+    Write-ColorOutput -Message "    Attackers replace accessibility executables with cmd.exe/powershell.exe" -Color "Gray"
+    Write-ColorOutput -Message "    At the Windows lock screen, pressing the accessibility shortcut" -Color "Gray"
+    Write-ColorOutput -Message "    (e.g., 5x Shift for sethc.exe) spawns a SYSTEM shell" -Color "Gray"
+    Write-ColorOutput -Message "    This provides unauthenticated SYSTEM access to the machine" -Color "Gray"
+
+    Write-ColorOutput -Message "`n[*] TARGET EXECUTABLES:" -Color "Yellow"
+    Write-ColorOutput -Message "    • utilman.exe   - Win+U (Ease of Access)" -Color "Gray"
+    Write-ColorOutput -Message "    • sethc.exe     - 5x Shift (Sticky Keys)" -Color "Gray"
+    Write-ColorOutput -Message "    • narrator.exe  - Win+Enter (Narrator)" -Color "Gray"
+    Write-ColorOutput -Message "    • osk.exe       - On-Screen Keyboard" -Color "Gray"
+    Write-ColorOutput -Message "    • magnify.exe   - Win++ (Magnifier)" -Color "Gray"
+
+    Write-ColorOutput -Message "`n[*] Additional Info:" -Color "Yellow"
+    Write-ColorOutput -Message "    - Lockscreen enumeration requires VMs to be in 'running' state" -Color "Gray"
+    Write-ColorOutput -Message "    - Requires 'Virtual Machine Contributor' or 'VM Command Executor' role" -Color "Gray"
+    Write-ColorOutput -Message "    - Windows VMs only (Linux VMs are skipped automatically)" -Color "Gray"
+    Write-ColorOutput -Message "    - All queries are logged in Azure Activity Logs" -Color "Gray"
+
     return $exportData
 }

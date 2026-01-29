@@ -69,6 +69,8 @@ function Show-Help {
         @{Name="disks-enum"; Auth="Required"; Description="Enumerate Azure Managed Disks (mimics nxc smb --disks)"}
         @{Name="bitlocker-enum"; Auth="Required"; Description="Enumerate BitLocker encryption status on Windows VMs (mimics nxc smb -M bitlocker)"}
         @{Name="av-enum"; Auth="Required"; Description="Enumerate Anti-Virus & EDR products (mimics nxc smb -M enum_av)"}
+        @{Name="process-enum"; Auth="Required"; Description="Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist)"}
+        @{Name="lockscreen-enum"; Auth="Required"; Description="Detect lockscreen backdoors on Azure VMs (mimics nxc smb -M lockscreendoors)"}
         @{Name="help"; Auth="N/A"; Description="Display this help message"}
     )
     
@@ -107,7 +109,9 @@ function Show-Help {
     Write-Host "    .\azx.ps1 shares-enum -SharesFilter WRITE - Filter shares with WRITE access"
     Write-Host "    .\azx.ps1 av-enum                        - Enumerate AV/EDR products (-M enum_av)"
     Write-Host "    .\azx.ps1 av-enum -Filter noncompliant   - Find devices with security gaps"
-    
+    Write-Host "    .\azx.ps1 process-enum                   - Enumerate remote processes (--tasklist)"
+    Write-Host "    .\azx.ps1 lockscreen-enum                - Detect lockscreen backdoors (-M lockscreendoors)"
+
     Write-ColorOutput -Message "`n[*] For detailed help and more examples, see README.md or use Get-Help .\azx.ps1" -Color "Cyan"
     Write-Host ""
 }

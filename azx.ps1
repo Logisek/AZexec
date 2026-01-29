@@ -172,6 +172,7 @@
     - local-groups: Enumerate Azure AD Administrative Units (mimics nxc smb --local-group) (authentication required)
     - av-enum: Enumerate Anti-Virus and EDR products on Azure/Entra devices (mimics nxc smb -M enum_av) (authentication required)
     - process-enum: Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist) (multi-subscription support)
+    - lockscreen-enum: Detect accessibility backdoors on Azure VMs (mimics nxc smb -M lockscreendoors) (multi-subscription support)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -629,6 +630,18 @@
     .\azx.ps1 process-enum -SubscriptionId "12345678-1234-1234-1234-123456789012" -ProcessName "python"
     Enumerate Python processes in a specific subscription
 
+.EXAMPLE
+    .\azx.ps1 lockscreen-enum
+    Detect lockscreen backdoors on all Azure VMs (similar to nxc smb -M lockscreendoors)
+
+.EXAMPLE
+    .\azx.ps1 lockscreen-enum -VMFilter running
+    Check only running VMs for accessibility backdoors
+
+.EXAMPLE
+    .\azx.ps1 lockscreen-enum -ResourceGroup Production-RG -ExportPath lockscreen-report.html
+    Check VMs in specific resource group and export HTML report
+
 .NOTES
     Requires PowerShell 7+
     Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'local-groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies' commands)
@@ -654,13 +667,15 @@
     - 'disks-enum': Requires Az.Accounts, Az.Resources, Az.Compute (Reader role required)
     - 'bitlocker-enum': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
     - 'process-enum': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
-    
+    - 'lockscreen-enum': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
+
     The 'shares-enum' command is the Azure equivalent of NetExec's --shares command for SMB share enumeration
     The 'disks-enum' command is the Azure equivalent of NetExec's --disks command for disk enumeration
     The 'bitlocker-enum' command is the Azure equivalent of NetExec's -M bitlocker module for BitLocker encryption status
     The 'av-enum' command is the Azure equivalent of NetExec's -M enum_av module for antivirus/EDR enumeration
     The 'process-enum' command is the Azure equivalent of NetExec's --tasklist command for remote process enumeration
-    
+    The 'lockscreen-enum' command is the Azure equivalent of NetExec's -M lockscreendoors module for detecting accessibility backdoors
+
     All ARM-based commands support multi-subscription enumeration:
     - By default, all accessible subscriptions are enumerated automatically
     - Use -SubscriptionId to target a specific subscription
@@ -672,7 +687,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -823,7 +838,7 @@ if ($Command -eq "av-enum") {
 }
 
 # ARM-based commands use Azure Resource Manager (Az modules) with RBAC, not Graph API
-if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum")) {
+if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum", "lockscreen-enum")) {
     Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
     Write-ColorOutput -Message "[*] AZURE RESOURCE MANAGER - RBAC REQUIREMENTS" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
@@ -879,6 +894,14 @@ if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum
             Write-ColorOutput -Message "    Option 1 (Recommended - Minimal Permissions):" -Color "White"
             Write-ColorOutput -Message "      • Reader role (to list VMs)" -Color "Gray"
             Write-ColorOutput -Message "      • Virtual Machine Command Executor role (to query processes)`n" -Color "Gray"
+            Write-ColorOutput -Message "    Option 2 (Common - Full VM Access):" -Color "White"
+            Write-ColorOutput -Message "      • Virtual Machine Contributor role`n" -Color "Gray"
+        }
+        "lockscreen-enum" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Lockscreen Backdoor Enumeration:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Option 1 (Recommended - Minimal Permissions):" -Color "White"
+            Write-ColorOutput -Message "      • Reader role (to list VMs)" -Color "Gray"
+            Write-ColorOutput -Message "      • Virtual Machine Command Executor role (to query accessibility executables)`n" -Color "Gray"
             Write-ColorOutput -Message "    Option 2 (Common - Full VM Access):" -Color "White"
             Write-ColorOutput -Message "      • Virtual Machine Contributor role`n" -Color "Gray"
         }
@@ -965,6 +988,9 @@ switch ($Command) {
     "process-enum" {
         Invoke-VMProcessEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -VMFilter $VMFilter -ProcessName $ProcessName -ExportPath $ExportPath
     }
+    "lockscreen-enum" {
+        Invoke-LockscreenEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -VMFilter $VMFilter -ExportPath $ExportPath
+    }
     "local-groups" {
         Invoke-AdministrativeUnitsEnumeration -ShowMembers $ShowOwners -ExportPath $ExportPath
     }
@@ -976,7 +1002,7 @@ switch ($Command) {
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, help" -Color "Yellow"
     }
 }
 

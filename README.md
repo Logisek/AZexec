@@ -65,6 +65,7 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb -M bitlocker` | `.\azx.ps1 bitlocker-enum` | ✅ Required | **Enumerate BitLocker encryption status** (Intune devices + Azure VMs) |
 | `nxc smb -M enum_av` | `.\azx.ps1 av-enum` | ✅ Required | **Enumerate Anti-Virus & EDR products** (security posture assessment) |
 | `nxc smb --tasklist` | `.\azx.ps1 process-enum` | ✅ Required | **Enumerate remote processes** (Windows tasklist / Linux ps aux) |
+| `nxc smb -M lockscreendoors` | `.\azx.ps1 lockscreen-enum` | ✅ Required | **Detect lockscreen backdoors** (accessibility executable hijacking) |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1831,6 +1832,7 @@ The following commands use Azure Resource Manager API (Az PowerShell modules) in
 | `disks-enum` | Enumerate Azure Managed Disks (mimics nxc --disks) | Az.Accounts, Az.Resources, Az.Compute | Reader (Disk Reader or Contributor for full details) |
 | `bitlocker-enum` | Enumerate BitLocker encryption status on Intune devices + Azure VMs (mimics nxc -M bitlocker) | Microsoft.Graph (Intune) + Az.Accounts, Az.Compute, Az.Resources (VMs) | DeviceManagementManagedDevices.Read.All (Intune) + VM Contributor (Azure VMs) |
 | `process-enum` | Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist) | Az.Accounts, Az.Compute, Az.Resources | VM Contributor or Reader + VM Command Executor |
+| `lockscreen-enum` | Detect lockscreen backdoors on Azure VMs (mimics nxc smb -M lockscreendoors) | Az.Accounts, Az.Compute, Az.Resources | VM Contributor or Reader + VM Command Executor |
 
 **Multi-Subscription Support**: All ARM commands automatically enumerate all accessible subscriptions. Use `-SubscriptionId` to target a specific subscription, or `-ResourceGroup` to filter within subscriptions.
 
@@ -3998,6 +4000,111 @@ AZR         web-server-01  443     keepass.exe                      [*] PID:5678
 - **"VM is not in running state"**: Process enumeration only works on running VMs. Use `-VMFilter running` to skip stopped VMs.
 - **"AuthorizationFailed"**: Ensure you have `Virtual Machine Contributor` or `VM Command Executor` role assigned.
 - **"No processes found"**: The process name filter may be too restrictive. Try without `-ProcessName` to see all processes.
+
+---
+
+### Lockscreen Backdoor Enumeration: `lockscreen-enum`
+
+The Azure equivalent of NetExec's `-M lockscreendoors` module. Detect when Windows accessibility executables have been replaced with backdoors:
+
+```powershell
+# Detect lockscreen backdoors on all Azure VMs (like nxc smb -M lockscreendoors)
+.\azx.ps1 lockscreen-enum
+
+# Check only running VMs
+.\azx.ps1 lockscreen-enum -VMFilter running
+
+# Target specific subscription or resource group
+.\azx.ps1 lockscreen-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+.\azx.ps1 lockscreen-enum -ResourceGroup Production-RG
+
+# Export results to file
+.\azx.ps1 lockscreen-enum -ExportPath lockscreen-report.csv
+.\azx.ps1 lockscreen-enum -ExportPath lockscreen-report.html
+```
+
+**What is a Lockscreen Backdoor?**
+
+Attackers can replace Windows accessibility executables with cmd.exe or powershell.exe to gain SYSTEM access from the lock screen without authentication. These executables can be triggered from the Windows lock screen:
+
+| Executable | Trigger | Description |
+|------------|---------|-------------|
+| `utilman.exe` | Win+U | Ease of Access utility |
+| `sethc.exe` | 5x Shift | Sticky Keys |
+| `narrator.exe` | Win+Enter | Narrator screen reader |
+| `osk.exe` | On-Screen Keyboard button | On-Screen Keyboard |
+| `magnify.exe` | Win++ | Magnifier |
+| `EaseOfAccessDialog.exe` | Ease of Access menu | Ease of Access Dialog |
+| `displayswitch.exe` | Win+P | Display Switch |
+| `atbroker.exe` | Assistive Technology | Assistive Technology Service |
+| `voiceaccess.exe` | Voice commands | Windows Voice Access |
+
+**Detection Logic**:
+- **CLEAN**: FileDescription matches expected accessibility tool name
+- **SUSPICIOUS**: FileDescription differs from expected value (could be legitimate update or modification)
+- **BACKDOORED**: FileDescription is "Windows PowerShell" or "Windows Command Processor" (definite compromise)
+
+**NetExec Comparison**:
+
+| NetExec Command | AZexec Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `nxc smb 192.168.1.0/24 -u admin -p pass -M lockscreendoors` | `.\azx.ps1 lockscreen-enum` | Detect accessibility backdoors |
+| NetExec checks via SMB/WMI on remote Windows hosts | AZexec checks via Azure VM Run Command | Cloud vs On-Prem |
+
+**How It Works**:
+- Uses Azure VM Run Command to execute PowerShell on Windows VMs
+- Reads FileDescription metadata from each accessibility executable using `[System.Diagnostics.FileVersionInfo]`
+- Compares against expected descriptions for accessibility tools
+- Flags executables with cmd.exe or PowerShell descriptions as **BACKDOORED**
+- Windows VMs only (Linux VMs are automatically skipped)
+
+**Example Output**:
+```
+[*] AZX - Lockscreen Backdoor Enumeration
+[*] Command: lockscreen-enum (Similar to: nxc smb -M lockscreendoors)
+[*] Azure equivalent of NetExec's lockscreendoors module
+
+[*] VM: web-server-01
+    Resource Group: Production-RG
+    OS Type: Windows
+    Power State: running
+    [*] Checking accessibility executables...
+AZR         web-server-01  443     utilman.exe                        [+] CLEAN (desc:Utility Manager)
+AZR         web-server-01  443     narrator.exe                       [+] CLEAN (desc:Screen Reader)
+AZR         web-server-01  443     sethc.exe                          [!] BACKDOORED (desc:Windows Command Processor)
+AZR         web-server-01  443     osk.exe                            [+] CLEAN (desc:Accessibility On-Screen Keyboard)
+    [!!!] CRITICAL: 1 BACKDOORED executable(s) detected!
+
+[*] LOCKSCREEN ENUMERATION SUMMARY
+    Total VMs Found: 5
+    Windows VMs Queried: 4
+    Successful Queries: 4
+    BACKDOORED: 1
+    SUSPICIOUS: 0
+    CLEAN: 35
+```
+
+**Use Cases**:
+
+| Scenario | Description | Command |
+|----------|-------------|---------|
+| **Incident Response** | Detect persistence mechanisms | `.\azx.ps1 lockscreen-enum -VMFilter running` |
+| **Security Audit** | Check all VMs for accessibility backdoors | `.\azx.ps1 lockscreen-enum -ExportPath audit.html` |
+| **Compromise Assessment** | Identify potentially compromised systems | `.\azx.ps1 lockscreen-enum -ResourceGroup critical-systems` |
+| **Red Team Validation** | Verify detection capabilities | Check if implanted backdoors are detected |
+
+**Attack Context**:
+1. Attacker gains access to system (e.g., via RDP, physical access, or admin credentials)
+2. Copies cmd.exe to C:\Windows\System32\sethc.exe (or other accessibility executable)
+3. At lock screen, presses Shift 5 times (for sethc.exe) or Win+U (for utilman.exe)
+4. Instead of accessibility feature, a SYSTEM command prompt appears
+5. Attacker has unauthenticated SYSTEM access
+
+**Troubleshooting**:
+- **"VM is not in running state"**: Lockscreen enumeration only works on running VMs. Use `-VMFilter running` to skip stopped VMs.
+- **"AuthorizationFailed"**: Ensure you have `Virtual Machine Contributor` or `VM Command Executor` role assigned.
+- **"Skipping - Lockscreen enumeration is Windows-only"**: Linux VMs don't have Windows accessibility features and are automatically skipped.
+- **"NOT FOUND"**: Some executables may not exist on all Windows versions (e.g., voiceaccess.exe is Windows 11+ only).
 
 ---
 
