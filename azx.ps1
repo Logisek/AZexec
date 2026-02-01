@@ -670,23 +670,23 @@
     Enumerate OAuth2 delegation with full details exported to JSON
 
 .EXAMPLE
-    .\azx.ps1 exec -VMName "vm-web-01" -Exec "whoami"
+    .\azx.ps1 exec -VMName "vm-web-01" -x "whoami"
     Execute shell command on single VM (like nxc smb -x)
 
 .EXAMPLE
-    .\azx.ps1 exec -VMName "vm-web-01" -Exec '$env:COMPUTERNAME' -PowerShell
+    .\azx.ps1 exec -VMName "vm-web-01" -x '$env:COMPUTERNAME' -PowerShell
     Execute PowerShell on single VM (like nxc smb -X)
 
 .EXAMPLE
-    .\azx.ps1 exec -ResourceGroup "Production-RG" -Exec "hostname" -AllVMs
+    .\azx.ps1 exec -ResourceGroup "Production-RG" -x "hostname" -AllVMs
     Execute on all VMs in resource group (requires -AllVMs flag)
 
 .EXAMPLE
-    .\azx.ps1 exec -VMName "arc-server-01" -Exec "id" -ExecMethod arc
+    .\azx.ps1 exec -VMName "arc-server-01" -x "id" -ExecMethod arc
     Force specific execution method (Arc-enabled server)
 
 .EXAMPLE
-    .\azx.ps1 exec -Exec "whoami /all" -AllVMs -ExportPath results.csv
+    .\azx.ps1 exec -x "whoami /all" -AllVMs -ExportPath results.csv
     Execute across all subscriptions with export
 
 .NOTES
@@ -824,7 +824,7 @@ param(
 
     # Remote command execution options (exec command - NetExec -x/-X equivalent)
     [Parameter(Mandatory = $false)]
-    [string]$Exec,                 # Command to execute
+    [string]$x,                    # Command to execute (-x shell mode)
 
     [Parameter(Mandatory = $false)]
     [string]$VMName,               # Target VM name for single-target execution
@@ -1163,13 +1163,13 @@ switch ($Command) {
     }
     "exec" {
         # Validate exec command has required parameter
-        if (-not $Exec) {
-            Write-ColorOutput -Message "[!] Error: -Exec parameter is required for exec command" -Color "Red"
-            Write-ColorOutput -Message "[*] Usage: .\azx.ps1 exec -VMName 'vm-name' -Exec 'command'" -Color "Yellow"
-            Write-ColorOutput -Message "[*]        .\azx.ps1 exec -ResourceGroup 'RG' -Exec 'command' -AllVMs" -Color "Yellow"
+        if (-not $x) {
+            Write-ColorOutput -Message "[!] Error: -x parameter is required for exec command" -Color "Red"
+            Write-ColorOutput -Message "[*] Usage: .\azx.ps1 exec -VMName 'vm-name' -x 'command'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 exec -ResourceGroup 'RG' -x 'command' -AllVMs" -Color "Yellow"
             return
         }
-        Invoke-RemoteCommandExecution -Exec $Exec -VMName $VMName `
+        Invoke-RemoteCommandExecution -x $x -VMName $VMName `
             -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
             -VMFilter $VMFilter -ExecMethod $ExecMethod `
             -PowerShell:$PowerShell -AllVMs:$AllVMs `

@@ -76,9 +76,9 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb -M lockscreendoors` | `.\azx.ps1 lockscreen-enum` | ✅ Required | **Detect lockscreen backdoors** (accessibility executable hijacking) |
 | `nxc smb -M sccm-recon6` | `.\azx.ps1 intune-enum` | ✅ Required | **Enumerate Intune/Endpoint Manager** (Azure equivalent of SCCM reconnaissance) |
 | `nxc smb --delegate` | `.\azx.ps1 delegation-enum` | ✅ Required | **Enumerate OAuth2 delegation** (impersonation paths via consent grants) |
-| `nxc smb <target> -x "command"` | `.\azx.ps1 exec -VMName "vm" -Exec "command"` | ✅ Required | **Execute remote command** (shell mode) |
-| `nxc smb <target> -X "command"` | `.\azx.ps1 exec -VMName "vm" -Exec "command" -PowerShell` | ✅ Required | **Execute PowerShell command** |
-| `nxc smb <targets> -x "cmd" --exec-method smbexec` | `.\azx.ps1 exec -Exec "cmd" -AllVMs -ExecMethod vmrun` | ✅ Required | **Execute on multiple targets with method selection** |
+| `nxc smb <target> -x "command"` | `.\azx.ps1 exec -VMName "vm" -x "command"` | ✅ Required | **Execute remote command** (shell mode) |
+| `nxc smb <target> -X "command"` | `.\azx.ps1 exec -VMName "vm" -x "command" -PowerShell` | ✅ Required | **Execute PowerShell command** |
+| `nxc smb <targets> -x "cmd" --exec-method smbexec` | `.\azx.ps1 exec -x "cmd" -AllVMs -ExecMethod vmrun` | ✅ Required | **Execute on multiple targets with method selection** |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1304,34 +1304,34 @@ AZexec supports three execution methods, with automatic failover:
 
 | NetExec Command | AZexec Equivalent | Description |
 |-----------------|-------------------|-------------|
-| `nxc smb <target> -x "whoami"` | `.\azx.ps1 exec -VMName "vm-01" -Exec "whoami"` | Execute shell command |
-| `nxc smb <target> -X "$env:COMPUTERNAME"` | `.\azx.ps1 exec -VMName "vm-01" -Exec '$env:COMPUTERNAME' -PowerShell` | Execute PowerShell |
-| `nxc smb <targets> -x "hostname"` | `.\azx.ps1 exec -Exec "hostname" -AllVMs` | Execute on all targets |
-| `nxc smb <target> -x "cmd" --exec-method smbexec` | `.\azx.ps1 exec -VMName "vm-01" -Exec "cmd" -ExecMethod vmrun` | Force specific method |
+| `nxc smb <target> -x "whoami"` | `.\azx.ps1 exec -VMName "vm-01" -x "whoami"` | Execute shell command |
+| `nxc smb <target> -X "$env:COMPUTERNAME"` | `.\azx.ps1 exec -VMName "vm-01" -x '$env:COMPUTERNAME' -PowerShell` | Execute PowerShell |
+| `nxc smb <targets> -x "hostname"` | `.\azx.ps1 exec -x "hostname" -AllVMs` | Execute on all targets |
+| `nxc smb <target> -x "cmd" --exec-method smbexec` | `.\azx.ps1 exec -VMName "vm-01" -x "cmd" -ExecMethod vmrun` | Force specific method |
 
 ### Usage Examples
 
 ```powershell
 # Execute shell command on single VM (like nxc -x)
-.\azx.ps1 exec -VMName "vm-web-01" -Exec "whoami"
+.\azx.ps1 exec -VMName "vm-web-01" -x "whoami"
 
 # Execute PowerShell on single VM (like nxc -X)
-.\azx.ps1 exec -VMName "vm-web-01" -Exec '$env:COMPUTERNAME' -PowerShell
+.\azx.ps1 exec -VMName "vm-web-01" -x '$env:COMPUTERNAME' -PowerShell
 
 # Execute on all VMs in resource group (requires -AllVMs flag for safety)
-.\azx.ps1 exec -ResourceGroup "Production-RG" -Exec "hostname" -AllVMs
+.\azx.ps1 exec -ResourceGroup "Production-RG" -x "hostname" -AllVMs
 
 # Force specific execution method (Arc-enabled server)
-.\azx.ps1 exec -VMName "arc-server-01" -Exec "id" -ExecMethod arc
+.\azx.ps1 exec -VMName "arc-server-01" -x "id" -ExecMethod arc
 
 # Execute across all subscriptions with export
-.\azx.ps1 exec -Exec "whoami /all" -AllVMs -ExportPath results.csv
+.\azx.ps1 exec -x "whoami /all" -AllVMs -ExportPath results.csv
 
 # Linux VM execution (auto-detected)
-.\azx.ps1 exec -VMName "linux-vm-01" -Exec "id && hostname"
+.\azx.ps1 exec -VMName "linux-vm-01" -x "id && hostname"
 
 # Filter to only running VMs
-.\azx.ps1 exec -Exec "hostname" -AllVMs -VMFilter running
+.\azx.ps1 exec -x "hostname" -AllVMs -VMFilter running
 ```
 
 ### Output Format

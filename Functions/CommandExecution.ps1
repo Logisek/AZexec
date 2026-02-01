@@ -15,8 +15,8 @@
 
     The "auto" mode will detect the best execution method for each target.
 
-.PARAMETER Exec
-    The command to execute on the target(s).
+.PARAMETER x
+    The command to execute on the target(s) (-x shell mode).
 
 .PARAMETER VMName
     Target VM name (required for single-target execution).
@@ -47,24 +47,24 @@
 
 .EXAMPLE
     # Execute shell command on single VM (like nxc -x)
-    Invoke-RemoteCommandExecution -Exec "whoami" -VMName "vm-web-01"
+    Invoke-RemoteCommandExecution -x "whoami" -VMName "vm-web-01"
 
 .EXAMPLE
     # Execute PowerShell on single VM (like nxc -X)
-    Invoke-RemoteCommandExecution -Exec '$env:COMPUTERNAME' -VMName "vm-web-01" -PowerShell
+    Invoke-RemoteCommandExecution -x '$env:COMPUTERNAME' -VMName "vm-web-01" -PowerShell
 
 .EXAMPLE
     # Execute on all VMs in resource group
-    Invoke-RemoteCommandExecution -Exec "hostname" -ResourceGroup "Production-RG" -AllVMs
+    Invoke-RemoteCommandExecution -x "hostname" -ResourceGroup "Production-RG" -AllVMs
 
 .EXAMPLE
     # Force specific execution method (Arc-enabled server)
-    Invoke-RemoteCommandExecution -Exec "id" -VMName "arc-server-01" -ExecMethod arc
+    Invoke-RemoteCommandExecution -x "id" -VMName "arc-server-01" -ExecMethod arc
 #>
 function Invoke-RemoteCommandExecution {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Exec,
+        [string]$x,
 
         [string]$VMName,
 
@@ -97,7 +97,7 @@ function Invoke-RemoteCommandExecution {
     # Show command details
     $execMode = if ($PowerShell) { "PowerShell (-X)" } else { "Shell (-x)" }
     Write-ColorOutput -Message "[*] Execution Mode: $execMode" -Color "White"
-    Write-ColorOutput -Message "[*] Command: $Exec" -Color "Cyan"
+    Write-ColorOutput -Message "[*] Command: $x" -Color "Cyan"
     Write-ColorOutput -Message "[*] Method: $ExecMethod" -Color "White"
     Write-ColorOutput -Message "[*] Timeout: $Timeout seconds" -Color "Gray"
 
@@ -318,20 +318,20 @@ function Invoke-RemoteCommandExecution {
             if ($targetOS -eq "Windows") {
                 if ($PowerShell) {
                     # PowerShell mode (-X equivalent)
-                    $scriptContent = $Exec
+                    $scriptContent = $x
                     $commandId = "RunPowerShellScript"
                 } else {
                     # Shell mode (-x equivalent) - wrap in cmd.exe
-                    $scriptContent = "cmd.exe /c `"$Exec`""
+                    $scriptContent = "cmd.exe /c `"$x`""
                     $commandId = "RunPowerShellScript"
                 }
             } else {
                 # Linux - shell mode
                 if ($PowerShell) {
                     # PowerShell Core on Linux
-                    $scriptContent = "pwsh -Command `"$Exec`""
+                    $scriptContent = "pwsh -Command `"$x`""
                 } else {
-                    $scriptContent = $Exec
+                    $scriptContent = $x
                 }
                 $commandId = "RunShellScript"
             }
@@ -430,7 +430,7 @@ function Invoke-RemoteCommandExecution {
                     OSType = $targetOS
                     Method = $targetMethod
                     Location = $target.Location
-                    Command = $Exec
+                    Command = $x
                     Mode = if ($PowerShell) { "PowerShell" } else { "Shell" }
                     Status = "Success"
                     Output = $output
@@ -470,7 +470,7 @@ function Invoke-RemoteCommandExecution {
                     OSType = $targetOS
                     Method = $targetMethod
                     Location = $target.Location
-                    Command = $Exec
+                    Command = $x
                     Mode = if ($PowerShell) { "PowerShell" } else { "Shell" }
                     Status = "Failed"
                     Output = $errorMessage
@@ -488,7 +488,7 @@ function Invoke-RemoteCommandExecution {
     Write-ColorOutput -Message "[*] EXECUTION SUMMARY" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
 
-    Write-ColorOutput -Message "[*] Command: $Exec" -Color "White"
+    Write-ColorOutput -Message "[*] Command: $x" -Color "White"
     Write-ColorOutput -Message "[*] Mode: $execMode" -Color "White"
     Write-ColorOutput -Message "[*] Method: $ExecMethod" -Color "White"
     Write-ColorOutput -Message "" -Color "White"
@@ -512,7 +512,7 @@ function Invoke-RemoteCommandExecution {
             "Successful" = $successfulExec
             "Failed" = $failedExec
             "Skipped" = $skippedTargets
-            "Command" = $Exec
+            "Command" = $x
             "Mode" = $execMode
         }
         Export-EnumerationResults -Data $exportData -ExportPath $ExportPath -Title "Remote Command Execution Results" -Statistics $stats -CommandName "exec" -Description "Azure remote command execution results. Equivalent to NetExec -x/-X commands."
@@ -523,13 +523,13 @@ function Invoke-RemoteCommandExecution {
     # ============================================
     Write-ColorOutput -Message "`n[*] NETEXEC COMPARISON:" -Color "Yellow"
     Write-ColorOutput -Message "    NetExec (shell): nxc smb 192.168.1.0/24 -u user -p pass -x 'whoami'" -Color "Gray"
-    Write-ColorOutput -Message "    AZexec (shell):  .\azx.ps1 exec -VMName 'vm-01' -Exec 'whoami'" -Color "Gray"
+    Write-ColorOutput -Message "    AZexec (shell):  .\azx.ps1 exec -VMName 'vm-01' -x 'whoami'" -Color "Gray"
     Write-ColorOutput -Message "" -Color "White"
     Write-ColorOutput -Message "    NetExec (PS):    nxc smb 192.168.1.0/24 -u user -p pass -X '`$env:COMPUTERNAME'" -Color "Gray"
-    Write-ColorOutput -Message "    AZexec (PS):     .\azx.ps1 exec -VMName 'vm-01' -Exec '`$env:COMPUTERNAME' -PowerShell" -Color "Gray"
+    Write-ColorOutput -Message "    AZexec (PS):     .\azx.ps1 exec -VMName 'vm-01' -x '`$env:COMPUTERNAME' -PowerShell" -Color "Gray"
     Write-ColorOutput -Message "" -Color "White"
     Write-ColorOutput -Message "    NetExec (multi): nxc smb 192.168.1.0/24 -u user -p pass -x 'hostname'" -Color "Gray"
-    Write-ColorOutput -Message "    AZexec (multi):  .\azx.ps1 exec -ResourceGroup 'Prod-RG' -Exec 'hostname' -AllVMs" -Color "Gray"
+    Write-ColorOutput -Message "    AZexec (multi):  .\azx.ps1 exec -ResourceGroup 'Prod-RG' -x 'hostname' -AllVMs" -Color "Gray"
 
     Write-ColorOutput -Message "`n[*] EXECUTION METHODS:" -Color "Yellow"
     Write-ColorOutput -Message "    vmrun:  Azure VM Run Command (primary - for Azure VMs)" -Color "Gray"
