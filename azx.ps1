@@ -1,6 +1,6 @@
 <#
     This file is part of the toolkit EvilMist
-    Copyright (C) 2025 Logisek
+    Copyright (C) 2025-2026 Logisek
     https://github.com/Logisek/AZexec
 
     AZexec - The Azure Execution Tool.
@@ -101,6 +101,15 @@
       * Filter by resource group, subscription, and VM power state
       * Multi-subscription support with automatic enumeration
       * Requires VM Contributor role or VM Command Executor role
+    - Azure VM Process Enumeration (mimics nxc smb --tasklist)
+      * Azure equivalent of remote process enumeration
+      * Query running processes on Azure VMs using VM Run Command
+      * Support for both Windows (tasklist) and Linux (ps aux) VMs
+      * Display process name, PID, memory usage, CPU usage, user, and session
+      * Filter by process name (e.g., "keepass.exe", "ssh", "python")
+      * Filter by resource group, subscription, and VM power state
+      * Multi-subscription support with automatic enumeration
+      * Requires VM Contributor role or VM Command Executor role
     - Azure Storage Account Enumeration (authentication required)
       * Discover storage accounts across subscriptions
       * Security analysis: public access, HTTPS-only, TLS version, network rules
@@ -162,6 +171,10 @@
     - bitlocker-enum: Enumerate BitLocker encryption status on Windows Azure VMs (mimics nxc smb -M bitlocker) (multi-subscription support)
     - local-groups: Enumerate Azure AD Administrative Units (mimics nxc smb --local-group) (authentication required)
     - av-enum: Enumerate Anti-Virus and EDR products on Azure/Entra devices (mimics nxc smb -M enum_av) (authentication required)
+    - process-enum: Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist) (multi-subscription support)
+    - lockscreen-enum: Detect accessibility backdoors on Azure VMs (mimics nxc smb -M lockscreendoors) (multi-subscription support)
+    - intune-enum: Enumerate Intune/Endpoint Manager configuration (mimics nxc smb -M sccm-recon6) (authentication required)
+    - delegation-enum: Enumerate OAuth2 delegation/impersonation paths (mimics nxc smb --delegate) (authentication required)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -599,9 +612,65 @@
     .\azx.ps1 av-enum -ExportPath security-report.html
     Generate comprehensive HTML security report with statistics
 
+.EXAMPLE
+    .\azx.ps1 process-enum
+    Enumerate all running processes on all Azure VMs (similar to nxc smb --tasklist)
+
+.EXAMPLE
+    .\azx.ps1 process-enum -ProcessName "keepass.exe"
+    Enumerate specific process by name (similar to nxc smb --tasklist keepass.exe)
+
+.EXAMPLE
+    .\azx.ps1 process-enum -ResourceGroup Production-RG
+    Enumerate processes on VMs in a specific resource group
+
+.EXAMPLE
+    .\azx.ps1 process-enum -VMFilter running -ExportPath processes.csv
+    Enumerate processes only on running VMs and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 process-enum -SubscriptionId "12345678-1234-1234-1234-123456789012" -ProcessName "python"
+    Enumerate Python processes in a specific subscription
+
+.EXAMPLE
+    .\azx.ps1 lockscreen-enum
+    Detect lockscreen backdoors on all Azure VMs (similar to nxc smb -M lockscreendoors)
+
+.EXAMPLE
+    .\azx.ps1 lockscreen-enum -VMFilter running
+    Check only running VMs for accessibility backdoors
+
+.EXAMPLE
+    .\azx.ps1 lockscreen-enum -ResourceGroup Production-RG -ExportPath lockscreen-report.html
+    Check VMs in specific resource group and export HTML report
+
+.EXAMPLE
+    .\azx.ps1 intune-enum
+    Enumerate Intune/Endpoint Manager configuration (similar to nxc smb -M sccm-recon6)
+
+.EXAMPLE
+    .\azx.ps1 intune-enum -ExportPath intune-report.csv
+    Enumerate Intune configuration and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 intune-enum -ExportPath intune-report.html
+    Enumerate Intune configuration and generate HTML report
+
+.EXAMPLE
+    .\azx.ps1 delegation-enum
+    Enumerate OAuth2 delegated permissions and identify impersonation paths (Azure equivalent of nxc smb --delegate)
+
+.EXAMPLE
+    .\azx.ps1 delegation-enum -ExportPath delegation.csv
+    Enumerate OAuth2 delegation and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 delegation-enum -ExportPath delegation.json
+    Enumerate OAuth2 delegation with full details exported to JSON
+
 .NOTES
     Requires PowerShell 7+
-    Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'local-groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies' commands)
+    Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'local-groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies', 'intune-enum' commands)
     Requires Az PowerShell module (for ARM-based commands: 'vm-loggedon', 'storage-enum', 'keyvault-enum', 'network-enum', 'shares-enum')
     Requires appropriate Azure/Entra permissions (for authenticated commands)
     The 'tenant' and 'users' commands do not require authentication
@@ -623,12 +692,19 @@
     - 'shares-enum': Requires Az.Accounts, Az.Resources, Az.Storage (Reader + Storage Account Key Operator or Storage File Data SMB Share Reader)
     - 'disks-enum': Requires Az.Accounts, Az.Resources, Az.Compute (Reader role required)
     - 'bitlocker-enum': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
-    
+    - 'process-enum': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
+    - 'lockscreen-enum': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
+
     The 'shares-enum' command is the Azure equivalent of NetExec's --shares command for SMB share enumeration
     The 'disks-enum' command is the Azure equivalent of NetExec's --disks command for disk enumeration
     The 'bitlocker-enum' command is the Azure equivalent of NetExec's -M bitlocker module for BitLocker encryption status
     The 'av-enum' command is the Azure equivalent of NetExec's -M enum_av module for antivirus/EDR enumeration
-    
+    The 'process-enum' command is the Azure equivalent of NetExec's --tasklist command for remote process enumeration
+    The 'lockscreen-enum' command is the Azure equivalent of NetExec's -M lockscreendoors module for detecting accessibility backdoors
+    The 'intune-enum' command is the Azure equivalent of NetExec's -M sccm-recon6 module for SCCM/Intune infrastructure reconnaissance
+    The 'intune-enum' command requires DeviceManagementConfiguration.Read.All, DeviceManagementRBAC.Read.All, and DeviceManagementManagedDevices.Read.All permissions
+    The 'delegation-enum' command requires Application.Read.All and Directory.Read.All permissions (Azure equivalent of NetExec --delegate)
+
     All ARM-based commands support multi-subscription enumeration:
     - By default, all accessible subscriptions are enumerated automatically
     - Use -SubscriptionId to target a specific subscription
@@ -640,7 +716,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "delegation-enum", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -695,7 +771,32 @@ param(
     
     [Parameter(Mandatory = $false)]
     [ValidateSet("all", "READ", "WRITE", "READ,WRITE")]
-    [string]$SharesFilter = "all"
+    [string]$SharesFilter = "all",
+    
+    [Parameter(Mandatory = $false)]
+    [string]$ProcessName,
+
+    # Password spray options (NetExec-style)
+    [Parameter(Mandatory = $false)]
+    [switch]$ContinueOnSuccess,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$NoBruteforce,
+
+    [Parameter(Mandatory = $false)]
+    [string]$PasswordFile,
+
+    [Parameter(Mandatory = $false)]
+    [int]$Delay = 0,
+
+    # Token-based authentication (Azure's Pass-the-Hash equivalent)
+    [Parameter(Mandatory = $false)]
+    [string]$AccessToken,
+
+    # Local authentication mode (Azure equivalent of netexec --local-auth)
+    # Only spray managed (cloud-only) domains, skip federated domains
+    [Parameter(Mandatory = $false)]
+    [switch]$LocalAuth
 )
 
 
@@ -724,6 +825,8 @@ $FunctionsPath = Join-Path $PSScriptRoot "Functions"
 . "$FunctionsPath\Vulnerabilities.ps1"
 . "$FunctionsPath\Security.ps1"
 . "$FunctionsPath\AzureRM.ps1"
+. "$FunctionsPath\Intune.ps1"
+. "$FunctionsPath\Delegation.ps1"
 
 # ============================================
 # MAIN EXECUTION
@@ -735,9 +838,51 @@ Show-Banner
 # For authenticated commands (hosts, groups, pass-pol, sessions), we need Graph module
 # vuln-list handles authentication internally (hybrid unauthenticated + authenticated)
 # rid-brute is an alias for user-profiles (Azure equivalent of RID bruteforcing)
-if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "rid-brute", "roles", "apps", "sp-discovery", "ca-policies", "local-groups")) {
-    Initialize-GraphModule
-    
+if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "rid-brute", "roles", "apps", "sp-discovery", "ca-policies", "local-groups", "intune-enum", "delegation-enum")) {
+    # Determine required Graph modules based on command
+    $graphModules = switch ($Command) {
+        "hosts" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+        { $_ -in @("user-profiles", "rid-brute") } {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Users")
+        }
+        "groups" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Groups")
+        }
+        "pass-pol" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+        "sessions" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Reports")
+        }
+        "roles" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+        "apps" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Applications")
+        }
+        "sp-discovery" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Applications")
+        }
+        "ca-policies" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.SignIns")
+        }
+        "local-groups" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+        "intune-enum" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.DeviceManagement", "Microsoft.Graph.DeviceManagement.Administration")
+        }
+        "delegation-enum" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Applications")
+        }
+        default {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+    }
+    Initialize-GraphModule -RequiredModules $graphModules
+
     # Determine required scopes based on command
     $requiredScopes = switch ($Command) {
         "hosts" { "Device.Read.All" }
@@ -751,44 +896,48 @@ if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "
         "apps" { "Application.Read.All,Directory.Read.All" }
         "ca-policies" { "Policy.Read.All,Directory.Read.All" }
         "local-groups" { "AdministrativeUnit.Read.All,Directory.Read.All" }
-        "sp-discovery" { 
+        "sp-discovery" {
             if ($IncludeWritePermissions) {
                 "Application.Read.All,Directory.Read.All,AppRoleAssignment.ReadWrite.All"
             } else {
                 "Application.Read.All,Directory.Read.All"
             }
         }
+        "intune-enum" { "DeviceManagementConfiguration.Read.All,DeviceManagementRBAC.Read.All,DeviceManagementManagedDevices.Read.All,DeviceManagementServiceConfig.Read.All" }
+        "delegation-enum" { "Application.Read.All,Directory.Read.All" }
         default { $Scopes }
     }
-    
+
     Connect-GraphAPI -Scopes $requiredScopes
 }
 
 # vuln-list, guest-vuln-scan, and av-enum require Graph module but handle connection internally
 if ($Command -eq "vuln-list" -or $Command -eq "guest-vuln-scan") {
-    Initialize-GraphModule
+    $graphModules = @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement", "Microsoft.Graph.Users", "Microsoft.Graph.Groups", "Microsoft.Graph.Applications")
+    Initialize-GraphModule -RequiredModules $graphModules
 }
 
 # av-enum requires Graph module with specific permissions
 if ($Command -eq "av-enum") {
-    Initialize-GraphModule
-    
+    $graphModules = @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement", "Microsoft.Graph.DeviceManagement")
+    Initialize-GraphModule -RequiredModules $graphModules
+
     # av-enum needs Device.Read.All at minimum, plus MDE/Intune permissions for full data
     # DeviceManagementConfiguration.Read.All is needed for some encryption/compliance data
     $requiredScopes = "Device.Read.All,SecurityEvents.Read.All,DeviceManagementManagedDevices.Read.All,DeviceManagementConfiguration.Read.All"
-    
+
     Write-ColorOutput -Message "`n[*] Connecting to Microsoft Graph for Security Enumeration..." -Color "Yellow"
     Write-ColorOutput -Message "[*] Permissions requested (some require admin consent):" -Color "Cyan"
     Write-ColorOutput -Message "    • Device.Read.All (required - device enumeration)" -Color "White"
     Write-ColorOutput -Message "    • DeviceManagementManagedDevices.Read.All (Intune device data, BitLocker status)" -Color "White"
     Write-ColorOutput -Message "    • DeviceManagementConfiguration.Read.All (device compliance, encryption policies)" -Color "White"
     Write-ColorOutput -Message "    • SecurityEvents.Read.All (MDE/Defender status - requires admin consent)`n" -Color "Gray"
-    
+
     Connect-GraphAPI -Scopes $requiredScopes
 }
 
 # ARM-based commands use Azure Resource Manager (Az modules) with RBAC, not Graph API
-if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum")) {
+if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum", "lockscreen-enum")) {
     Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
     Write-ColorOutput -Message "[*] AZURE RESOURCE MANAGER - RBAC REQUIREMENTS" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
@@ -839,6 +988,22 @@ if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum
             Write-ColorOutput -Message "    Option 2 (Common - Full VM Access):" -Color "White"
             Write-ColorOutput -Message "      • Virtual Machine Contributor role`n" -Color "Gray"
         }
+        "process-enum" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Process Enumeration:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Option 1 (Recommended - Minimal Permissions):" -Color "White"
+            Write-ColorOutput -Message "      • Reader role (to list VMs)" -Color "Gray"
+            Write-ColorOutput -Message "      • Virtual Machine Command Executor role (to query processes)`n" -Color "Gray"
+            Write-ColorOutput -Message "    Option 2 (Common - Full VM Access):" -Color "White"
+            Write-ColorOutput -Message "      • Virtual Machine Contributor role`n" -Color "Gray"
+        }
+        "lockscreen-enum" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Lockscreen Backdoor Enumeration:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Option 1 (Recommended - Minimal Permissions):" -Color "White"
+            Write-ColorOutput -Message "      • Reader role (to list VMs)" -Color "Gray"
+            Write-ColorOutput -Message "      • Virtual Machine Command Executor role (to query accessibility executables)`n" -Color "Gray"
+            Write-ColorOutput -Message "    Option 2 (Common - Full VM Access):" -Color "White"
+            Write-ColorOutput -Message "      • Virtual Machine Contributor role`n" -Color "Gray"
+        }
     }
     
     Write-ColorOutput -Message "[*] Role assignment scope: Subscription or Resource Group level" -Color "Yellow"
@@ -875,7 +1040,10 @@ switch ($Command) {
         Invoke-PasswordPolicyEnumeration -ExportPath $ExportPath
     }
     "guest" {
-        Invoke-GuestEnumeration -Domain $Domain -Username $Username -Password $Password -UserFile $UserFile -ExportPath $ExportPath
+        Invoke-GuestEnumeration -Domain $Domain -Username $Username -Password $Password -UserFile $UserFile -PasswordFile $PasswordFile -ContinueOnSuccess $ContinueOnSuccess -NoBruteforce $NoBruteforce -Delay $Delay -ExportPath $ExportPath -AccessToken $AccessToken -LocalAuth $LocalAuth
+    }
+    "spray" {
+        Invoke-PasswordSpray -Domain $Domain -UserFile $UserFile -Password $Password -PasswordFile $PasswordFile -ContinueOnSuccess $ContinueOnSuccess -NoBruteforce $NoBruteforce -Delay $Delay -ExportPath $ExportPath -LocalAuth $LocalAuth
     }
     "vuln-list" {
         Invoke-VulnListEnumeration -Domain $Domain -ExportPath $ExportPath
@@ -919,18 +1087,30 @@ switch ($Command) {
     "bitlocker-enum" {
         Invoke-BitLockerEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -VMFilter $VMFilter -ExportPath $ExportPath
     }
+    "process-enum" {
+        Invoke-VMProcessEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -VMFilter $VMFilter -ProcessName $ProcessName -ExportPath $ExportPath
+    }
+    "lockscreen-enum" {
+        Invoke-LockscreenEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -VMFilter $VMFilter -ExportPath $ExportPath
+    }
     "local-groups" {
         Invoke-AdministrativeUnitsEnumeration -ShowMembers $ShowOwners -ExportPath $ExportPath
     }
     "av-enum" {
         Invoke-SecurityEnumeration -Filter $Filter -ExportPath $ExportPath
     }
+    "intune-enum" {
+        Invoke-IntuneEnumeration -ExportPath $ExportPath
+    }
+    "delegation-enum" {
+        Invoke-DelegationEnumeration -ExportPath $ExportPath
+    }
     "help" {
         Show-Help
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, delegation-enum, help" -Color "Yellow"
     }
 }
 

