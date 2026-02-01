@@ -175,6 +175,7 @@
     - lockscreen-enum: Detect accessibility backdoors on Azure VMs (mimics nxc smb -M lockscreendoors) (multi-subscription support)
     - intune-enum: Enumerate Intune/Endpoint Manager configuration (mimics nxc smb -M sccm-recon6) (authentication required)
     - delegation-enum: Enumerate OAuth2 delegation/impersonation paths (mimics nxc smb --delegate) (authentication required)
+    - exec: Execute remote commands on Azure VMs (mimics nxc smb -x/-X) (multi-subscription support)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -668,6 +669,26 @@
     .\azx.ps1 delegation-enum -ExportPath delegation.json
     Enumerate OAuth2 delegation with full details exported to JSON
 
+.EXAMPLE
+    .\azx.ps1 exec -VMName "vm-web-01" -Exec "whoami"
+    Execute shell command on single VM (like nxc smb -x)
+
+.EXAMPLE
+    .\azx.ps1 exec -VMName "vm-web-01" -Exec '$env:COMPUTERNAME' -PowerShell
+    Execute PowerShell on single VM (like nxc smb -X)
+
+.EXAMPLE
+    .\azx.ps1 exec -ResourceGroup "Production-RG" -Exec "hostname" -AllVMs
+    Execute on all VMs in resource group (requires -AllVMs flag)
+
+.EXAMPLE
+    .\azx.ps1 exec -VMName "arc-server-01" -Exec "id" -ExecMethod arc
+    Force specific execution method (Arc-enabled server)
+
+.EXAMPLE
+    .\azx.ps1 exec -Exec "whoami /all" -AllVMs -ExportPath results.csv
+    Execute across all subscriptions with export
+
 .NOTES
     Requires PowerShell 7+
     Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'local-groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies', 'intune-enum' commands)
@@ -694,6 +715,7 @@
     - 'bitlocker-enum': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
     - 'process-enum': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
     - 'lockscreen-enum': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
+    - 'exec': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
 
     The 'shares-enum' command is the Azure equivalent of NetExec's --shares command for SMB share enumeration
     The 'disks-enum' command is the Azure equivalent of NetExec's --disks command for disk enumeration
@@ -704,6 +726,8 @@
     The 'intune-enum' command is the Azure equivalent of NetExec's -M sccm-recon6 module for SCCM/Intune infrastructure reconnaissance
     The 'intune-enum' command requires DeviceManagementConfiguration.Read.All, DeviceManagementRBAC.Read.All, and DeviceManagementManagedDevices.Read.All permissions
     The 'delegation-enum' command requires Application.Read.All and Directory.Read.All permissions (Azure equivalent of NetExec --delegate)
+    The 'exec' command is the Azure equivalent of NetExec's -x/-X remote command execution
+    The 'exec' command supports three methods: vmrun (Azure VMs), arc (Arc-enabled servers), intune (Intune-managed devices)
 
     All ARM-based commands support multi-subscription enumeration:
     - By default, all accessible subscriptions are enumerated automatically
@@ -716,7 +740,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "delegation-enum", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "delegation-enum", "exec", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -796,7 +820,28 @@ param(
     # Local authentication mode (Azure equivalent of netexec --local-auth)
     # Only spray managed (cloud-only) domains, skip federated domains
     [Parameter(Mandatory = $false)]
-    [switch]$LocalAuth
+    [switch]$LocalAuth,
+
+    # Remote command execution options (exec command - NetExec -x/-X equivalent)
+    [Parameter(Mandatory = $false)]
+    [string]$Exec,                 # Command to execute
+
+    [Parameter(Mandatory = $false)]
+    [string]$VMName,               # Target VM name for single-target execution
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("auto", "vmrun", "arc", "intune")]
+    [string]$ExecMethod = "auto",  # Execution method selection
+
+    [Parameter(Mandatory = $false)]
+    [Alias("X")]
+    [switch]$PowerShell,           # For -X PowerShell execution (vs -x shell)
+
+    [Parameter(Mandatory = $false)]
+    [switch]$AllVMs,               # Execute on all matching VMs (explicit opt-in)
+
+    [Parameter(Mandatory = $false)]
+    [int]$Timeout = 300            # Command execution timeout in seconds
 )
 
 
@@ -827,6 +872,7 @@ $FunctionsPath = Join-Path $PSScriptRoot "Functions"
 . "$FunctionsPath\AzureRM.ps1"
 . "$FunctionsPath\Intune.ps1"
 . "$FunctionsPath\Delegation.ps1"
+. "$FunctionsPath\CommandExecution.ps1"
 
 # ============================================
 # MAIN EXECUTION
@@ -937,7 +983,7 @@ if ($Command -eq "av-enum") {
 }
 
 # ARM-based commands use Azure Resource Manager (Az modules) with RBAC, not Graph API
-if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum", "lockscreen-enum")) {
+if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum", "lockscreen-enum", "exec")) {
     Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
     Write-ColorOutput -Message "[*] AZURE RESOURCE MANAGER - RBAC REQUIREMENTS" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
@@ -1003,6 +1049,16 @@ if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum
             Write-ColorOutput -Message "      • Virtual Machine Command Executor role (to query accessibility executables)`n" -Color "Gray"
             Write-ColorOutput -Message "    Option 2 (Common - Full VM Access):" -Color "White"
             Write-ColorOutput -Message "      • Virtual Machine Contributor role`n" -Color "Gray"
+        }
+        "exec" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Remote Command Execution:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    VM Run Command (vmrun):" -Color "White"
+            Write-ColorOutput -Message "      • Reader role (to list VMs)" -Color "Gray"
+            Write-ColorOutput -Message "      • Virtual Machine Command Executor role (to execute commands)`n" -Color "Gray"
+            Write-ColorOutput -Message "    Arc Run Command (arc):" -Color "White"
+            Write-ColorOutput -Message "      • Azure Connected Machine Resource Administrator`n" -Color "Gray"
+            Write-ColorOutput -Message "    Intune Remote Actions (intune):" -Color "White"
+            Write-ColorOutput -Message "      • DeviceManagementManagedDevices.PrivilegedOperations.All`n" -Color "Gray"
         }
     }
     
@@ -1105,12 +1161,26 @@ switch ($Command) {
     "delegation-enum" {
         Invoke-DelegationEnumeration -ExportPath $ExportPath
     }
+    "exec" {
+        # Validate exec command has required parameter
+        if (-not $Exec) {
+            Write-ColorOutput -Message "[!] Error: -Exec parameter is required for exec command" -Color "Red"
+            Write-ColorOutput -Message "[*] Usage: .\azx.ps1 exec -VMName 'vm-name' -Exec 'command'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 exec -ResourceGroup 'RG' -Exec 'command' -AllVMs" -Color "Yellow"
+            return
+        }
+        Invoke-RemoteCommandExecution -Exec $Exec -VMName $VMName `
+            -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+            -VMFilter $VMFilter -ExecMethod $ExecMethod `
+            -PowerShell:$PowerShell -AllVMs:$AllVMs `
+            -Timeout $Timeout -ExportPath $ExportPath
+    }
     "help" {
         Show-Help
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, delegation-enum, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, delegation-enum, exec, help" -Color "Yellow"
     }
 }
 

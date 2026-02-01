@@ -76,6 +76,9 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb -M lockscreendoors` | `.\azx.ps1 lockscreen-enum` | ✅ Required | **Detect lockscreen backdoors** (accessibility executable hijacking) |
 | `nxc smb -M sccm-recon6` | `.\azx.ps1 intune-enum` | ✅ Required | **Enumerate Intune/Endpoint Manager** (Azure equivalent of SCCM reconnaissance) |
 | `nxc smb --delegate` | `.\azx.ps1 delegation-enum` | ✅ Required | **Enumerate OAuth2 delegation** (impersonation paths via consent grants) |
+| `nxc smb <target> -x "command"` | `.\azx.ps1 exec -VMName "vm" -Exec "command"` | ✅ Required | **Execute remote command** (shell mode) |
+| `nxc smb <target> -X "command"` | `.\azx.ps1 exec -VMName "vm" -Exec "command" -PowerShell` | ✅ Required | **Execute PowerShell command** |
+| `nxc smb <targets> -x "cmd" --exec-method smbexec` | `.\azx.ps1 exec -Exec "cmd" -AllVMs -ExecMethod vmrun` | ✅ Required | **Execute on multiple targets with method selection** |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1283,6 +1286,83 @@ All ARM commands share a common multi-subscription enumeration pattern:
 
 ---
 
+## ⚡ Remote Command Execution - Azure's NetExec -x/-X Equivalent
+
+For penetration testers familiar with NetExec's remote command execution capabilities (`-x` for shell commands, `-X` for PowerShell), AZexec provides the **Azure cloud equivalent** through the `exec` command.
+
+### Execution Methods
+
+AZexec supports three execution methods, with automatic failover:
+
+| Method | Target | Use Case | Priority |
+|--------|--------|----------|----------|
+| **vmrun** | Azure VMs | Primary method - uses Azure VM Run Command | 1st |
+| **arc** | Arc-enabled servers | On-prem/hybrid servers connected to Azure | 2nd |
+| **intune** | Intune-managed devices | Endpoints managed via Endpoint Manager | 3rd |
+
+### Command Mapping
+
+| NetExec Command | AZexec Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `nxc smb <target> -x "whoami"` | `.\azx.ps1 exec -VMName "vm-01" -Exec "whoami"` | Execute shell command |
+| `nxc smb <target> -X "$env:COMPUTERNAME"` | `.\azx.ps1 exec -VMName "vm-01" -Exec '$env:COMPUTERNAME' -PowerShell` | Execute PowerShell |
+| `nxc smb <targets> -x "hostname"` | `.\azx.ps1 exec -Exec "hostname" -AllVMs` | Execute on all targets |
+| `nxc smb <target> -x "cmd" --exec-method smbexec` | `.\azx.ps1 exec -VMName "vm-01" -Exec "cmd" -ExecMethod vmrun` | Force specific method |
+
+### Usage Examples
+
+```powershell
+# Execute shell command on single VM (like nxc -x)
+.\azx.ps1 exec -VMName "vm-web-01" -Exec "whoami"
+
+# Execute PowerShell on single VM (like nxc -X)
+.\azx.ps1 exec -VMName "vm-web-01" -Exec '$env:COMPUTERNAME' -PowerShell
+
+# Execute on all VMs in resource group (requires -AllVMs flag for safety)
+.\azx.ps1 exec -ResourceGroup "Production-RG" -Exec "hostname" -AllVMs
+
+# Force specific execution method (Arc-enabled server)
+.\azx.ps1 exec -VMName "arc-server-01" -Exec "id" -ExecMethod arc
+
+# Execute across all subscriptions with export
+.\azx.ps1 exec -Exec "whoami /all" -AllVMs -ExportPath results.csv
+
+# Linux VM execution (auto-detected)
+.\azx.ps1 exec -VMName "linux-vm-01" -Exec "id && hostname"
+
+# Filter to only running VMs
+.\azx.ps1 exec -Exec "hostname" -AllVMs -VMFilter running
+```
+
+### Output Format
+
+Successful execution displays NetExec-style output with the "(Exec3d!)" indicator:
+
+```
+AZR       vm-web-01             443    Windows     (Exec3d!)   nt authority\system
+```
+
+### Required Permissions
+
+| Method | Required RBAC Roles |
+|--------|---------------------|
+| **vmrun** | Virtual Machine Contributor or Reader + Virtual Machine Command Executor |
+| **arc** | Azure Connected Machine Resource Administrator |
+| **intune** | DeviceManagementManagedDevices.PrivilegedOperations.All |
+
+### Technical Comparison
+
+| Aspect | On-Premises (NetExec) | Azure (AZexec exec) |
+|--------|----------------------|---------------------|
+| **Protocol** | SMB/WMI (port 445) | Azure REST API (HTTPS/443) |
+| **Shell Mode (-x)** | cmd.exe / /bin/sh | cmd.exe / /bin/sh via Run Command |
+| **PowerShell Mode (-X)** | powershell.exe | PowerShell via Run Command |
+| **Authentication** | NTLM/Kerberos | Azure AD OAuth2 |
+| **Logging** | Windows Event Logs | Azure Activity Logs (all queries logged) |
+| **Network** | Direct network access | No network access needed (cloud API) |
+
+---
+
 ## 🎯 Features
 
 - **Tenant Discovery**: Discover Azure/Entra ID tenant configuration without authentication (mimics `nxc smb --enum`)
@@ -1451,6 +1531,16 @@ All ARM commands share a common multi-subscription enumeration pattern:
   - **Windows-specific filtering** - MDE/BitLocker recommendations only for Windows devices
   - Color-coded output: Green (secure), Yellow (warnings), Red (critical gaps)
   - Export detailed security reports to CSV, JSON, or HTML
+- **Remote Command Execution**: Execute remote commands on Azure VMs (mimics `nxc smb -x/-X`)
+  - Azure equivalent of NetExec's `-x` (shell) and `-X` (PowerShell) options
+  - Three execution methods: **vmrun** (Azure VMs), **arc** (Arc-enabled servers), **intune** (Intune devices)
+  - Auto-detection of target type with failover between methods
+  - Support for both Windows and Linux VMs
+  - Single target (`-VMName`) or multi-target (`-AllVMs`) execution
+  - "(Exec3d!)" indicator on successful execution (Azure equivalent of "(Pwn3d!)")
+  - Command timeout configuration
+  - Multi-subscription support with automatic enumeration
+  - Export execution results to CSV, JSON, or HTML
 - **Netexec-Style Output**: Familiar output format for penetration testers and security professionals
 - **Advanced Filtering**: Filter devices by OS, trust type, compliance status, and more
 - **Owner Information**: Optional device owner enumeration with additional API calls
