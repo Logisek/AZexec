@@ -84,6 +84,7 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | *N/A (MDE Live Response)* | `.\azx.ps1 exec -DeviceName "device" -x "command" -ExecMethod mde` | ✅ Required | **Execute via MDE Live Response** (async with polling) |
 | *N/A (Intune Remediation)* | `.\azx.ps1 exec -DeviceName "device" -x "command" -ExecMethod intune` | ✅ Required | **Execute via Intune Proactive Remediation** (async) |
 | *N/A (Automation Worker)* | `.\azx.ps1 exec -VMName "server" -x "command" -ExecMethod automation` | ✅ Required | **Execute via Azure Automation Hybrid Worker** |
+| `nxc smb <target> -X "cmd" --amsi-bypass /path` | `.\azx.ps1 exec -VMName "vm" -x "cmd" -PowerShell -AmsiBypass bypass.ps1` | ✅ Required | **Execute with AMSI bypass** |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1324,6 +1325,7 @@ AZexec supports six execution methods, with automatic failover in `auto` mode:
 | *N/A (MDE device)* | `.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "hostname" -ExecMethod mde` | Execute via MDE Live Response |
 | *N/A (Intune device)* | `.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "hostname" -ExecMethod intune` | Execute via Intune Remediation |
 | *N/A (Automation)* | `.\azx.ps1 exec -VMName "server-01" -x "hostname" -ExecMethod automation` | Execute via Azure Automation |
+| `nxc smb <target> -X "cmd" --amsi-bypass /path` | `.\azx.ps1 exec -VMName "vm-01" -x "cmd" -PowerShell -AmsiBypass bypass.ps1` | Execute with AMSI bypass |
 
 ### Targeting Options
 
@@ -1390,6 +1392,15 @@ AZexec provides two targeting modes for remote command execution:
 
 # Execute via Azure Automation (requires Hybrid Worker configuration)
 .\azx.ps1 exec -VMName "server-01" -x "hostname" -ExecMethod automation
+```
+
+**AMSI Bypass (PowerShell only):**
+```powershell
+# Execute PowerShell with AMSI bypass prepended
+.\azx.ps1 exec -VMName "vm-01" -x "Invoke-Mimikatz" -PowerShell -AmsiBypass bypass.ps1
+
+# Works with all execution methods
+.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "cmd" -PowerShell -AmsiBypass bypass.ps1 -ExecMethod mde
 ```
 
 ### Output Format

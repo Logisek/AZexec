@@ -851,7 +851,10 @@ param(
     [switch]$AllDevices,           # Execute on all Arc-enabled devices
 
     [Parameter(Mandatory = $false)]
-    [int]$Timeout = 300            # Command execution timeout in seconds
+    [int]$Timeout = 300,           # Command execution timeout in seconds
+
+    [Parameter(Mandatory = $false)]
+    [string]$AmsiBypass            # Path to AMSI bypass script file (PowerShell only)
 )
 
 
@@ -1191,7 +1194,8 @@ switch ($Command) {
             -VMFilter $VMFilter -ExecMethod $ExecMethod `
             -PowerShell:$PowerShell -AllVMs:$AllVMs `
             -DeviceName $DeviceName -AllDevices:$AllDevices `
-            -Timeout $Timeout -ExportPath $ExportPath
+            -Timeout $Timeout -ExportPath $ExportPath `
+            -AmsiBypass $AmsiBypass
     }
     "help" {
         Show-Help

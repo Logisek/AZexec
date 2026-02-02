@@ -88,7 +88,9 @@ function Invoke-RemoteCommandExecution {
 
         [int]$Timeout = 300,
 
-        [string]$ExportPath
+        [string]$ExportPath,
+
+        [string]$AmsiBypass
     )
 
     # ============================================
@@ -519,17 +521,37 @@ function Invoke-RemoteCommandExecution {
                 continue
             }
 
+            # AMSI Bypass injection (only for PowerShell mode on Windows)
+            $bypassScript = ""
+            if ($AmsiBypass) {
+                if (-not $PowerShell) {
+                    Write-ColorOutput -Message "    [*] Note: -AmsiBypass only applies to PowerShell mode (-PowerShell flag)" -Color "Yellow"
+                } elseif ($targetOS -ne "Windows") {
+                    Write-ColorOutput -Message "    [*] Note: -AmsiBypass only applies to Windows targets" -Color "Yellow"
+                } else {
+                    if (-not (Test-Path $AmsiBypass)) {
+                        Write-ColorOutput -Message "    [!] AMSI bypass script not found: $AmsiBypass" -Color "Red"
+                        $failedExec++
+                        continue
+                    }
+                    Write-ColorOutput -Message "    [*] Loading AMSI bypass from: $AmsiBypass" -Color "Yellow"
+                    $bypassScript = (Get-Content -Path $AmsiBypass -Raw) + "`n"
+                    $bypassLines = (Get-Content $AmsiBypass).Count
+                    Write-ColorOutput -Message "    [+] AMSI bypass script loaded ($bypassLines lines)" -Color "Green"
+                }
+            }
+
             # Prepare command based on OS type and mode
             $scriptContent = ""
             $commandId = ""
 
             if ($targetOS -eq "Windows") {
                 if ($PowerShell) {
-                    # PowerShell mode (-X equivalent)
-                    $scriptContent = $x
+                    # PowerShell mode (-X equivalent) - prepend bypass if provided
+                    $scriptContent = $bypassScript + $x
                     $commandId = "RunPowerShellScript"
                 } else {
-                    # Shell mode (-x equivalent) - wrap in cmd.exe
+                    # Shell mode (-x equivalent) - wrap in cmd.exe (AMSI bypass not applicable)
                     $scriptContent = "cmd.exe /c `"$x`""
                     $commandId = "RunPowerShellScript"
                 }
@@ -822,6 +844,11 @@ function Invoke-RemoteCommandExecution {
     Write-ColorOutput -Message "`n[*] ASYNC VS SYNC METHODS:" -Color "Yellow"
     Write-ColorOutput -Message "    Synchronous (immediate results): vmrun, arc" -Color "Gray"
     Write-ColorOutput -Message "    Asynchronous (polling/delayed):  mde (10 min max), intune (portal results), automation (job-based)" -Color "Gray"
+
+    Write-ColorOutput -Message "`n[*] AMSI BYPASS:" -Color "Yellow"
+    Write-ColorOutput -Message "    -AmsiBypass <path>  Prepend AMSI bypass script (PowerShell only)" -Color "Gray"
+    Write-ColorOutput -Message "                        Script is prepended before main command" -Color "Gray"
+    Write-ColorOutput -Message "                        Get bypasses: github.com/S3cur3Th1sSh1t/Amsi-Bypass-Powershell" -Color "Gray"
 
     return $exportData
 }
