@@ -727,7 +727,12 @@
     The 'intune-enum' command requires DeviceManagementConfiguration.Read.All, DeviceManagementRBAC.Read.All, and DeviceManagementManagedDevices.Read.All permissions
     The 'delegation-enum' command requires Application.Read.All and Directory.Read.All permissions (Azure equivalent of NetExec --delegate)
     The 'exec' command is the Azure equivalent of NetExec's -x/-X remote command execution
-    The 'exec' command supports three methods: vmrun (Azure VMs), arc (Arc-enabled servers), intune (Intune-managed devices)
+    The 'exec' command supports six methods:
+    - vmrun: Azure VM Run Command (synchronous - for Azure VMs)
+    - arc: Azure Arc Run Command (synchronous - for Arc-enabled servers)
+    - mde: MDE Live Response (async with polling - for MDE-enrolled devices)
+    - intune: Intune Proactive Remediation (async - for Intune-managed devices)
+    - automation: Azure Automation Hybrid Worker (job-based - for servers with Automation extension)
 
     All ARM-based commands support multi-subscription enumeration:
     - By default, all accessible subscriptions are enumerated automatically
@@ -830,15 +835,20 @@ param(
     [string]$VMName,               # Target VM name for single-target execution
 
     [Parameter(Mandatory = $false)]
-    [ValidateSet("auto", "vmrun", "arc", "intune")]
+    [ValidateSet("auto", "vmrun", "arc", "mde", "intune", "automation")]
     [string]$ExecMethod = "auto",  # Execution method selection
 
     [Parameter(Mandatory = $false)]
-    [Alias("X")]
-    [switch]$PowerShell,           # For -X PowerShell execution (vs -x shell)
+    [switch]$PowerShell,           # For PowerShell execution (use -PowerShell instead of -X due to case insensitivity)
 
     [Parameter(Mandatory = $false)]
     [switch]$AllVMs,               # Execute on all matching VMs (explicit opt-in)
+
+    [Parameter(Mandatory = $false)]
+    [string]$DeviceName,           # Target device name (Arc or Intune)
+
+    [Parameter(Mandatory = $false)]
+    [switch]$AllDevices,           # Execute on all Arc-enabled devices
 
     [Parameter(Mandatory = $false)]
     [int]$Timeout = 300            # Command execution timeout in seconds
@@ -1057,8 +1067,13 @@ if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum
             Write-ColorOutput -Message "      • Virtual Machine Command Executor role (to execute commands)`n" -Color "Gray"
             Write-ColorOutput -Message "    Arc Run Command (arc):" -Color "White"
             Write-ColorOutput -Message "      • Azure Connected Machine Resource Administrator`n" -Color "Gray"
-            Write-ColorOutput -Message "    Intune Remote Actions (intune):" -Color "White"
+            Write-ColorOutput -Message "    MDE Live Response (mde):" -Color "White"
+            Write-ColorOutput -Message "      • Machine.LiveResponse permission (Security API)" -Color "Gray"
+            Write-ColorOutput -Message "      • Machine.Read.All permission`n" -Color "Gray"
+            Write-ColorOutput -Message "    Intune Proactive Remediation (intune):" -Color "White"
             Write-ColorOutput -Message "      • DeviceManagementManagedDevices.PrivilegedOperations.All`n" -Color "Gray"
+            Write-ColorOutput -Message "    Azure Automation (automation):" -Color "White"
+            Write-ColorOutput -Message "      • Automation Contributor role`n" -Color "Gray"
         }
     }
     
@@ -1167,12 +1182,15 @@ switch ($Command) {
             Write-ColorOutput -Message "[!] Error: -x parameter is required for exec command" -Color "Red"
             Write-ColorOutput -Message "[*] Usage: .\azx.ps1 exec -VMName 'vm-name' -x 'command'" -Color "Yellow"
             Write-ColorOutput -Message "[*]        .\azx.ps1 exec -ResourceGroup 'RG' -x 'command' -AllVMs" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 exec -DeviceName 'device-name' -x 'command'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 exec -x 'command' -AllDevices" -Color "Yellow"
             return
         }
         Invoke-RemoteCommandExecution -x $x -VMName $VMName `
             -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
             -VMFilter $VMFilter -ExecMethod $ExecMethod `
             -PowerShell:$PowerShell -AllVMs:$AllVMs `
+            -DeviceName $DeviceName -AllDevices:$AllDevices `
             -Timeout $Timeout -ExportPath $ExportPath
     }
     "help" {

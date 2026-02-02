@@ -75,12 +75,16 @@ function Invoke-RemoteCommandExecution {
         [ValidateSet("all", "running")]
         [string]$VMFilter = "running",
 
-        [ValidateSet("auto", "vmrun", "arc", "intune")]
+        [ValidateSet("auto", "vmrun", "arc", "mde", "intune", "automation")]
         [string]$ExecMethod = "auto",
 
         [switch]$PowerShell,
 
         [switch]$AllVMs,
+
+        [string]$DeviceName,
+
+        [switch]$AllDevices,
 
         [int]$Timeout = 300,
 
@@ -102,12 +106,17 @@ function Invoke-RemoteCommandExecution {
     Write-ColorOutput -Message "[*] Timeout: $Timeout seconds" -Color "Gray"
 
     if ($VMName) {
-        Write-ColorOutput -Message "[*] Target: $VMName" -Color "White"
+        Write-ColorOutput -Message "[*] Target: $VMName (VM)" -Color "White"
+    } elseif ($DeviceName) {
+        Write-ColorOutput -Message "[*] Target: $DeviceName (Device)" -Color "White"
     } elseif ($AllVMs) {
         Write-ColorOutput -Message "[*] Target: All matching VMs" -Color "Yellow"
+    } elseif ($AllDevices) {
+        Write-ColorOutput -Message "[*] Target: All Arc-enabled devices" -Color "Yellow"
     } else {
-        Write-ColorOutput -Message "[!] Error: Must specify -VMName for single target or -AllVMs for multiple targets" -Color "Red"
-        Write-ColorOutput -Message "[*] Use -VMName to target a specific VM, or -AllVMs to target all matching VMs" -Color "Yellow"
+        Write-ColorOutput -Message "[!] Error: Must specify target" -Color "Red"
+        Write-ColorOutput -Message "[*] VM targeting: -VMName or -AllVMs" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Device targeting: -DeviceName or -AllDevices" -Color "Yellow"
         return
     }
 
@@ -164,57 +173,10 @@ function Invoke-RemoteCommandExecution {
         # GET TARGETS BASED ON EXECUTION METHOD
         # ============================================
 
-        if ($ExecMethod -eq "vmrun" -or $ExecMethod -eq "auto") {
-            # Get Azure VMs
-            Write-ColorOutput -Message "[*] Retrieving Azure VMs..." -Color "Yellow"
-
-            try {
-                $vms = @()
-                if ($ResourceGroup) {
-                    $vms = @(Get-AzVM -ResourceGroupName $ResourceGroup -Status -ErrorAction Stop)
-                } else {
-                    $vms = @(Get-AzVM -Status -ErrorAction Stop)
-                }
-
-                # Filter by VM name if specified
-                if ($VMName) {
-                    $vms = @($vms | Where-Object { $_.Name -eq $VMName })
-                }
-
-                # Filter by power state
-                if ($VMFilter -eq "running") {
-                    $vms = @($vms | Where-Object { $_.PowerState -eq "VM running" })
-                }
-
-                if ($vms.Count -gt 0) {
-                    Write-ColorOutput -Message "[+] Found $($vms.Count) Azure VM(s)" -Color "Green"
-
-                    foreach ($vm in $vms) {
-                        $targets += [PSCustomObject]@{
-                            Name = $vm.Name
-                            ResourceGroup = $vm.ResourceGroupName
-                            Type = "AzureVM"
-                            OSType = [string]$vm.StorageProfile.OsDisk.OsType
-                            PowerState = $vm.PowerState
-                            Location = $vm.Location
-                            Method = "vmrun"
-                            Subscription = $subscription.Name
-                            SubscriptionId = $subscription.Id
-                        }
-                    }
-                }
-            } catch {
-                if ($_.Exception.Message -like "*AuthorizationFailed*") {
-                    Write-ColorOutput -Message "[!] Authorization failed for VMs in subscription: $($subscription.Name)" -Color "Yellow"
-                } else {
-                    Write-ColorOutput -Message "[!] Error retrieving VMs: $($_.Exception.Message)" -Color "Red"
-                }
-            }
-        }
-
-        if ($ExecMethod -eq "arc" -or $ExecMethod -eq "auto") {
-            # Get Arc-enabled servers
-            Write-ColorOutput -Message "[*] Retrieving Arc-enabled servers..." -Color "Yellow"
+        # Device-centric targeting: -DeviceName or -AllDevices
+        # These prioritize Arc-enabled devices over VMs
+        if ($DeviceName -or $AllDevices) {
+            Write-ColorOutput -Message "[*] Retrieving Arc-enabled devices..." -Color "Yellow"
 
             try {
                 # Check if Az.ConnectedMachine module is available
@@ -228,22 +190,22 @@ function Invoke-RemoteCommandExecution {
                         $arcMachines = @(Get-AzConnectedMachine -ErrorAction Stop)
                     }
 
-                    # Filter by machine name if specified
-                    if ($VMName) {
-                        $arcMachines = @($arcMachines | Where-Object { $_.Name -eq $VMName })
+                    # Filter by device name if specified
+                    if ($DeviceName) {
+                        $arcMachines = @($arcMachines | Where-Object { $_.Name -eq $DeviceName })
                     }
 
                     # Filter to connected machines only
                     $arcMachines = @($arcMachines | Where-Object { $_.Status -eq "Connected" })
 
                     if ($arcMachines.Count -gt 0) {
-                        Write-ColorOutput -Message "[+] Found $($arcMachines.Count) Arc-enabled server(s)" -Color "Green"
+                        Write-ColorOutput -Message "[+] Found $($arcMachines.Count) Arc-enabled device(s)" -Color "Green"
 
                         foreach ($arc in $arcMachines) {
                             $targets += [PSCustomObject]@{
                                 Name = $arc.Name
                                 ResourceGroup = $arc.ResourceGroupName
-                                Type = "ArcServer"
+                                Type = "ArcDevice"
                                 OSType = [string]$arc.OsType
                                 PowerState = $arc.Status
                                 Location = $arc.Location
@@ -252,24 +214,266 @@ function Invoke-RemoteCommandExecution {
                                 SubscriptionId = $subscription.Id
                             }
                         }
+                    } elseif ($DeviceName) {
+                        Write-ColorOutput -Message "[!] Device '$DeviceName' not found as Arc-enabled machine" -Color "Yellow"
+
+                        # Check if device exists in Entra ID/Intune
+                        try {
+                            # Try to connect to Graph if not already connected
+                            $graphContext = Get-MgContext -ErrorAction SilentlyContinue
+                            if (-not $graphContext) {
+                                Write-ColorOutput -Message "[*] Connecting to Microsoft Graph to check Entra ID..." -Color "Yellow"
+                                try {
+                                    # Check if Microsoft.Graph module is available
+                                    if (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication) {
+                                        Import-Module Microsoft.Graph.Authentication -ErrorAction SilentlyContinue
+                                        Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction SilentlyContinue
+                                        Connect-MgGraph -Scopes "Device.Read.All" -NoWelcome -ErrorAction Stop
+                                        $graphContext = Get-MgContext -ErrorAction SilentlyContinue
+                                    }
+                                } catch {
+                                    Write-ColorOutput -Message "[!] Could not connect to Microsoft Graph: $($_.Exception.Message)" -Color "Yellow"
+                                }
+                            }
+
+                            if ($graphContext) {
+                                # Search for device in Entra ID
+                                $entraDevice = Get-MgDevice -Filter "displayName eq '$DeviceName'" -ErrorAction SilentlyContinue | Select-Object -First 1
+
+                                if ($entraDevice) {
+                                    Write-ColorOutput -Message "[+] Device '$DeviceName' found in Entra ID" -Color "Green"
+                                    Write-ColorOutput -Message "    Device ID: $($entraDevice.DeviceId)" -Color "Gray"
+                                    Write-ColorOutput -Message "    OS: $($entraDevice.OperatingSystem) $($entraDevice.OperatingSystemVersion)" -Color "Gray"
+                                    Write-ColorOutput -Message "    Trust Type: $($entraDevice.TrustType)" -Color "Gray"
+                                    Write-ColorOutput -Message "    Management: $($entraDevice.ManagementType)" -Color "Gray"
+                                    Write-ColorOutput -Message "" -Color "White"
+                                    Write-ColorOutput -Message "[!] This device is Entra ID joined but NOT Arc-enabled" -Color "Yellow"
+                                    Write-ColorOutput -Message "[*] Immediate command execution requires Azure Arc agent" -Color "Cyan"
+                                    Write-ColorOutput -Message "" -Color "White"
+                                    Write-ColorOutput -Message "[*] OPTIONS FOR THIS DEVICE:" -Color "Yellow"
+                                    Write-ColorOutput -Message "    1. Install Azure Arc agent for immediate execution:" -Color "White"
+                                    Write-ColorOutput -Message "       .\azx.ps1 exec -DeviceName `"$DeviceName`" -x `"command`" -ExecMethod arc" -Color "Gray"
+                                    Write-ColorOutput -Message "       https://learn.microsoft.com/azure/azure-arc/servers/agent-overview" -Color "Gray"
+                                    Write-ColorOutput -Message "" -Color "White"
+                                    Write-ColorOutput -Message "    2. Use MDE Live Response (if MDE-enrolled):" -Color "White"
+                                    Write-ColorOutput -Message "       .\azx.ps1 exec -DeviceName `"$DeviceName`" -x `"command`" -ExecMethod mde" -Color "Gray"
+                                    Write-ColorOutput -Message "       Requires: Machine.LiveResponse permission" -Color "Gray"
+                                    Write-ColorOutput -Message "" -Color "White"
+                                    Write-ColorOutput -Message "    3. Use Intune Proactive Remediation (async):" -Color "White"
+                                    Write-ColorOutput -Message "       .\azx.ps1 exec -DeviceName `"$DeviceName`" -x `"command`" -ExecMethod intune" -Color "Gray"
+                                    Write-ColorOutput -Message "       Requires: DeviceManagementManagedDevices.PrivilegedOperations.All" -Color "Gray"
+                                    Write-ColorOutput -Message "" -Color "White"
+                                    Write-ColorOutput -Message "    4. Use Azure Automation (if Hybrid Worker configured):" -Color "White"
+                                    Write-ColorOutput -Message "       .\azx.ps1 exec -DeviceName `"$DeviceName`" -x `"command`" -ExecMethod automation" -Color "Gray"
+                                    Write-ColorOutput -Message "       Requires: Automation Contributor role" -Color "Gray"
+                                } else {
+                                    Write-ColorOutput -Message "[!] Device '$DeviceName' not found in Entra ID either" -Color "Red"
+                                    Write-ColorOutput -Message "[*] Verify device name and ensure it's registered" -Color "Yellow"
+                                }
+                            } else {
+                                Write-ColorOutput -Message "[*] Microsoft Graph not available - cannot check Entra ID devices" -Color "Gray"
+                                Write-ColorOutput -Message "[*] Install Microsoft.Graph module: Install-Module Microsoft.Graph" -Color "Gray"
+                                Write-ColorOutput -Message "[*] Non-Arc Intune devices require async script deployment" -Color "Gray"
+                            }
+                        } catch {
+                            Write-ColorOutput -Message "[*] Note: Non-Arc Intune devices require async script deployment" -Color "Gray"
+                        }
                     }
                 } else {
-                    Write-ColorOutput -Message "[*] Az.ConnectedMachine module not available - skipping Arc enumeration" -Color "Gray"
+                    Write-ColorOutput -Message "[!] Az.ConnectedMachine module not available - cannot enumerate Arc devices" -Color "Red"
+                    Write-ColorOutput -Message "[*] Install with: Install-Module Az.ConnectedMachine" -Color "Yellow"
                 }
             } catch {
                 if ($_.Exception.Message -like "*AuthorizationFailed*") {
-                    Write-ColorOutput -Message "[!] Authorization failed for Arc servers in subscription: $($subscription.Name)" -Color "Yellow"
+                    Write-ColorOutput -Message "[!] Authorization failed for Arc devices in subscription: $($subscription.Name)" -Color "Yellow"
                 } else {
-                    Write-ColorOutput -Message "[!] Error retrieving Arc servers: $($_.Exception.Message)" -Color "Yellow"
+                    Write-ColorOutput -Message "[!] Error retrieving Arc devices: $($_.Exception.Message)" -Color "Yellow"
                 }
             }
         }
+        # VM-centric targeting: -VMName or -AllVMs
+        else {
+            if ($ExecMethod -eq "vmrun" -or $ExecMethod -eq "auto") {
+                # Get Azure VMs
+                Write-ColorOutput -Message "[*] Retrieving Azure VMs..." -Color "Yellow"
 
-        # If no targets found and VMName was specified, check if it's an Intune device
-        if ($targets.Count -eq 0 -and $VMName -and ($ExecMethod -eq "intune" -or $ExecMethod -eq "auto")) {
-            Write-ColorOutput -Message "[*] Target not found as VM or Arc server, trying Intune lookup..." -Color "Yellow"
-            # Intune handling would go here - currently informational only
-            Write-ColorOutput -Message "[*] Intune execution requires Microsoft.Graph module and additional permissions" -Color "Gray"
+                try {
+                    $vms = @()
+                    if ($ResourceGroup) {
+                        $vms = @(Get-AzVM -ResourceGroupName $ResourceGroup -Status -ErrorAction Stop)
+                    } else {
+                        $vms = @(Get-AzVM -Status -ErrorAction Stop)
+                    }
+
+                    # Filter by VM name if specified
+                    if ($VMName) {
+                        $vms = @($vms | Where-Object { $_.Name -eq $VMName })
+                    }
+
+                    # Filter by power state
+                    if ($VMFilter -eq "running") {
+                        $vms = @($vms | Where-Object { $_.PowerState -eq "VM running" })
+                    }
+
+                    if ($vms.Count -gt 0) {
+                        Write-ColorOutput -Message "[+] Found $($vms.Count) Azure VM(s)" -Color "Green"
+
+                        foreach ($vm in $vms) {
+                            $targets += [PSCustomObject]@{
+                                Name = $vm.Name
+                                ResourceGroup = $vm.ResourceGroupName
+                                Type = "AzureVM"
+                                OSType = [string]$vm.StorageProfile.OsDisk.OsType
+                                PowerState = $vm.PowerState
+                                Location = $vm.Location
+                                Method = "vmrun"
+                                Subscription = $subscription.Name
+                                SubscriptionId = $subscription.Id
+                            }
+                        }
+                    }
+                } catch {
+                    if ($_.Exception.Message -like "*AuthorizationFailed*") {
+                        Write-ColorOutput -Message "[!] Authorization failed for VMs in subscription: $($subscription.Name)" -Color "Yellow"
+                    } else {
+                        Write-ColorOutput -Message "[!] Error retrieving VMs: $($_.Exception.Message)" -Color "Red"
+                    }
+                }
+            }
+
+            if ($ExecMethod -eq "arc" -or $ExecMethod -eq "auto") {
+                # Get Arc-enabled servers
+                Write-ColorOutput -Message "[*] Retrieving Arc-enabled servers..." -Color "Yellow"
+
+                try {
+                    # Check if Az.ConnectedMachine module is available
+                    if (Get-Module -ListAvailable -Name Az.ConnectedMachine) {
+                        Import-Module Az.ConnectedMachine -ErrorAction SilentlyContinue
+
+                        $arcMachines = @()
+                        if ($ResourceGroup) {
+                            $arcMachines = @(Get-AzConnectedMachine -ResourceGroupName $ResourceGroup -ErrorAction Stop)
+                        } else {
+                            $arcMachines = @(Get-AzConnectedMachine -ErrorAction Stop)
+                        }
+
+                        # Filter by machine name if specified
+                        if ($VMName) {
+                            $arcMachines = @($arcMachines | Where-Object { $_.Name -eq $VMName })
+                        }
+
+                        # Filter to connected machines only
+                        $arcMachines = @($arcMachines | Where-Object { $_.Status -eq "Connected" })
+
+                        if ($arcMachines.Count -gt 0) {
+                            Write-ColorOutput -Message "[+] Found $($arcMachines.Count) Arc-enabled server(s)" -Color "Green"
+
+                            foreach ($arc in $arcMachines) {
+                                $targets += [PSCustomObject]@{
+                                    Name = $arc.Name
+                                    ResourceGroup = $arc.ResourceGroupName
+                                    Type = "ArcServer"
+                                    OSType = [string]$arc.OsType
+                                    PowerState = $arc.Status
+                                    Location = $arc.Location
+                                    Method = "arc"
+                                    Subscription = $subscription.Name
+                                    SubscriptionId = $subscription.Id
+                                }
+                            }
+                        }
+                    } else {
+                        Write-ColorOutput -Message "[*] Az.ConnectedMachine module not available - skipping Arc enumeration" -Color "Gray"
+                    }
+                } catch {
+                    if ($_.Exception.Message -like "*AuthorizationFailed*") {
+                        Write-ColorOutput -Message "[!] Authorization failed for Arc servers in subscription: $($subscription.Name)" -Color "Yellow"
+                    } else {
+                        Write-ColorOutput -Message "[!] Error retrieving Arc servers: $($_.Exception.Message)" -Color "Yellow"
+                    }
+                }
+            }
+
+            # If no targets found and VMName/DeviceName was specified, try alternative methods
+            if ($targets.Count -eq 0 -and ($VMName -or $DeviceName)) {
+                $targetDevice = if ($VMName) { $VMName } else { $DeviceName }
+
+                # Try MDE if specified or auto mode
+                if ($ExecMethod -eq "mde" -or $ExecMethod -eq "auto") {
+                    Write-ColorOutput -Message "[*] Trying MDE Live Response for device: $targetDevice" -Color "Yellow"
+
+                    $mdeToken = Get-MDEAccessToken
+                    if ($mdeToken) {
+                        $mdeDevice = Get-MDEDevice -DeviceName $targetDevice -AccessToken $mdeToken
+                        if ($mdeDevice) {
+                            Write-ColorOutput -Message "[+] Device found in MDE: $($mdeDevice.computerDnsName)" -Color "Green"
+                            $targets += [PSCustomObject]@{
+                                Name = $mdeDevice.computerDnsName
+                                ResourceGroup = "MDE"
+                                Type = "MDEDevice"
+                                OSType = $mdeDevice.osPlatform
+                                PowerState = $mdeDevice.healthStatus
+                                Location = "MDE"
+                                Method = "mde"
+                                Subscription = "MDE"
+                                SubscriptionId = $mdeDevice.id
+                                MDEMachineId = $mdeDevice.id
+                                MDEToken = $mdeToken
+                            }
+                        } elseif ($ExecMethod -eq "mde") {
+                            Write-ColorOutput -Message "[!] Device not found in MDE" -Color "Yellow"
+                        }
+                    } elseif ($ExecMethod -eq "mde") {
+                        Write-ColorOutput -Message "[!] Could not acquire MDE access token" -Color "Red"
+                        Write-ColorOutput -Message "[*] Ensure you have Machine.LiveResponse permission" -Color "Gray"
+                    }
+                }
+
+                # Try Intune if specified or auto mode (and still no targets)
+                if ($targets.Count -eq 0 -and ($ExecMethod -eq "intune" -or $ExecMethod -eq "auto")) {
+                    Write-ColorOutput -Message "[*] Trying Intune for device: $targetDevice" -Color "Yellow"
+
+                    # Ensure Graph connection with required permissions
+                    $graphContext = Get-MgContext -ErrorAction SilentlyContinue
+                    if (-not $graphContext) {
+                        try {
+                            if (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication) {
+                                Import-Module Microsoft.Graph.Authentication -ErrorAction SilentlyContinue
+                                Import-Module Microsoft.Graph.DeviceManagement -ErrorAction SilentlyContinue
+                                Connect-MgGraph -Scopes "DeviceManagementManagedDevices.PrivilegedOperations.All" -NoWelcome -ErrorAction Stop
+                                $graphContext = Get-MgContext -ErrorAction SilentlyContinue
+                            }
+                        } catch {
+                            if ($ExecMethod -eq "intune") {
+                                Write-ColorOutput -Message "[!] Could not connect to Microsoft Graph: $($_.Exception.Message)" -Color "Red"
+                            }
+                        }
+                    }
+
+                    if ($graphContext) {
+                        $intuneDevice = Get-IntuneDevice -DeviceName $targetDevice
+                        if ($intuneDevice) {
+                            Write-ColorOutput -Message "[+] Device found in Intune: $($intuneDevice.deviceName)" -Color "Green"
+                            $targets += [PSCustomObject]@{
+                                Name = $intuneDevice.deviceName
+                                ResourceGroup = "Intune"
+                                Type = "IntuneDevice"
+                                OSType = $intuneDevice.operatingSystem
+                                PowerState = $intuneDevice.complianceState
+                                Location = "Intune"
+                                Method = "intune"
+                                Subscription = "Intune"
+                                SubscriptionId = $intuneDevice.id
+                                IntuneDeviceId = $intuneDevice.id
+                            }
+                        } elseif ($ExecMethod -eq "intune") {
+                            Write-ColorOutput -Message "[!] Device not found in Intune" -Color "Yellow"
+                        }
+                    } elseif ($ExecMethod -eq "intune") {
+                        Write-ColorOutput -Message "[*] Microsoft.Graph module required for Intune execution" -Color "Gray"
+                    }
+                }
+            }
         }
 
         # Skip if single target specified but not found
@@ -277,9 +481,13 @@ function Invoke-RemoteCommandExecution {
             Write-ColorOutput -Message "[!] Target '$VMName' not found in subscription: $($subscription.Name)" -Color "Yellow"
             continue
         }
+        if ($DeviceName -and $targets.Count -eq 0) {
+            # Already warned above, just continue to next subscription
+            continue
+        }
 
-        # Skip if no targets and AllVMs not specified
-        if (-not $AllVMs -and -not $VMName) {
+        # Skip if no targets and no multi-target flag specified
+        if (-not $AllVMs -and -not $AllDevices -and -not $VMName -and -not $DeviceName) {
             continue
         }
 
@@ -379,6 +587,63 @@ function Invoke-RemoteCommandExecution {
 
                     } catch {
                         throw "Arc Run Command failed: $($_.Exception.Message)"
+                    }
+
+                } elseif ($targetMethod -eq "mde") {
+                    # MDE Live Response
+                    Write-ColorOutput -Message "    [*] Using MDE Live Response (async with polling)..." -Color "Cyan"
+
+                    $mdeResult = Invoke-MDELiveResponse `
+                        -MachineId $target.MDEMachineId `
+                        -Command $scriptContent `
+                        -AccessToken $target.MDEToken `
+                        -Timeout $Timeout
+
+                    if ($mdeResult.Status -eq "Success") {
+                        $output = $mdeResult.Output
+                    } else {
+                        throw "MDE Live Response failed: $($mdeResult.Output)"
+                    }
+
+                } elseif ($targetMethod -eq "intune") {
+                    # Intune Proactive Remediation
+                    Write-ColorOutput -Message "    [*] Using Intune Proactive Remediation (async)..." -Color "Cyan"
+
+                    $intuneResult = Invoke-IntuneRemediation `
+                        -DeviceId $target.IntuneDeviceId `
+                        -Command $x `
+                        -PowerShell:$PowerShell `
+                        -DeviceName $targetName
+
+                    if ($intuneResult.Status -eq "Triggered") {
+                        $output = $intuneResult.Output
+                        # Note: Intune execution is async, we won't have immediate output
+                        Write-ColorOutput -Message "    [*] Intune execution is asynchronous - check Intune portal for results" -Color "Yellow"
+                    } else {
+                        throw "Intune Remediation failed: $($intuneResult.Output)"
+                    }
+
+                } elseif ($targetMethod -eq "automation") {
+                    # Azure Automation Hybrid Worker
+                    Write-ColorOutput -Message "    [*] Using Azure Automation Hybrid Worker..." -Color "Cyan"
+
+                    # For automation, we need additional parameters - check if provided
+                    if (-not $target.AutomationAccount -or -not $target.AutomationRG) {
+                        throw "Azure Automation requires -AutomationAccount and -AutomationRG parameters"
+                    }
+
+                    $automationResult = Invoke-AutomationExecution `
+                        -Command $x `
+                        -AutomationAccountName $target.AutomationAccount `
+                        -ResourceGroupName $target.AutomationRG `
+                        -HybridWorkerGroup $target.HybridWorkerGroup `
+                        -PowerShell:$PowerShell `
+                        -Timeout $Timeout
+
+                    if ($automationResult.Status -eq "Success") {
+                        $output = $automationResult.Output
+                    } else {
+                        throw "Automation execution failed: $($automationResult.Output)"
                     }
                 }
 
@@ -531,16 +796,540 @@ function Invoke-RemoteCommandExecution {
     Write-ColorOutput -Message "    NetExec (multi): nxc smb 192.168.1.0/24 -u user -p pass -x 'hostname'" -Color "Gray"
     Write-ColorOutput -Message "    AZexec (multi):  .\azx.ps1 exec -ResourceGroup 'Prod-RG' -x 'hostname' -AllVMs" -Color "Gray"
 
+    Write-ColorOutput -Message "`n[*] TARGETING OPTIONS:" -Color "Yellow"
+    Write-ColorOutput -Message "    VM Targeting:" -Color "White"
+    Write-ColorOutput -Message "      -VMName 'vm-01'              Single VM by name" -Color "Gray"
+    Write-ColorOutput -Message "      -AllVMs                      All VMs (with optional -ResourceGroup filter)" -Color "Gray"
+    Write-ColorOutput -Message "    Device Targeting (Arc-enabled):" -Color "White"
+    Write-ColorOutput -Message "      -DeviceName 'LAPTOP-001'     Single Arc device by name" -Color "Gray"
+    Write-ColorOutput -Message "      -AllDevices                  All Arc-enabled devices" -Color "Gray"
+
     Write-ColorOutput -Message "`n[*] EXECUTION METHODS:" -Color "Yellow"
-    Write-ColorOutput -Message "    vmrun:  Azure VM Run Command (primary - for Azure VMs)" -Color "Gray"
-    Write-ColorOutput -Message "    arc:    Azure Arc Run Command (for on-prem/hybrid servers)" -Color "Gray"
-    Write-ColorOutput -Message "    intune: Intune Proactive Remediation (for managed endpoints)" -Color "Gray"
-    Write-ColorOutput -Message "    auto:   Auto-detect best method for each target" -Color "Gray"
+    Write-ColorOutput -Message "    vmrun:      Azure VM Run Command (synchronous - for Azure VMs)" -Color "Gray"
+    Write-ColorOutput -Message "    arc:        Azure Arc Run Command (synchronous - for Arc-enabled devices)" -Color "Gray"
+    Write-ColorOutput -Message "    mde:        MDE Live Response (async with polling - for MDE-enrolled devices)" -Color "Gray"
+    Write-ColorOutput -Message "    intune:     Intune Proactive Remediation (async - for Intune-managed devices)" -Color "Gray"
+    Write-ColorOutput -Message "    automation: Azure Automation Hybrid Worker (job-based - for Automation-configured)" -Color "Gray"
+    Write-ColorOutput -Message "    auto:       Auto-detect best method (Arc -> MDE -> Intune)" -Color "Gray"
 
     Write-ColorOutput -Message "`n[*] REQUIRED PERMISSIONS:" -Color "Yellow"
-    Write-ColorOutput -Message "    VM Run Command: Virtual Machine Contributor or Reader + VM Command Executor" -Color "Gray"
+    Write-ColorOutput -Message "    VM Run Command:  Virtual Machine Contributor or Reader + VM Command Executor" -Color "Gray"
     Write-ColorOutput -Message "    Arc Run Command: Azure Connected Machine Resource Administrator" -Color "Gray"
-    Write-ColorOutput -Message "    Intune: DeviceManagementManagedDevices.PrivilegedOperations.All" -Color "Gray"
+    Write-ColorOutput -Message "    MDE Live Resp:   Machine.LiveResponse, Machine.Read.All (Security API)" -Color "Gray"
+    Write-ColorOutput -Message "    Intune:          DeviceManagementManagedDevices.PrivilegedOperations.All" -Color "Gray"
+    Write-ColorOutput -Message "    Automation:      Automation Contributor role" -Color "Gray"
+
+    Write-ColorOutput -Message "`n[*] ASYNC VS SYNC METHODS:" -Color "Yellow"
+    Write-ColorOutput -Message "    Synchronous (immediate results): vmrun, arc" -Color "Gray"
+    Write-ColorOutput -Message "    Asynchronous (polling/delayed):  mde (10 min max), intune (portal results), automation (job-based)" -Color "Gray"
 
     return $exportData
+}
+
+# ============================================
+# MDE LIVE RESPONSE FUNCTIONS
+# ============================================
+
+<#
+.SYNOPSIS
+    Find a device in Microsoft Defender for Endpoint by name.
+.DESCRIPTION
+    Queries the MDE Security API to find a machine by its DNS name.
+#>
+function Get-MDEDevice {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DeviceName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AccessToken
+    )
+
+    try {
+        $headers = @{
+            "Authorization" = "Bearer $AccessToken"
+            "Content-Type" = "application/json"
+        }
+
+        # Query MDE API for machines
+        $uri = "https://api.security.microsoft.com/api/machines"
+        $response = Invoke-RestMethod -Method GET -Uri $uri -Headers $headers -ErrorAction Stop
+
+        # Find the device by computer DNS name
+        $device = $response.value | Where-Object {
+            $_.computerDnsName -eq $DeviceName -or
+            $_.computerDnsName -like "$DeviceName.*" -or
+            $_.deviceName -eq $DeviceName
+        } | Select-Object -First 1
+
+        return $device
+    } catch {
+        Write-ColorOutput -Message "[!] Error querying MDE API: $($_.Exception.Message)" -Color "Red"
+        return $null
+    }
+}
+
+<#
+.SYNOPSIS
+    Execute a command via MDE Live Response.
+.DESCRIPTION
+    Uses the MDE Live Response API to execute a PowerShell script on a device.
+    This is asynchronous - the command is queued and results are polled.
+#>
+function Invoke-MDELiveResponse {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$MachineId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Command,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AccessToken,
+
+        [int]$Timeout = 600,  # 10 minutes max for RunScript
+
+        [string]$Comment = "AZexec remote execution"
+    )
+
+    try {
+        $headers = @{
+            "Authorization" = "Bearer $AccessToken"
+            "Content-Type" = "application/json"
+        }
+
+        # Create the Live Response request body
+        # Using RunScript command to execute PowerShell
+        $body = @{
+            Commands = @(
+                @{
+                    type = "RunScript"
+                    params = @(
+                        @{ key = "ScriptName"; value = "azexec_command.ps1" }
+                        @{ key = "Args"; value = $Command }
+                    )
+                }
+            )
+            Comment = $Comment
+        } | ConvertTo-Json -Depth 10
+
+        # Submit the Live Response action
+        $uri = "https://api.security.microsoft.com/api/machines/$MachineId/runliveresponse"
+        $action = Invoke-RestMethod -Method POST -Uri $uri -Headers $headers -Body $body -ErrorAction Stop
+
+        Write-ColorOutput -Message "    [*] Live Response action submitted (ID: $($action.id))" -Color "Yellow"
+        Write-ColorOutput -Message "    [*] Polling for results (timeout: $Timeout seconds)..." -Color "Gray"
+
+        # Poll for results
+        $startTime = Get-Date
+        $actionId = $action.id
+        $pollUri = "https://api.security.microsoft.com/api/machineactions/$actionId"
+
+        do {
+            Start-Sleep -Seconds 5
+            $result = Invoke-RestMethod -Method GET -Uri $pollUri -Headers $headers -ErrorAction Stop
+
+            $elapsed = ((Get-Date) - $startTime).TotalSeconds
+            Write-ColorOutput -Message "    [*] Status: $($result.status) (elapsed: $([Math]::Round($elapsed))s)" -Color "Gray"
+
+            if ($elapsed -gt $Timeout) {
+                Write-ColorOutput -Message "    [!] Timeout reached - action may still be pending" -Color "Yellow"
+                return @{
+                    Status = "Timeout"
+                    Output = "Action timed out after $Timeout seconds. Action ID: $actionId"
+                    ActionId = $actionId
+                }
+            }
+        } while ($result.status -in @("Pending", "InProgress"))
+
+        # Get the command output
+        if ($result.status -eq "Succeeded") {
+            # Retrieve the actual output from the action
+            $outputUri = "https://api.security.microsoft.com/api/machineactions/$actionId/GetLiveResponseResultDownloadLink"
+            try {
+                $outputLink = Invoke-RestMethod -Method GET -Uri $outputUri -Headers $headers -ErrorAction Stop
+                if ($outputLink.value) {
+                    $output = Invoke-RestMethod -Method GET -Uri $outputLink.value -ErrorAction SilentlyContinue
+                } else {
+                    $output = "Command executed successfully (no output available)"
+                }
+            } catch {
+                $output = "Command executed successfully (output retrieval failed: $($_.Exception.Message))"
+            }
+
+            return @{
+                Status = "Success"
+                Output = $output
+                ActionId = $actionId
+            }
+        } else {
+            return @{
+                Status = "Failed"
+                Output = "Action failed with status: $($result.status). Error: $($result.errorHResult)"
+                ActionId = $actionId
+            }
+        }
+    } catch {
+        return @{
+            Status = "Error"
+            Output = $_.Exception.Message
+            ActionId = $null
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+    Get an access token for the MDE Security API.
+.DESCRIPTION
+    Acquires an OAuth2 token for the Microsoft Defender Security API.
+#>
+function Get-MDEAccessToken {
+    try {
+        # Try to get token from existing Az context
+        $context = Get-AzContext -ErrorAction SilentlyContinue
+        if ($context) {
+            # Get token for Security API
+            $token = Get-AzAccessToken -ResourceUrl "https://api.security.microsoft.com" -ErrorAction Stop
+            return $token.Token
+        }
+
+        # Fall back to Microsoft Graph context if available
+        $mgContext = Get-MgContext -ErrorAction SilentlyContinue
+        if ($mgContext) {
+            Write-ColorOutput -Message "[*] Note: MDE API requires separate authentication from Microsoft Graph" -Color "Yellow"
+            Write-ColorOutput -Message "[*] Please ensure you have 'Machine.LiveResponse' permission configured" -Color "Gray"
+        }
+
+        return $null
+    } catch {
+        Write-ColorOutput -Message "[!] Error acquiring MDE token: $($_.Exception.Message)" -Color "Red"
+        return $null
+    }
+}
+
+# ============================================
+# INTUNE PROACTIVE REMEDIATION FUNCTIONS
+# ============================================
+
+<#
+.SYNOPSIS
+    Find a device in Intune by name.
+.DESCRIPTION
+    Queries Microsoft Graph to find an Intune-managed device by name.
+#>
+function Get-IntuneDevice {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DeviceName
+    )
+
+    try {
+        # Ensure Microsoft.Graph module is available
+        if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.DeviceManagement)) {
+            Write-ColorOutput -Message "[!] Microsoft.Graph.DeviceManagement module not available" -Color "Red"
+            return $null
+        }
+
+        Import-Module Microsoft.Graph.DeviceManagement -ErrorAction SilentlyContinue
+
+        # Query for the device
+        $device = Get-MgDeviceManagementManagedDevice -Filter "deviceName eq '$DeviceName'" -ErrorAction Stop | Select-Object -First 1
+
+        return $device
+    } catch {
+        Write-ColorOutput -Message "[!] Error querying Intune: $($_.Exception.Message)" -Color "Red"
+        return $null
+    }
+}
+
+<#
+.SYNOPSIS
+    Execute a command via Intune Proactive Remediation.
+.DESCRIPTION
+    Uses Intune's on-demand proactive remediation feature to execute a script on a device.
+    This is asynchronous - the script is deployed and execution is triggered.
+#>
+function Invoke-IntuneRemediation {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DeviceId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Command,
+
+        [switch]$PowerShell,
+
+        [string]$DeviceName = "Unknown"
+    )
+
+    try {
+        # Create the remediation script content
+        if ($PowerShell) {
+            $scriptContent = $Command
+        } else {
+            # Wrap shell command in PowerShell
+            $scriptContent = "cmd.exe /c `"$Command`""
+        }
+
+        # Base64 encode the script
+        $scriptBytes = [System.Text.Encoding]::UTF8.GetBytes($scriptContent)
+        $encodedScript = [Convert]::ToBase64String($scriptBytes)
+
+        # Create a temporary proactive remediation script
+        $remediationBody = @{
+            "@odata.type" = "#microsoft.graph.deviceHealthScript"
+            displayName = "AZexec-Temp-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+            description = "Temporary script created by AZexec for remote execution"
+            publisher = "AZexec"
+            runAsAccount = "system"
+            enforceSignatureCheck = $false
+            runAs32Bit = $false
+            detectionScriptContent = $encodedScript
+            remediationScriptContent = $encodedScript
+        }
+
+        Write-ColorOutput -Message "    [*] Creating temporary proactive remediation script..." -Color "Yellow"
+
+        # Create the script via Graph API
+        $script = Invoke-MgGraphRequest -Method POST `
+            -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceHealthScripts" `
+            -Body ($remediationBody | ConvertTo-Json -Depth 10) `
+            -ContentType "application/json" `
+            -ErrorAction Stop
+
+        $scriptId = $script.id
+        Write-ColorOutput -Message "    [*] Script created (ID: $scriptId)" -Color "Gray"
+
+        # Assign the script to the device
+        $assignmentBody = @{
+            deviceHealthScriptAssignments = @(
+                @{
+                    target = @{
+                        "@odata.type" = "#microsoft.graph.configurationManagerCollectionAssignmentTarget"
+                        deviceAndAppManagementAssignmentFilterType = "none"
+                    }
+                    runRemediationScript = $true
+                    runSchedule = @{
+                        "@odata.type" = "#microsoft.graph.deviceHealthScriptRunOnceSchedule"
+                        interval = 1
+                    }
+                }
+            )
+        }
+
+        # Trigger on-demand execution
+        Write-ColorOutput -Message "    [*] Triggering on-demand execution on device $DeviceName..." -Color "Yellow"
+
+        $triggerBody = @{
+            scriptPolicyId = $scriptId
+        }
+
+        try {
+            Invoke-MgGraphRequest -Method POST `
+                -Uri "https://graph.microsoft.com/beta/deviceManagement/managedDevices/$DeviceId/initiateOnDemandProactiveRemediation" `
+                -Body ($triggerBody | ConvertTo-Json) `
+                -ContentType "application/json" `
+                -ErrorAction Stop
+
+            Write-ColorOutput -Message "    [+] On-demand remediation triggered successfully" -Color "Green"
+            Write-ColorOutput -Message "    [*] Note: Intune execution is asynchronous - results available in Intune portal" -Color "Yellow"
+
+            # Clean up: delete the temporary script after a delay
+            Start-Sleep -Seconds 2
+            try {
+                Invoke-MgGraphRequest -Method DELETE `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceHealthScripts/$scriptId" `
+                    -ErrorAction SilentlyContinue
+                Write-ColorOutput -Message "    [*] Temporary script cleaned up" -Color "Gray"
+            } catch {
+                Write-ColorOutput -Message "    [*] Note: Manual cleanup may be needed for script ID: $scriptId" -Color "Gray"
+            }
+
+            return @{
+                Status = "Triggered"
+                Output = "On-demand proactive remediation triggered. Check Intune portal for results."
+                ScriptId = $scriptId
+            }
+        } catch {
+            # Clean up the script on failure
+            try {
+                Invoke-MgGraphRequest -Method DELETE `
+                    -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceHealthScripts/$scriptId" `
+                    -ErrorAction SilentlyContinue
+            } catch { }
+
+            throw $_
+        }
+    } catch {
+        return @{
+            Status = "Error"
+            Output = $_.Exception.Message
+            ScriptId = $null
+        }
+    }
+}
+
+# ============================================
+# AZURE AUTOMATION FUNCTIONS
+# ============================================
+
+<#
+.SYNOPSIS
+    Execute a command via Azure Automation Hybrid Runbook Worker.
+.DESCRIPTION
+    Uses Azure Automation to execute a runbook on a Hybrid Worker targeting a specific device.
+#>
+function Invoke-AutomationExecution {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Command,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AutomationAccountName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ResourceGroupName,
+
+        [string]$HybridWorkerGroup,
+
+        [string]$RunbookName = "AZexec-RemoteCommand",
+
+        [switch]$PowerShell,
+
+        [int]$Timeout = 300
+    )
+
+    try {
+        # Check if Az.Automation module is available
+        if (-not (Get-Module -ListAvailable -Name Az.Automation)) {
+            Write-ColorOutput -Message "[!] Az.Automation module not available" -Color "Red"
+            Write-ColorOutput -Message "[*] Install with: Install-Module Az.Automation" -Color "Yellow"
+            return @{
+                Status = "Error"
+                Output = "Az.Automation module not installed"
+                JobId = $null
+            }
+        }
+
+        Import-Module Az.Automation -ErrorAction SilentlyContinue
+
+        # Check if the runbook exists, if not provide guidance
+        $runbook = Get-AzAutomationRunbook `
+            -ResourceGroupName $ResourceGroupName `
+            -AutomationAccountName $AutomationAccountName `
+            -Name $RunbookName `
+            -ErrorAction SilentlyContinue
+
+        if (-not $runbook) {
+            Write-ColorOutput -Message "[!] Runbook '$RunbookName' not found in Automation Account" -Color "Yellow"
+            Write-ColorOutput -Message "[*] To use Azure Automation execution, you need to:" -Color "Cyan"
+            Write-ColorOutput -Message "    1. Create a runbook named '$RunbookName' in your Automation Account" -Color "Gray"
+            Write-ColorOutput -Message "    2. The runbook should accept a 'Command' parameter" -Color "Gray"
+            Write-ColorOutput -Message "    3. Configure a Hybrid Worker Group for target servers" -Color "Gray"
+            Write-ColorOutput -Message "" -Color "White"
+            Write-ColorOutput -Message "[*] Sample runbook content:" -Color "Cyan"
+            Write-ColorOutput -Message '    param([string]$Command)' -Color "Gray"
+            Write-ColorOutput -Message '    Invoke-Expression $Command' -Color "Gray"
+
+            return @{
+                Status = "Error"
+                Output = "Runbook '$RunbookName' not found. Please create it in your Automation Account."
+                JobId = $null
+            }
+        }
+
+        Write-ColorOutput -Message "    [*] Starting Automation runbook job..." -Color "Yellow"
+
+        # Start the runbook
+        $jobParams = @{
+            Command = $Command
+        }
+
+        $startParams = @{
+            ResourceGroupName = $ResourceGroupName
+            AutomationAccountName = $AutomationAccountName
+            Name = $RunbookName
+            Parameters = $jobParams
+        }
+
+        if ($HybridWorkerGroup) {
+            $startParams.RunOn = $HybridWorkerGroup
+            Write-ColorOutput -Message "    [*] Targeting Hybrid Worker Group: $HybridWorkerGroup" -Color "Gray"
+        }
+
+        $job = Start-AzAutomationRunbook @startParams -ErrorAction Stop
+
+        Write-ColorOutput -Message "    [*] Job started (ID: $($job.JobId))" -Color "Gray"
+        Write-ColorOutput -Message "    [*] Waiting for job completion (timeout: $Timeout seconds)..." -Color "Gray"
+
+        # Wait for job completion
+        $startTime = Get-Date
+        do {
+            Start-Sleep -Seconds 5
+            $jobStatus = Get-AzAutomationJob `
+                -ResourceGroupName $ResourceGroupName `
+                -AutomationAccountName $AutomationAccountName `
+                -Id $job.JobId `
+                -ErrorAction Stop
+
+            $elapsed = ((Get-Date) - $startTime).TotalSeconds
+            Write-ColorOutput -Message "    [*] Status: $($jobStatus.Status) (elapsed: $([Math]::Round($elapsed))s)" -Color "Gray"
+
+            if ($elapsed -gt $Timeout) {
+                Write-ColorOutput -Message "    [!] Timeout reached - job may still be running" -Color "Yellow"
+                return @{
+                    Status = "Timeout"
+                    Output = "Job timed out after $Timeout seconds. Job ID: $($job.JobId)"
+                    JobId = $job.JobId
+                }
+            }
+        } while ($jobStatus.Status -in @("New", "Activating", "Running", "Queued", "Starting"))
+
+        # Get job output
+        if ($jobStatus.Status -eq "Completed") {
+            $output = Get-AzAutomationJobOutput `
+                -ResourceGroupName $ResourceGroupName `
+                -AutomationAccountName $AutomationAccountName `
+                -Id $job.JobId `
+                -Stream Output `
+                -ErrorAction SilentlyContinue
+
+            $outputText = ($output | ForEach-Object { $_.Summary }) -join "`n"
+            if ([string]::IsNullOrWhiteSpace($outputText)) {
+                $outputText = "Job completed successfully (no output)"
+            }
+
+            return @{
+                Status = "Success"
+                Output = $outputText
+                JobId = $job.JobId
+            }
+        } else {
+            # Get error output
+            $errorOutput = Get-AzAutomationJobOutput `
+                -ResourceGroupName $ResourceGroupName `
+                -AutomationAccountName $AutomationAccountName `
+                -Id $job.JobId `
+                -Stream Error `
+                -ErrorAction SilentlyContinue
+
+            $errorText = ($errorOutput | ForEach-Object { $_.Summary }) -join "`n"
+            if ([string]::IsNullOrWhiteSpace($errorText)) {
+                $errorText = "Job failed with status: $($jobStatus.Status)"
+            }
+
+            return @{
+                Status = "Failed"
+                Output = $errorText
+                JobId = $job.JobId
+            }
+        }
+    } catch {
+        return @{
+            Status = "Error"
+            Output = $_.Exception.Message
+            JobId = $null
+        }
+    }
 }

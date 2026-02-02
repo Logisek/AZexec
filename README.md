@@ -79,6 +79,11 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb <target> -x "command"` | `.\azx.ps1 exec -VMName "vm" -x "command"` | ✅ Required | **Execute remote command** (shell mode) |
 | `nxc smb <target> -X "command"` | `.\azx.ps1 exec -VMName "vm" -x "command" -PowerShell` | ✅ Required | **Execute PowerShell command** |
 | `nxc smb <targets> -x "cmd" --exec-method smbexec` | `.\azx.ps1 exec -x "cmd" -AllVMs -ExecMethod vmrun` | ✅ Required | **Execute on multiple targets with method selection** |
+| *N/A (Arc devices)* | `.\azx.ps1 exec -DeviceName "device" -x "command"` | ✅ Required | **Execute on Arc-enabled device** (immediate execution) |
+| *N/A (All Arc devices)* | `.\azx.ps1 exec -x "command" -AllDevices` | ✅ Required | **Execute on all Arc-enabled devices** |
+| *N/A (MDE Live Response)* | `.\azx.ps1 exec -DeviceName "device" -x "command" -ExecMethod mde` | ✅ Required | **Execute via MDE Live Response** (async with polling) |
+| *N/A (Intune Remediation)* | `.\azx.ps1 exec -DeviceName "device" -x "command" -ExecMethod intune` | ✅ Required | **Execute via Intune Proactive Remediation** (async) |
+| *N/A (Automation Worker)* | `.\azx.ps1 exec -VMName "server" -x "command" -ExecMethod automation` | ✅ Required | **Execute via Azure Automation Hybrid Worker** |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1292,25 +1297,48 @@ For penetration testers familiar with NetExec's remote command execution capabil
 
 ### Execution Methods
 
-AZexec supports three execution methods, with automatic failover:
+AZexec supports six execution methods, with automatic failover in `auto` mode:
 
-| Method | Target | Use Case | Priority |
-|--------|--------|----------|----------|
-| **vmrun** | Azure VMs | Primary method - uses Azure VM Run Command | 1st |
-| **arc** | Arc-enabled servers | On-prem/hybrid servers connected to Azure | 2nd |
-| **intune** | Intune-managed devices | Endpoints managed via Endpoint Manager | 3rd |
+| Method | Target | Execution Type | Use Case | Priority |
+|--------|--------|----------------|----------|----------|
+| **vmrun** | Azure VMs | Synchronous | Primary method - uses Azure VM Run Command | 1st |
+| **arc** | Arc-enabled servers | Synchronous | On-prem/hybrid servers connected to Azure Arc | 2nd |
+| **mde** | MDE-enrolled devices | Async (polling) | Devices with Microsoft Defender for Endpoint | 3rd |
+| **intune** | Intune-managed devices | Async | Endpoints managed via Intune/Endpoint Manager | 4th |
+| **automation** | Hybrid Workers | Job-based | Servers with Azure Automation extension | 5th |
+
+**Synchronous vs Asynchronous Methods:**
+- **Synchronous** (vmrun, arc): Immediate execution with direct output - best for real-time command execution
+- **Asynchronous** (mde, intune, automation): Queued execution with polling/delayed results - useful for devices not Arc-enabled
 
 ### Command Mapping
 
 | NetExec Command | AZexec Equivalent | Description |
 |-----------------|-------------------|-------------|
-| `nxc smb <target> -x "whoami"` | `.\azx.ps1 exec -VMName "vm-01" -x "whoami"` | Execute shell command |
-| `nxc smb <target> -X "$env:COMPUTERNAME"` | `.\azx.ps1 exec -VMName "vm-01" -x '$env:COMPUTERNAME' -PowerShell` | Execute PowerShell |
-| `nxc smb <targets> -x "hostname"` | `.\azx.ps1 exec -x "hostname" -AllVMs` | Execute on all targets |
+| `nxc smb <target> -x "whoami"` | `.\azx.ps1 exec -VMName "vm-01" -x "whoami"` | Execute shell command on VM |
+| `nxc smb <target> -X "$env:COMPUTERNAME"` | `.\azx.ps1 exec -VMName "vm-01" -x '$env:COMPUTERNAME' -PowerShell` | Execute PowerShell on VM |
+| `nxc smb <targets> -x "hostname"` | `.\azx.ps1 exec -x "hostname" -AllVMs` | Execute on all VMs |
 | `nxc smb <target> -x "cmd" --exec-method smbexec` | `.\azx.ps1 exec -VMName "vm-01" -x "cmd" -ExecMethod vmrun` | Force specific method |
+| *N/A (Arc device)* | `.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "hostname"` | Execute on Arc-enabled device |
+| *N/A (All Arc devices)* | `.\azx.ps1 exec -x "hostname" -AllDevices` | Execute on all Arc devices |
+| *N/A (MDE device)* | `.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "hostname" -ExecMethod mde` | Execute via MDE Live Response |
+| *N/A (Intune device)* | `.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "hostname" -ExecMethod intune` | Execute via Intune Remediation |
+| *N/A (Automation)* | `.\azx.ps1 exec -VMName "server-01" -x "hostname" -ExecMethod automation` | Execute via Azure Automation |
+
+### Targeting Options
+
+AZexec provides two targeting modes for remote command execution:
+
+| Targeting Mode | Parameters | Use Case |
+|----------------|------------|----------|
+| **VM Targeting** | `-VMName` / `-AllVMs` | Azure VMs (traditional cloud VMs) |
+| **Device Targeting** | `-DeviceName` / `-AllDevices` | Arc-enabled devices (on-prem/hybrid servers, workstations) |
+
+**Device Targeting** is designed for Arc-enabled machines, which support immediate command execution via `Invoke-AzConnectedMachineRunCommand`. For non-Arc devices, AZexec will attempt fallback methods in order: MDE Live Response, then Intune Proactive Remediation.
 
 ### Usage Examples
 
+**VM Targeting (Azure VMs):**
 ```powershell
 # Execute shell command on single VM (like nxc -x)
 .\azx.ps1 exec -VMName "vm-web-01" -x "whoami"
@@ -1321,9 +1349,6 @@ AZexec supports three execution methods, with automatic failover:
 # Execute on all VMs in resource group (requires -AllVMs flag for safety)
 .\azx.ps1 exec -ResourceGroup "Production-RG" -x "hostname" -AllVMs
 
-# Force specific execution method (Arc-enabled server)
-.\azx.ps1 exec -VMName "arc-server-01" -x "id" -ExecMethod arc
-
 # Execute across all subscriptions with export
 .\azx.ps1 exec -x "whoami /all" -AllVMs -ExportPath results.csv
 
@@ -1332,6 +1357,39 @@ AZexec supports three execution methods, with automatic failover:
 
 # Filter to only running VMs
 .\azx.ps1 exec -x "hostname" -AllVMs -VMFilter running
+```
+
+**Device Targeting (Arc-enabled Devices):**
+```powershell
+# Execute shell command on single Arc device
+.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "hostname"
+
+# Execute PowerShell on Arc device
+.\azx.ps1 exec -DeviceName "ARC-SERVER-01" -x '$env:COMPUTERNAME' -PowerShell
+
+# Execute on all Arc-enabled devices
+.\azx.ps1 exec -x "whoami" -AllDevices
+
+# Execute on all Arc devices with export
+.\azx.ps1 exec -x "hostname" -AllDevices -ExportPath arc-results.csv
+
+# Execute on Arc devices in specific resource group
+.\azx.ps1 exec -ResourceGroup "Hybrid-Servers-RG" -x "id" -AllDevices
+```
+
+**Method Selection:**
+```powershell
+# Force specific execution method (Arc-enabled server)
+.\azx.ps1 exec -VMName "arc-server-01" -x "id" -ExecMethod arc
+
+# Execute via MDE Live Response (for MDE-enrolled devices)
+.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "hostname" -ExecMethod mde
+
+# Execute via Intune Proactive Remediation (async - check Intune portal for results)
+.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "whoami" -ExecMethod intune
+
+# Execute via Azure Automation (requires Hybrid Worker configuration)
+.\azx.ps1 exec -VMName "server-01" -x "hostname" -ExecMethod automation
 ```
 
 ### Output Format
@@ -1344,11 +1402,13 @@ AZR       vm-web-01             443    Windows     (Exec3d!)   nt authority\syst
 
 ### Required Permissions
 
-| Method | Required RBAC Roles |
-|--------|---------------------|
+| Method | Required RBAC Roles / API Permissions |
+|--------|---------------------------------------|
 | **vmrun** | Virtual Machine Contributor or Reader + Virtual Machine Command Executor |
 | **arc** | Azure Connected Machine Resource Administrator |
-| **intune** | DeviceManagementManagedDevices.PrivilegedOperations.All |
+| **mde** | Machine.LiveResponse, Machine.Read.All (Microsoft Defender Security API) |
+| **intune** | DeviceManagementManagedDevices.PrivilegedOperations.All (Microsoft Graph) |
+| **automation** | Automation Contributor (Azure RBAC) |
 
 ### Technical Comparison
 
@@ -1360,6 +1420,22 @@ AZR       vm-web-01             443    Windows     (Exec3d!)   nt authority\syst
 | **Authentication** | NTLM/Kerberos | Azure AD OAuth2 |
 | **Logging** | Windows Event Logs | Azure Activity Logs (all queries logged) |
 | **Network** | Direct network access | No network access needed (cloud API) |
+
+### Execution Method Details
+
+| Method | API Endpoint | Timeout | Best For |
+|--------|--------------|---------|----------|
+| **vmrun** | Azure VM Run Command API | ~5 min | Azure VMs (immediate results) |
+| **arc** | Azure Arc Run Command API | ~5 min | Arc-enabled servers (immediate results) |
+| **mde** | Security API `/machines/{id}/runliveresponse` | 10 min | MDE-enrolled devices (with polling) |
+| **intune** | Graph API `/managedDevices/{id}/initiateOnDemandProactiveRemediation` | Async | Intune-managed devices (check portal) |
+| **automation** | Azure Automation Runbook API | Variable | Hybrid Worker-configured servers |
+
+**When to Use Each Method:**
+- **vmrun/arc**: Use for Azure VMs and Arc-enabled servers - fastest execution with immediate output
+- **mde**: Use for Entra ID joined devices with MDE agent but no Arc agent - async with polling (up to 10 min)
+- **intune**: Use for Intune-managed devices - fully async, check Intune portal for results
+- **automation**: Use for servers with Azure Automation Hybrid Worker extension configured
 
 ---
 
@@ -1531,12 +1607,19 @@ AZR       vm-web-01             443    Windows     (Exec3d!)   nt authority\syst
   - **Windows-specific filtering** - MDE/BitLocker recommendations only for Windows devices
   - Color-coded output: Green (secure), Yellow (warnings), Red (critical gaps)
   - Export detailed security reports to CSV, JSON, or HTML
-- **Remote Command Execution**: Execute remote commands on Azure VMs (mimics `nxc smb -x/-X`)
+- **Remote Command Execution**: Execute remote commands on Azure VMs, Arc-enabled servers, and managed devices (mimics `nxc smb -x/-X`)
   - Azure equivalent of NetExec's `-x` (shell) and `-X` (PowerShell) options
-  - Three execution methods: **vmrun** (Azure VMs), **arc** (Arc-enabled servers), **intune** (Intune devices)
-  - Auto-detection of target type with failover between methods
-  - Support for both Windows and Linux VMs
-  - Single target (`-VMName`) or multi-target (`-AllVMs`) execution
+  - **Six execution methods**:
+    - **vmrun**: Azure VM Run Command (synchronous - Azure VMs)
+    - **arc**: Azure Arc Run Command (synchronous - Arc-enabled servers)
+    - **mde**: MDE Live Response (async with polling - MDE-enrolled devices)
+    - **intune**: Intune Proactive Remediation (async - Intune-managed devices)
+    - **automation**: Azure Automation Hybrid Worker (job-based - Automation-configured servers)
+    - **auto**: Automatic method detection with failover (Arc → MDE → Intune)
+  - **VM Targeting**: `-VMName` for single VM, `-AllVMs` for all VMs
+  - **Device Targeting**: `-DeviceName` for single device, `-AllDevices` for all Arc-enabled devices
+  - Auto-detection of target type with intelligent failover between methods
+  - Support for both Windows and Linux targets
   - "(Exec3d!)" indicator on successful execution (Azure equivalent of "(Pwn3d!)")
   - Command timeout configuration
   - Multi-subscription support with automatic enumeration
