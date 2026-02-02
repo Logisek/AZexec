@@ -835,7 +835,7 @@ param(
     [string]$VMName,               # Target VM name for single-target execution
 
     [Parameter(Mandatory = $false)]
-    [ValidateSet("auto", "vmrun", "arc", "mde", "intune", "automation")]
+    [ValidateSet("auto", "vmrun", "arc", "mde", "intune", "automation", "pi")]
     [string]$ExecMethod = "auto",  # Execution method selection
 
     [Parameter(Mandatory = $false)]
@@ -854,7 +854,14 @@ param(
     [int]$Timeout = 300,           # Command execution timeout in seconds
 
     [Parameter(Mandatory = $false)]
-    [string]$AmsiBypass            # Path to AMSI bypass script file (PowerShell only)
+    [string]$AmsiBypass,           # Path to AMSI bypass script file (PowerShell only)
+
+    # Process injection parameters (exec command only - Azure equivalent of NetExec pi module)
+    [Parameter(Mandatory = $false)]
+    [int]$PID,                     # Target process ID for token duplication
+
+    [Parameter(Mandatory = $false)]
+    [string]$TargetUser            # Target user to impersonate (finds their process automatically)
 )
 
 
@@ -1195,7 +1202,8 @@ switch ($Command) {
             -PowerShell:$PowerShell -AllVMs:$AllVMs `
             -DeviceName $DeviceName -AllDevices:$AllDevices `
             -Timeout $Timeout -ExportPath $ExportPath `
-            -AmsiBypass $AmsiBypass
+            -AmsiBypass $AmsiBypass `
+            -PID $PID -TargetUser $TargetUser
     }
     "help" {
         Show-Help

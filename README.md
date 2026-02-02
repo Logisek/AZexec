@@ -85,6 +85,8 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | *N/A (Intune Remediation)* | `.\azx.ps1 exec -DeviceName "device" -x "command" -ExecMethod intune` | ✅ Required | **Execute via Intune Proactive Remediation** (async) |
 | *N/A (Automation Worker)* | `.\azx.ps1 exec -VMName "server" -x "command" -ExecMethod automation` | ✅ Required | **Execute via Azure Automation Hybrid Worker** |
 | `nxc smb <target> -X "cmd" --amsi-bypass /path` | `.\azx.ps1 exec -VMName "vm" -x "cmd" -PowerShell -AmsiBypass bypass.ps1` | ✅ Required | **Execute with AMSI bypass** |
+| `nxc smb <target> -M pi -o PID=1234 EXEC=cmd` | `.\azx.ps1 exec -VMName "vm" -x "cmd" -ExecMethod pi -PID 1234` | ✅ Required | **Process injection by PID** |
+| `nxc smb <target> -M pi -o USER=admin EXEC=cmd` | `.\azx.ps1 exec -VMName "vm" -x "cmd" -ExecMethod pi -TargetUser "admin"` | ✅ Required | **Process injection by user** |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1307,6 +1309,7 @@ AZexec supports six execution methods, with automatic failover in `auto` mode:
 | **mde** | MDE-enrolled devices | Async (polling) | Devices with Microsoft Defender for Endpoint | 3rd |
 | **intune** | Intune-managed devices | Async | Endpoints managed via Intune/Endpoint Manager | 4th |
 | **automation** | Hybrid Workers | Job-based | Servers with Azure Automation extension | 5th |
+| **pi** | Windows targets | Token manipulation | Execute as target user via process injection | N/A |
 
 **Synchronous vs Asynchronous Methods:**
 - **Synchronous** (vmrun, arc): Immediate execution with direct output - best for real-time command execution
@@ -1326,6 +1329,8 @@ AZexec supports six execution methods, with automatic failover in `auto` mode:
 | *N/A (Intune device)* | `.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "hostname" -ExecMethod intune` | Execute via Intune Remediation |
 | *N/A (Automation)* | `.\azx.ps1 exec -VMName "server-01" -x "hostname" -ExecMethod automation` | Execute via Azure Automation |
 | `nxc smb <target> -X "cmd" --amsi-bypass /path` | `.\azx.ps1 exec -VMName "vm-01" -x "cmd" -PowerShell -AmsiBypass bypass.ps1` | Execute with AMSI bypass |
+| `nxc smb <target> -M pi -o PID=1234 EXEC=cmd` | `.\azx.ps1 exec -VMName "vm-01" -x "cmd" -ExecMethod pi -PID 1234` | Process injection by PID |
+| `nxc smb <target> -M pi -o USER=admin EXEC=cmd` | `.\azx.ps1 exec -VMName "vm-01" -x "cmd" -ExecMethod pi -TargetUser "DOMAIN\admin"` | Process injection by user |
 
 ### Targeting Options
 
@@ -1403,6 +1408,58 @@ AZexec provides two targeting modes for remote command execution:
 .\azx.ps1 exec -DeviceName "LAPTOP-001" -x "cmd" -PowerShell -AmsiBypass bypass.ps1 -ExecMethod mde
 ```
 
+**Process Injection (User Impersonation):**
+
+The `pi` execution method is the Azure equivalent of NetExec's `-M pi` (process injection) module. Since Azure doesn't provide direct memory access to VMs, AZexec achieves the same outcome (execute as target user) through PowerShell-based token manipulation techniques.
+
+```powershell
+# Execute command as specific user by injecting into their process (by PID)
+.\azx.ps1 exec -VMName "vm-01" -x "whoami" -ExecMethod pi -PID 1234
+
+# Auto-find process owned by target user
+.\azx.ps1 exec -VMName "vm-01" -x "whoami" -ExecMethod pi -TargetUser "DOMAIN\admin"
+
+# Combine with AMSI bypass for evasion
+.\azx.ps1 exec -VMName "vm-01" -x "Invoke-Mimikatz" -ExecMethod pi -TargetUser "admin" -AmsiBypass bypass.ps1
+```
+
+**How Process Injection Works:**
+1. The PI script is delivered to the target via the underlying method (vmrun, arc, mde, or intune)
+2. Script runs as SYSTEM (Azure execution always runs as SYSTEM)
+3. If `-TargetUser` specified, finds a process owned by that user
+4. Opens process handle and duplicates the user's token
+5. Creates new process with duplicated token via `CreateProcessWithTokenW`
+6. Command executes in the impersonated user's security context
+
+**Underlying Delivery Methods:**
+The PI method automatically discovers targets and uses the appropriate delivery mechanism:
+- **Azure VMs** → uses `vmrun` (Azure VM Run Command)
+- **Arc-enabled servers** → uses `arc` (Azure Arc Run Command)
+- **MDE-enrolled devices** → uses `mde` (MDE Live Response)
+- **Intune-managed devices** → uses `intune` (Intune Proactive Remediation)
+
+```powershell
+# PI on Azure VM (delivered via vmrun)
+.\azx.ps1 exec -VMName "vm-01" -x "whoami" -ExecMethod pi -TargetUser "admin"
+
+# PI on Arc-enabled device (delivered via arc)
+.\azx.ps1 exec -DeviceName "ARC-SERVER-01" -x "whoami" -ExecMethod pi -TargetUser "admin"
+
+# PI on MDE-enrolled device (delivered via mde - if not Arc-enabled)
+.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "whoami" -ExecMethod pi -TargetUser "admin"
+```
+
+**Process Injection Requirements:**
+- Windows targets only (Linux N/A for token impersonation)
+- Target user must have an active process on the VM
+- Requires SYSTEM privileges (standard for Azure execution methods)
+
+**NetExec Comparison:**
+| NetExec Command | AZexec Equivalent |
+|-----------------|-------------------|
+| `nxc smb <target> -M pi -o PID=1234 EXEC=whoami` | `.\azx.ps1 exec -VMName "vm-01" -x "whoami" -ExecMethod pi -PID 1234` |
+| `nxc smb <target> -M pi -o USER=admin EXEC=whoami` | `.\azx.ps1 exec -VMName "vm-01" -x "whoami" -ExecMethod pi -TargetUser "admin"` |
+
 ### Output Format
 
 Successful execution displays NetExec-style output with the "(Exec3d!)" indicator:
@@ -1420,6 +1477,7 @@ AZR       vm-web-01             443    Windows     (Exec3d!)   nt authority\syst
 | **mde** | Machine.LiveResponse, Machine.Read.All (Microsoft Defender Security API) |
 | **intune** | DeviceManagementManagedDevices.PrivilegedOperations.All (Microsoft Graph) |
 | **automation** | Automation Contributor (Azure RBAC) |
+| **pi** | Same as underlying method (vmrun/arc) - uses token manipulation on target |
 
 ### Technical Comparison
 
@@ -1441,12 +1499,14 @@ AZR       vm-web-01             443    Windows     (Exec3d!)   nt authority\syst
 | **mde** | Security API `/machines/{id}/runliveresponse` | 10 min | MDE-enrolled devices (with polling) |
 | **intune** | Graph API `/managedDevices/{id}/initiateOnDemandProactiveRemediation` | Async | Intune-managed devices (check portal) |
 | **automation** | Azure Automation Runbook API | Variable | Hybrid Worker-configured servers |
+| **pi** | Token manipulation via vmrun/arc | ~5 min | Execute as target user (Windows only) |
 
 **When to Use Each Method:**
 - **vmrun/arc**: Use for Azure VMs and Arc-enabled servers - fastest execution with immediate output
 - **mde**: Use for Entra ID joined devices with MDE agent but no Arc agent - async with polling (up to 10 min)
 - **intune**: Use for Intune-managed devices - fully async, check Intune portal for results
 - **automation**: Use for servers with Azure Automation Hybrid Worker extension configured
+- **pi**: Use when you need to execute commands as a specific user rather than SYSTEM
 
 ---
 
