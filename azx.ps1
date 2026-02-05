@@ -745,7 +745,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "delegation-enum", "exec", "empire-exec", "met-inject", "spider", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "delegation-enum", "exec", "empire-exec", "met-inject", "spider", "get-file", "put-file", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -947,7 +947,14 @@ param(
     [switch]$VMsOnly,              # Only spider VMs
 
     [Parameter(Mandatory = $false)]
-    [switch]$DevicesOnly           # Only spider Arc/MDE/Intune devices
+    [switch]$DevicesOnly,          # Only spider Arc/MDE/Intune devices
+
+    # File transfer options (get-file/put-file commands - NetExec --get-file/--put-file equivalent)
+    [Parameter(Mandatory = $false)]
+    [string]$LocalPath,            # Local file path for get-file/put-file
+
+    [Parameter(Mandatory = $false)]
+    [string]$RemotePath            # Remote file path for get-file/put-file
 )
 
 
@@ -981,6 +988,7 @@ $FunctionsPath = Join-Path $PSScriptRoot "Functions"
 . "$FunctionsPath\CommandExecution.ps1"
 . "$FunctionsPath\ShellGeneration.ps1"
 . "$FunctionsPath\Spider.ps1"
+. "$FunctionsPath\FileTransfer.ps1"
 
 # ============================================
 # MAIN EXECUTION
@@ -1091,7 +1099,7 @@ if ($Command -eq "av-enum") {
 }
 
 # ARM-based commands use Azure Resource Manager (Az modules) with RBAC, not Graph API
-if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum", "lockscreen-enum", "exec", "empire-exec", "met-inject", "spider")) {
+if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum", "lockscreen-enum", "exec", "empire-exec", "met-inject", "spider", "get-file", "put-file")) {
     Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
     Write-ColorOutput -Message "[*] AZURE RESOURCE MANAGER - RBAC REQUIREMENTS" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
@@ -1203,6 +1211,30 @@ if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum
             Write-ColorOutput -Message "    Arc: Azure Connected Machine Resource Administrator" -Color "Gray"
             Write-ColorOutput -Message "    MDE: Machine.LiveResponse, Machine.Read.All" -Color "Gray"
             Write-ColorOutput -Message "    Intune: DeviceManagementManagedDevices.PrivilegedOperations.All`n" -Color "Gray"
+        }
+        "get-file" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for File Download:`n" -Color "Yellow"
+            Write-ColorOutput -Message "  Blob Storage:" -Color "White"
+            Write-ColorOutput -Message "    Storage Blob Data Reader (or Contributor)`n" -Color "Gray"
+            Write-ColorOutput -Message "  File Shares:" -Color "White"
+            Write-ColorOutput -Message "    Storage File Data SMB Share Reader (or Contributor)`n" -Color "Gray"
+            Write-ColorOutput -Message "  Azure VMs:" -Color "White"
+            Write-ColorOutput -Message "    Reader + Virtual Machine Command Executor role" -Color "Gray"
+            Write-ColorOutput -Message "    Or: Virtual Machine Contributor role`n" -Color "Gray"
+            Write-ColorOutput -Message "  Arc Devices:" -Color "White"
+            Write-ColorOutput -Message "    Azure Connected Machine Resource Administrator`n" -Color "Gray"
+        }
+        "put-file" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for File Upload:`n" -Color "Yellow"
+            Write-ColorOutput -Message "  Blob Storage:" -Color "White"
+            Write-ColorOutput -Message "    Storage Blob Data Contributor`n" -Color "Gray"
+            Write-ColorOutput -Message "  File Shares:" -Color "White"
+            Write-ColorOutput -Message "    Storage File Data SMB Share Contributor`n" -Color "Gray"
+            Write-ColorOutput -Message "  Azure VMs:" -Color "White"
+            Write-ColorOutput -Message "    Reader + Virtual Machine Command Executor role" -Color "Gray"
+            Write-ColorOutput -Message "    Or: Virtual Machine Contributor role`n" -Color "Gray"
+            Write-ColorOutput -Message "  Arc Devices:" -Color "White"
+            Write-ColorOutput -Message "    Azure Connected Machine Resource Administrator`n" -Color "Gray"
         }
     }
 
@@ -1406,12 +1438,42 @@ switch ($Command) {
                 -OutputFolder $OutputFolder -MaxFileSize $MaxFileSize -ExportPath $ExportPath
         }
     }
+    "get-file" {
+        # Validate get-file command has required parameters
+        if (-not $RemotePath -or -not $LocalPath) {
+            Write-ColorOutput -Message "[!] Error: -RemotePath and -LocalPath parameters are required for get-file command" -Color "Red"
+            Write-ColorOutput -Message "[*] Usage: .\azx.ps1 get-file -VMName 'vm-01' -RemotePath 'C:\path\file.txt' -LocalPath '.\file.txt'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 get-file -DeviceName 'arc-01' -RemotePath '/etc/passwd' -LocalPath '.\passwd'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 get-file -StorageAccountTarget 'acct' -ContainerTarget 'data' -RemotePath 'file.txt' -LocalPath '.\file.txt'" -Color "Yellow"
+            return
+        }
+        Invoke-GetFile -RemotePath $RemotePath -LocalPath $LocalPath `
+            -VMName $VMName -DeviceName $DeviceName `
+            -StorageAccountTarget $StorageAccountTarget -ContainerTarget $ContainerTarget `
+            -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+            -MaxFileSize $MaxFileSize -ExportPath $ExportPath
+    }
+    "put-file" {
+        # Validate put-file command has required parameters
+        if (-not $LocalPath -or -not $RemotePath) {
+            Write-ColorOutput -Message "[!] Error: -LocalPath and -RemotePath parameters are required for put-file command" -Color "Red"
+            Write-ColorOutput -Message "[*] Usage: .\azx.ps1 put-file -VMName 'vm-01' -LocalPath '.\payload.ps1' -RemotePath 'C:\Temp\payload.ps1'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 put-file -DeviceName 'arc-01' -LocalPath '.\script.sh' -RemotePath '/tmp/script.sh'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 put-file -StorageAccountTarget 'acct' -ContainerTarget 'uploads' -LocalPath '.\file.txt' -RemotePath 'folder/file.txt'" -Color "Yellow"
+            return
+        }
+        Invoke-PutFile -LocalPath $LocalPath -RemotePath $RemotePath `
+            -VMName $VMName -DeviceName $DeviceName `
+            -StorageAccountTarget $StorageAccountTarget -ContainerTarget $ContainerTarget `
+            -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+            -ExportPath $ExportPath
+    }
     "help" {
         Show-Help
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, delegation-enum, exec, empire-exec, met-inject, spider, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, delegation-enum, exec, empire-exec, met-inject, spider, get-file, put-file, help" -Color "Yellow"
     }
 }
 

