@@ -47,20 +47,20 @@
 - [Getting Shells - Empire and Metasploit](#-getting-shells---empire-and-metasploit-integration)
 - [Features](#-features)
 - [Visual Indicators & High-Risk Highlighting](#-visual-indicators--high-risk-highlighting)
-- [Additional Documentation](#-additional-documentation)
-- [Requirements](#-requirements)
-- [Installation](#-installation)
-- [Project Structure](#️-project-structure)
-- [Testing](#-testing)
-- [Usage](#-usage)
-- [Usage Examples](#-usage-examples)
-- [Output Format](#-output-format)
-- [Interpreting Security Findings](#-interpreting-security-findings)
+- [Related Documentation](#-related-documentation)
+- [Prerequisites & Permissions Matrix](#-prerequisites--permissions-matrix)
+- [Quick Start Setup](#-quick-start-setup)
+- [Codebase Architecture & Command Mapping](#️-codebase-architecture--command-mapping)
+- [Automated Test Suite](#-automated-test-suite)
+- [Command Syntax & Attack Workflows](#-command-syntax--attack-workflows)
+- [Command Examples by Feature](#-command-examples-by-feature)
+- [NetExec-Style Output Reference](#-netexec-style-output-reference)
+- [Security Risk Assessment Guide](#-security-risk-assessment-guide)
 - [Guest User Enumeration - The Azure "Null Session"](#-guest-user-enumeration---the-azure-null-session)
-- [Authentication](#-authentication)
-- [Export Formats](#-export-formats)
-- [HTML Report Generation](#-html-report-generation)
-- [Troubleshooting](#️-troubleshooting)
+- [Authentication & Scope Requirements](#-authentication--scope-requirements)
+- [Data Export (CSV/JSON/HTML)](#-data-export-csvjsonhtml)
+- [Professional HTML Reports](#-professional-html-reports)
+- [Common Issues & Solutions](#️-common-issues--solutions)
 - [License](#-license)
 - [Contributing](#-contributing)
 - [Disclaimer](#️-disclaimer)
@@ -2190,12 +2190,12 @@ AZR         def456...       443    Marketing Team               [*] (security:Tr
 
 If you prefer plain text output (for scripting or logging), colors respect PowerShell's output stream configuration and can be redirected normally. Exported files (CSV/JSON) contain data without color codes.
 
-## 📚 Additional Documentation
+## 📚 Related Documentation
 
 - **[Complete Password Spray Attack Guide](PASSWORD-SPRAY.md)** - Comprehensive documentation for GetCredentialType enumeration + ROPC password spraying
 - **[Notes & Roadmap](notes.md)** - Planned features and implementation status
 
-## 📋 Requirements
+## 📋 Prerequisites & Permissions Matrix
 
 - **PowerShell 7+** (PowerShell Core)
 - **Internet Connection**: Required for API access
@@ -2333,7 +2333,7 @@ If you prefer plain text output (for scripting or logging), colors respect Power
 - Displays session controls and risk-based conditions
 - Provides security recommendations and highlights high-risk policies
 
-## 🚀 Installation
+## 🚀 Quick Start Setup
 
 1. **Clone the repository**:
 ```bash
@@ -2351,7 +2351,7 @@ $PSVersionTable.PSVersion
 .\azx.ps1 hosts
 ```
 
-## 🗂️ Project Structure
+## 🗂️ Codebase Architecture & Command Mapping
 
 AZexec follows a modular architecture where functionality is organized into separate files:
 
@@ -2429,7 +2429,7 @@ The following commands use Azure Resource Manager API (Az PowerShell modules) in
 
 **Multi-Subscription Support**: All ARM commands automatically enumerate all accessible subscriptions. Use `-SubscriptionId` to target a specific subscription, or `-ResourceGroup` to filter within subscriptions.
 
-## 🧪 Testing
+## 🧪 Automated Test Suite
 
 AZexec includes an automated test suite to verify all commands execute without parameter errors.
 
@@ -2519,7 +2519,7 @@ All commands executed successfully!
 
 **Note**: The test suite verifies command structure and execution, not functional correctness. It ensures the tool doesn't have breaking changes after structural modifications.
 
-## 📖 Usage
+## 📖 Command Syntax & Attack Workflows
 
 ### Quick Reference: Attack Scenarios
 
@@ -2832,7 +2832,7 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 - `noncompliant` - Only non-compliant devices
 - `disabled` - Only disabled devices
 
-## 💡 Usage Examples
+## 💡 Command Examples by Feature
 
 ### Getting Help
 
@@ -5066,7 +5066,7 @@ Get-MgUser -All | Export-Csv loot/all-users.csv
 # - Exploitation of unpatched devices
 ```
 
-## 📊 Output Format
+## 📊 NetExec-Style Output Reference
 
 The tool provides netexec-style output with the following information:
 
@@ -5764,7 +5764,7 @@ AZR         targetcorp.com                      443    [*] Vuln-List Results
 - `.json` - Full findings with all metadata
 - `.csv` - Spreadsheet-friendly format
 
-## 🔍 Interpreting Security Findings
+## 🔍 Security Risk Assessment Guide
 
 ### Tenant Discovery Security Assessment
 
@@ -6089,7 +6089,7 @@ Get-MgDevice -Top 10  # If this works, you're VERY vulnerable
 - [ ] Identify high-value targets (admins, executives)
 - [ ] Pivot to targeted phishing or credential attacks
 
-## 🔐 Authentication
+## 🔐 Authentication & Scope Requirements
 
 ### Username Enumeration (No Authentication Required)
 The `users` command uses the public GetCredentialType API endpoint and does not require authentication. This makes it perfect for:
@@ -6190,7 +6190,7 @@ Disconnect-MgGraph
 .\azx.ps1 hosts
 ```
 
-## 📁 Export Formats
+## 📁 Data Export (CSV/JSON/HTML)
 
 ### Username Enumeration Export
 
@@ -6314,7 +6314,7 @@ Includes: Domain, TenantConfig (NameSpaceType, FederationType, AcceptsExternalUs
 ```
 Includes: Username, Password, Success, MFARequired, ConsentRequired, ErrorCode, HasToken (one row per tested credential)
 
-## 📊 HTML Report Generation
+## 📊 Professional HTML Reports
 
 AZexec now supports **comprehensive HTML report generation** with a netexec-inspired dark theme. HTML reports provide a professional, shareable format perfect for documentation, presentations, and security assessments.
 
@@ -6538,7 +6538,7 @@ Generate multiple formats for different use cases:
    Open .html → Press Ctrl+P → Destination: Save as PDF
    ```
 
-## 🛠️ Troubleshooting
+## 🛠️ Common Issues & Solutions
 
 ### Guest User Enumeration Issues
 
