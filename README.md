@@ -35,6 +35,42 @@
 
 ---
 
+## 📑 Table of Contents
+
+- [NetExec to AZexec Command Mapping](#-netexec-to-azexec-command-mapping)
+- [Domain User Enumeration](#-domain-user-enumeration---azureentra-id-equivalent)
+- [RID Bruteforcing](#-rid-bruteforcing---azureentra-id-equivalent)
+- [Enumerate Local Groups](#-enumerate-local-groups---azureentra-id-equivalent)
+- [Workstation Service (wkssvc) Equivalent](#-workstation-service-wkssvc-equivalent-vm-loggedon-command)
+- [Azure Resource Manager Enumeration](#️-azure-resource-manager-enumeration-multi-subscription)
+- [Remote Command Execution](#-remote-command-execution---azures-netexec--x-x-equivalent)
+- [Getting Shells - Empire and Metasploit](#-getting-shells---empire-and-metasploit-integration)
+- [Features](#-features)
+- [Visual Indicators & High-Risk Highlighting](#-visual-indicators--high-risk-highlighting)
+- [Additional Documentation](#-additional-documentation)
+- [Requirements](#-requirements)
+- [Installation](#-installation)
+- [Project Structure](#️-project-structure)
+- [Testing](#-testing)
+- [Usage](#-usage)
+- [Usage Examples](#-usage-examples)
+- [Output Format](#-output-format)
+- [Interpreting Security Findings](#-interpreting-security-findings)
+- [Guest User Enumeration - The Azure "Null Session"](#-guest-user-enumeration---the-azure-null-session)
+- [Authentication](#-authentication)
+- [Export Formats](#-export-formats)
+- [HTML Report Generation](#-html-report-generation)
+- [Troubleshooting](#️-troubleshooting)
+- [License](#-license)
+- [Contributing](#-contributing)
+- [Disclaimer](#️-disclaimer)
+- [Author](#-author)
+- [Acknowledgments](#-acknowledgments)
+- [Quick Reference - Penetration Testing Cheat Sheet](#-quick-reference---penetration-testing-cheat-sheet)
+- [Checking Credentials (Domain) - Azure's Pwn3d! Equivalent](#-checking-credentials-domain---azures-pwn3d-equivalent)
+
+---
+
 ## 🔄 NetExec to AZexec Command Mapping
 
 For penetration testers familiar with NetExec (formerly CrackMapExec), here's how the commands translate to Azure:
@@ -2038,7 +2074,7 @@ All commands follow this consistent color hierarchy:
 
 **Example output:**
 ```powershell
-AZR         d1f5c8a3b7e...  443    Contoso-Admin-App            [*] (appId:...) (appRoles:5) (delegated:2)  # RED
+AZR         d1f5c8a3b7e...  443    Example-Admin-App            [*] (appId:...) (appRoles:5) (delegated:2)  # RED
     [+] Application Permissions (App Roles):
         [-] Microsoft Graph : RoleManagement.ReadWrite.Directory (ID: ...)  # RED
         [-] Microsoft Graph : User.Read.All (ID: ...)  # Normal color
@@ -2946,13 +2982,13 @@ Discover tenant configuration for a specific domain:
 ### Example 11: Tenant Discovery with Export
 Discover tenant configuration and export to JSON:
 ```powershell
-.\azx.ps1 tenant -Domain contoso.onmicrosoft.com -ExportPath tenant-info.json
+.\azx.ps1 tenant -Domain example.onmicrosoft.com -ExportPath tenant-info.json
 ```
 
 ### Example 12: Tenant Discovery for Multiple Domains
 Discover configuration for multiple domains:
 ```powershell
-@("example.com", "contoso.com", "fabrikam.onmicrosoft.com") | ForEach-Object { 
+@("example.com", "example.com", "fabrikam.onmicrosoft.com") | ForEach-Object { 
     .\azx.ps1 tenant -Domain $_ 
 }
 ```
@@ -5339,8 +5375,8 @@ AZR         <TenantName>                         443    [*] Password Policy Info
     [+] Password Validity Period:     90 days
     [+] Password Notification Window: 14 days
     [+] Verified Domains:             2 domain(s)
-        - contoso.com (Default)
-        - contoso.onmicrosoft.com (Initial)
+        - example.com (Default)
+        - example.onmicrosoft.com (Initial)
     [+] Technical Notification Emails: 1
         - admin@example.com
 
@@ -6480,7 +6516,7 @@ Generate multiple formats for different use cases:
 
 1. **Use Descriptive Filenames**: Include date, client name, and content type
    ```powershell
-   .\azx.ps1 roles -ExportPath "2025-01-15_ContosoCorp_PrivilegedRoles.html"
+   .\azx.ps1 roles -ExportPath "2025-01-15_ExampleCorp_PrivilegedRoles.html"
    ```
 
 2. **Generate Multiple Formats**: Keep CSV/JSON for data processing, HTML for reporting
@@ -7168,11 +7204,11 @@ SMB  192.168.1.102  445  SRV02 [-] DOMAIN\user:Password
 
 **AZexec Output:**
 ```
-AZR         contoso.com                        443    admin@contoso.com              [+] SUCCESS! Got access token (GlobalAdmin!)
-AZR         contoso.com                        443    secops@contoso.com             [+] SUCCESS! Got access token (SecurityAdmin!)
-AZR         contoso.com                        443    user@contoso.com               [+] SUCCESS! Got access token
-AZR         contoso.com                        443    helpdesk@contoso.com           [+] Valid credentials - MFA REQUIRED
-AZR         contoso.com                        443    locked@contoso.com             [!] ACCOUNT LOCKED
+AZR         example.com                        443    admin@example.com              [+] SUCCESS! Got access token (GlobalAdmin!)
+AZR         example.com                        443    secops@example.com             [+] SUCCESS! Got access token (SecurityAdmin!)
+AZR         example.com                        443    user@example.com               [+] SUCCESS! Got access token
+AZR         example.com                        443    helpdesk@example.com           [+] Valid credentials - MFA REQUIRED
+AZR         example.com                        443    locked@example.com             [!] ACCOUNT LOCKED
 ```
 
 ### Automatic Admin Detection
@@ -7221,7 +7257,7 @@ Azure AD doesn't use NTLM hashes, but OAuth2 access tokens serve as the equivale
 .\azx.ps1 guest -AccessToken "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIs..."
 
 # Output shows username from token and privilege level
-# AZR  <tenant-id>  443  admin@contoso.com  [+] SUCCESS! Token validated (GlobalAdmin!)
+# AZR  <tenant-id>  443  admin@example.com  [+] SUCCESS! Token validated (GlobalAdmin!)
 ```
 
 ### NetExec Command Mapping
@@ -7254,7 +7290,7 @@ Azure AD doesn't use NTLM hashes, but OAuth2 access tokens serve as the equivale
 ```powershell
 # Single credential check with automatic admin detection
 .\azx.ps1 guest -Domain target.com -Username admin@target.com -Password 'Summer2024!'
-# Output: AZR contoso.com 443 admin@contoso.com [+] SUCCESS! Got access token (GlobalAdmin!)
+# Output: AZR example.com 443 admin@example.com [+] SUCCESS! Got access token (GlobalAdmin!)
 
 # Password spray - automatically detects admin on each valid credential
 .\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Summer2024!'
