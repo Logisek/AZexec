@@ -81,6 +81,7 @@ function Show-Help {
         @{Name="spider"; Auth="Required"; Description="Spider Azure Storage for sensitive files (mimics nxc smb --spider / spider_plus)"}
         @{Name="get-file"; Auth="Required"; Description="Download file from Azure target (mimics nxc smb --get-file)"}
         @{Name="put-file"; Auth="Required"; Description="Upload file to Azure target (mimics nxc smb --put-file)"}
+        @{Name="creds"; Auth="Required"; Description="Extract credentials from Azure targets (mimics nxc smb --sam)"}
         @{Name="help"; Auth="N/A"; Description="Display this help message"}
     )
     
@@ -180,6 +181,27 @@ function Show-Help {
     Write-Host "    # Username extracted from token claims automatically"
     Write-Host "    # Checks for privileged roles and displays (GlobalAdmin!), etc."
     Write-Host "    # Token sources: Browser storage, memory dumps, token cache files"
+
+    Write-ColorOutput -Message "`n[*] Credential Extraction Examples (NetExec --sam equivalent):" -Color "Yellow"
+    Write-Host "    # SAM extraction (NetExec --sam equivalent)"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-web-01'                         - Extract all credentials (auto)"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-web-01' -CredMethod sam         - SAM hash extraction only"
+    Write-Host "    .\azx.ps1 creds -AllVMs -ResourceGroup 'Production-RG'     - Extract from all VMs in RG"
+    Write-Host ""
+    Write-Host "    # Managed Identity token extraction (Azure-specific)"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-web-01' -CredMethod tokens      - Extract MI tokens"
+    Write-Host "    .\azx.ps1 creds -AllVMs -CredMethod tokens                  - Tokens from all VMs"
+    Write-Host ""
+    Write-Host "    # DPAPI secrets (browser creds, credential manager, WiFi)"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-web-01' -CredMethod dpapi       - Extract DPAPI secrets"
+    Write-Host ""
+    Write-Host "    # Arc devices"
+    Write-Host "    .\azx.ps1 creds -DeviceName 'arc-server-01'                 - Extract from Arc device"
+    Write-Host "    .\azx.ps1 creds -AllDevices -CredMethod sam                 - SAM from all Arc devices"
+    Write-Host ""
+    Write-Host "    # Export for cracking"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -HashcatFormat -ExportPath hashes.txt"
+    Write-Host "    .\azx.ps1 creds -AllVMs -ExportPath results.json"
 
     Write-ColorOutput -Message "`n[*] For detailed help and more examples, see README.md or use Get-Help .\azx.ps1" -Color "Cyan"
     Write-Host ""

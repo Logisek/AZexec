@@ -745,7 +745,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "delegation-enum", "exec", "empire-exec", "met-inject", "spider", "get-file", "put-file", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "delegation-enum", "exec", "empire-exec", "met-inject", "spider", "get-file", "put-file", "creds", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -954,7 +954,18 @@ param(
     [string]$LocalPath,            # Local file path for get-file/put-file
 
     [Parameter(Mandatory = $false)]
-    [string]$RemotePath            # Remote file path for get-file/put-file
+    [string]$RemotePath,           # Remote file path for get-file/put-file
+
+    # Credential extraction options (creds command - NetExec --sam equivalent)
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("auto", "sam", "tokens", "dpapi", "all")]
+    [string]$CredMethod = "auto",  # Extraction method: auto, sam, tokens, dpapi, all
+
+    [Parameter(Mandatory = $false)]
+    [switch]$HashcatFormat,        # Output hashes in hashcat format
+
+    [Parameter(Mandatory = $false)]
+    [switch]$JohnFormat            # Output hashes in John the Ripper format
 )
 
 
@@ -989,6 +1000,7 @@ $FunctionsPath = Join-Path $PSScriptRoot "Functions"
 . "$FunctionsPath\ShellGeneration.ps1"
 . "$FunctionsPath\Spider.ps1"
 . "$FunctionsPath\FileTransfer.ps1"
+. "$FunctionsPath\CredentialExtraction.ps1"
 
 # ============================================
 # MAIN EXECUTION
@@ -1099,7 +1111,7 @@ if ($Command -eq "av-enum") {
 }
 
 # ARM-based commands use Azure Resource Manager (Az modules) with RBAC, not Graph API
-if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum", "lockscreen-enum", "exec", "empire-exec", "met-inject", "spider", "get-file", "put-file")) {
+if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum", "lockscreen-enum", "exec", "empire-exec", "met-inject", "spider", "get-file", "put-file", "creds")) {
     Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
     Write-ColorOutput -Message "[*] AZURE RESOURCE MANAGER - RBAC REQUIREMENTS" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
@@ -1235,6 +1247,21 @@ if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum
             Write-ColorOutput -Message "    Or: Virtual Machine Contributor role`n" -Color "Gray"
             Write-ColorOutput -Message "  Arc Devices:" -Color "White"
             Write-ColorOutput -Message "    Azure Connected Machine Resource Administrator`n" -Color "Gray"
+        }
+        "creds" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Credential Extraction:`n" -Color "Yellow"
+            Write-ColorOutput -Message "  Azure VMs (SAM/DPAPI extraction):" -Color "White"
+            Write-ColorOutput -Message "    Reader + Virtual Machine Command Executor role" -Color "Gray"
+            Write-ColorOutput -Message "    Or: Virtual Machine Contributor role`n" -Color "Gray"
+            Write-ColorOutput -Message "  Azure VMs (Token extraction):" -Color "White"
+            Write-ColorOutput -Message "    Reader + Virtual Machine Command Executor role" -Color "Gray"
+            Write-ColorOutput -Message "    Target VM must have Managed Identity configured`n" -Color "Gray"
+            Write-ColorOutput -Message "  Arc Devices:" -Color "White"
+            Write-ColorOutput -Message "    Azure Connected Machine Resource Administrator`n" -Color "Gray"
+            Write-ColorOutput -Message "  MDE Devices:" -Color "White"
+            Write-ColorOutput -Message "    Machine.LiveResponse + Machine.Read.All`n" -Color "Gray"
+            Write-ColorOutput -Message "  Intune Devices:" -Color "White"
+            Write-ColorOutput -Message "    DeviceManagementManagedDevices.PrivilegedOperations.All`n" -Color "Gray"
         }
     }
 
@@ -1468,12 +1495,29 @@ switch ($Command) {
             -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
             -ExportPath $ExportPath
     }
+    "creds" {
+        # Validate creds command has target specification
+        if (-not $VMName -and -not $AllVMs -and -not $DeviceName -and -not $AllDevices) {
+            Write-ColorOutput -Message "[!] Error: Target specification required for creds command" -Color "Red"
+            Write-ColorOutput -Message "[*] Usage: .\azx.ps1 creds -VMName 'vm-01'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -AllVMs -CredMethod sam" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod tokens" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -DeviceName 'arc-01' -CredMethod dpapi" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -AllVMs -CredMethod all -ExportPath creds.json" -Color "Yellow"
+            return
+        }
+        Invoke-CredentialExtraction -VMName $VMName -AllVMs:$AllVMs `
+            -DeviceName $DeviceName -AllDevices:$AllDevices `
+            -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+            -CredMethod $CredMethod -HashcatFormat:$HashcatFormat -JohnFormat:$JohnFormat `
+            -AmsiBypass $AmsiBypass -Timeout $Timeout -ExportPath $ExportPath
+    }
     "help" {
         Show-Help
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, delegation-enum, exec, empire-exec, met-inject, spider, get-file, put-file, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, delegation-enum, exec, empire-exec, met-inject, spider, get-file, put-file, creds, help" -Color "Yellow"
     }
 }
 

