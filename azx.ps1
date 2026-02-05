@@ -745,7 +745,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "delegation-enum", "exec", "empire-exec", "met-inject", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "delegation-enum", "exec", "empire-exec", "met-inject", "spider", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -858,7 +858,7 @@ param(
 
     # Process injection parameters (exec command only - Azure equivalent of NetExec pi module)
     [Parameter(Mandatory = $false)]
-    [int]$PID,                     # Target process ID for token duplication
+    [int]$TargetPID,               # Target process ID for token duplication
 
     [Parameter(Mandatory = $false)]
     [string]$TargetUser,            # Target user to impersonate (finds their process automatically)
@@ -903,7 +903,51 @@ param(
     [string]$ProxyHost,            # Proxy host for met_inject
 
     [Parameter(Mandatory = $false)]
-    [int]$ProxyPort                # Proxy port for met_inject
+    [int]$ProxyPort,               # Proxy port for met_inject
+
+    # Spider options (spider command - NetExec spider/spider_plus equivalent)
+    [Parameter(Mandatory = $false)]
+    [string]$Pattern,              # File extension filter (e.g., "txt,docx,key,pem,pfx,config")
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Download,             # Enable file downloading
+
+    [Parameter(Mandatory = $false)]
+    [int]$MaxFileSize = 10,        # Max file size in MB (default: 10)
+
+    [Parameter(Mandatory = $false)]
+    [string]$OutputFolder = ".\SpiderLoot",  # Download destination
+
+    [Parameter(Mandatory = $false)]
+    [int]$Depth = 10,              # Max recursion depth
+
+    [Parameter(Mandatory = $false)]
+    [switch]$BlobsOnly,            # Only spider blob containers
+
+    [Parameter(Mandatory = $false)]
+    [switch]$SharesOnly,           # Only spider file shares
+
+    [Parameter(Mandatory = $false)]
+    [string]$StorageAccountTarget, # Target specific storage account (renamed to avoid conflict)
+
+    [Parameter(Mandatory = $false)]
+    [string]$ContainerTarget,      # Target specific container/share (renamed to avoid conflict)
+
+    # NEW: VM/Device Spider options (spider command extension)
+    [Parameter(Mandatory = $false)]
+    [string]$StartPath,            # Starting directory for VM/Device spider (default: C:\ on Windows, / on Linux)
+
+    [Parameter(Mandatory = $false)]
+    [string]$ExcludePaths,         # Comma-separated paths to exclude from spider
+
+    [Parameter(Mandatory = $false)]
+    [switch]$StorageOnly,          # Only spider Azure Storage (default if no VM/Device params)
+
+    [Parameter(Mandatory = $false)]
+    [switch]$VMsOnly,              # Only spider VMs
+
+    [Parameter(Mandatory = $false)]
+    [switch]$DevicesOnly           # Only spider Arc/MDE/Intune devices
 )
 
 
@@ -936,6 +980,7 @@ $FunctionsPath = Join-Path $PSScriptRoot "Functions"
 . "$FunctionsPath\Delegation.ps1"
 . "$FunctionsPath\CommandExecution.ps1"
 . "$FunctionsPath\ShellGeneration.ps1"
+. "$FunctionsPath\Spider.ps1"
 
 # ============================================
 # MAIN EXECUTION
@@ -1046,7 +1091,7 @@ if ($Command -eq "av-enum") {
 }
 
 # ARM-based commands use Azure Resource Manager (Az modules) with RBAC, not Graph API
-if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum", "lockscreen-enum", "exec", "empire-exec", "met-inject")) {
+if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum", "lockscreen-enum", "exec", "empire-exec", "met-inject", "spider")) {
     Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
     Write-ColorOutput -Message "[*] AZURE RESOURCE MANAGER - RBAC REQUIREMENTS" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
@@ -1146,8 +1191,21 @@ if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum
             Write-ColorOutput -Message "      • Metasploit handler running (exploit/multi/script/web_delivery)" -Color "Gray"
             Write-ColorOutput -Message "      • Network connectivity from target to handler`n" -Color "Gray"
         }
+        "spider" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Spider Command:`n" -Color "Yellow"
+            Write-ColorOutput -Message "  Storage Spider (default):" -Color "White"
+            Write-ColorOutput -Message "    Minimum: Reader + Storage Account Key Operator Service Role" -Color "Gray"
+            Write-ColorOutput -Message "    Recommended: Storage Blob Data Reader + Storage File Data SMB Share Reader`n" -Color "Gray"
+            Write-ColorOutput -Message "  VM Spider (-VMName, -AllVMs):" -Color "White"
+            Write-ColorOutput -Message "    Reader + Virtual Machine Command Executor role" -Color "Gray"
+            Write-ColorOutput -Message "    Or: Virtual Machine Contributor role`n" -Color "Gray"
+            Write-ColorOutput -Message "  Device Spider (-DeviceName, -AllDevices):" -Color "White"
+            Write-ColorOutput -Message "    Arc: Azure Connected Machine Resource Administrator" -Color "Gray"
+            Write-ColorOutput -Message "    MDE: Machine.LiveResponse, Machine.Read.All" -Color "Gray"
+            Write-ColorOutput -Message "    Intune: DeviceManagementManagedDevices.PrivilegedOperations.All`n" -Color "Gray"
+        }
     }
-    
+
     Write-ColorOutput -Message "[*] Role assignment scope: Subscription or Resource Group level" -Color "Yellow"
     Write-ColorOutput -Message "[*] If you lack permissions, the authentication will succeed but enumeration may fail`n" -Color "Yellow"
     
@@ -1264,7 +1322,7 @@ switch ($Command) {
             -DeviceName $DeviceName -AllDevices:$AllDevices `
             -Timeout $Timeout -ExportPath $ExportPath `
             -AmsiBypass $AmsiBypass `
-            -PID $PID -TargetUser $TargetUser
+            -PID $TargetPID -TargetUser $TargetUser
     }
     "empire-exec" {
         # Validate empire-exec command has required parameter
@@ -1300,12 +1358,60 @@ switch ($Command) {
             -ExecMethod $ExecMethod -Timeout $Timeout -AmsiBypass $AmsiBypass `
             -ExportPath $ExportPath
     }
+    "spider" {
+        # Determine spider mode based on parameters
+        # If VM/Device targeting is specified, run those spiders
+        # If no VM/Device targeting, run storage spider (default)
+
+        $runStorageSpider = $false
+        $runVMSpider = $false
+        $runDeviceSpider = $false
+
+        # Determine what to spider based on parameters
+        if ($VMName -or $AllVMs -or $VMsOnly) {
+            $runVMSpider = $true
+        }
+        if ($DeviceName -or $AllDevices -or $DevicesOnly) {
+            $runDeviceSpider = $true
+        }
+        if ($StorageOnly -or (-not $runVMSpider -and -not $runDeviceSpider)) {
+            # Default: storage spider if no VM/Device params
+            $runStorageSpider = $true
+        }
+
+        # Run Storage Spider
+        if ($runStorageSpider) {
+            Invoke-SpiderEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+                -Pattern $Pattern -Download:$Download -MaxFileSize $MaxFileSize `
+                -OutputFolder $OutputFolder -Depth $Depth -BlobsOnly:$BlobsOnly `
+                -SharesOnly:$SharesOnly -StorageAccount $StorageAccountTarget `
+                -Container $ContainerTarget -ExportPath $ExportPath
+        }
+
+        # Run VM Spider
+        if ($runVMSpider) {
+            Invoke-VMSpiderEnumeration -VMName $VMName -AllVMs:$AllVMs `
+                -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+                -Pattern $Pattern -StartPath $StartPath -ExcludePaths $ExcludePaths `
+                -Depth $Depth -Download:$Download -OutputFolder $OutputFolder `
+                -MaxFileSize $MaxFileSize -ExportPath $ExportPath
+        }
+
+        # Run Device Spider
+        if ($runDeviceSpider) {
+            Invoke-DeviceSpiderEnumeration -DeviceName $DeviceName -AllDevices:$AllDevices `
+                -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+                -ExecMethod $ExecMethod -Pattern $Pattern -StartPath $StartPath `
+                -ExcludePaths $ExcludePaths -Depth $Depth -Download:$Download `
+                -OutputFolder $OutputFolder -MaxFileSize $MaxFileSize -ExportPath $ExportPath
+        }
+    }
     "help" {
         Show-Help
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, delegation-enum, exec, empire-exec, met-inject, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, delegation-enum, exec, empire-exec, met-inject, spider, help" -Color "Yellow"
     }
 }
 

