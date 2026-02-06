@@ -230,6 +230,29 @@ function Show-Help {
     Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod wam               - Extract WAM/AAD broker tokens"
     Write-Host "    .\azx.ps1 creds -AllVMs -CredMethod wam -ExportPath wam.json   - WAM tokens from all VMs"
 
+    Write-ColorOutput -Message "`n[*] WiFi Password Examples (NetExec -M wifi equivalent):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod wifi               - Dump WiFi saved passwords"
+
+    Write-ColorOutput -Message "`n[*] Application Credential Examples (NetExec -M putty/winscp/vnc/mremoteng equivalent):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod putty              - Dump PuTTY saved sessions"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod winscp             - Dump WinSCP stored credentials"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod vnc                - Dump VNC passwords (DES decrypt)"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod mremoteng          - Dump mRemoteNG connections (AES-GCM)"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod veeam              - Dump Veeam backup credentials"
+
+    Write-ColorOutput -Message "`n[*] KeePass Examples (NetExec -M keepass_discover/keepass_trigger equivalent):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod keepass_discover   - Find KeePass installations/databases"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod keepass_trigger    - KeePass trigger exploit (full cycle)"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod keepass_trigger -KeePassAction add     - Inject trigger only"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod keepass_trigger -KeePassAction poll    - Check for export"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod keepass_trigger -KeePassAction clean   - Remove trigger"
+
+    Write-ColorOutput -Message "`n[*] Forensic Extraction Examples (NetExec -M notepad/rdcman/eventlog_creds equivalent):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod notepad            - Dump Notepad tab state"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod notepadpp          - Dump Notepad++ backup files"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod rdcman             - Dump RDCMan connections"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod eventlog_creds     - Extract credentials from event logs"
+
     Write-ColorOutput -Message "`n[*] For detailed help and more examples, see README.md or use Get-Help .\azx.ps1" -Color "Cyan"
     Write-Host ""
 }

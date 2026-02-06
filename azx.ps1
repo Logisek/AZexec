@@ -958,8 +958,8 @@ param(
 
     # Credential extraction options (creds command - NetExec --sam/--lsa/--ntds equivalent)
     [Parameter(Mandatory = $false)]
-    [ValidateSet("auto", "sam", "tokens", "dpapi", "lsa", "ntds", "lsass", "backup", "sccm", "wam", "all")]
-    [string]$CredMethod = "auto",  # Extraction method: auto, sam, tokens, dpapi, lsa, ntds, lsass, backup, sccm, wam, all
+    [ValidateSet("auto", "sam", "tokens", "dpapi", "lsa", "ntds", "lsass", "backup", "sccm", "wam", "wifi", "putty", "notepad", "notepadpp", "keepass_discover", "keepass_trigger", "rdcman", "eventlog_creds", "winscp", "vnc", "mremoteng", "veeam", "all")]
+    [string]$CredMethod = "auto",  # Extraction method: auto, sam, tokens, dpapi, lsa, ntds, lsass, backup, sccm, wam, wifi, putty, notepad, notepadpp, keepass_discover, keepass_trigger, rdcman, eventlog_creds, winscp, vnc, mremoteng, veeam, all
 
     [Parameter(Mandatory = $false)]
     [switch]$HashcatFormat,        # Output hashes in hashcat format
@@ -994,7 +994,18 @@ param(
     [string]$PVKFile,              # DPAPI PVK file for WAM token decryption
 
     [Parameter(Mandatory = $false)]
-    [string]$MasterKeyFile         # DPAPI master key file for WAM token decryption
+    [string]$MasterKeyFile,        # DPAPI master key file for WAM token decryption
+
+    # KeePass trigger options (creds command - keepass_trigger method)
+    [Parameter(Mandatory = $false)]
+    [string]$KeePassConfigPath,    # Path to KeePass.config.xml
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("add", "check", "restart", "poll", "clean", "all")]
+    [string]$KeePassAction = "all",  # KeePass trigger action: add, check, restart, poll, clean, all
+
+    [Parameter(Mandatory = $false)]
+    [string]$KeePassExportPath     # Path for KeePass export file
 )
 
 
@@ -1546,6 +1557,18 @@ switch ($Command) {
             Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod sccm" -Color "Yellow"
             Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod wam" -Color "Yellow"
             Write-ColorOutput -Message "[*]        .\azx.ps1 creds -AllVMs -CredMethod all -ExportPath creds.json" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod wifi" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod putty" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod winscp" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod vnc" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod mremoteng" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod notepad" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod notepadpp" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod keepass_discover" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod keepass_trigger -KeePassAction all" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod rdcman" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod eventlog_creds" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod veeam" -Color "Yellow"
             return
         }
         Invoke-CredentialExtraction -VMName $VMName -AllVMs:$AllVMs `
@@ -1556,7 +1579,8 @@ switch ($Command) {
             -ExecMethod $ExecMethod `
             -NTDSMethod $NTDSMethod -LsassMethod $LsassMethod -SCCMMethod $SCCMMethod `
             -EnabledOnly:$EnabledOnly -TargetDomainUser $TargetDomainUser `
-            -PVKFile $PVKFile -MasterKeyFile $MasterKeyFile
+            -PVKFile $PVKFile -MasterKeyFile $MasterKeyFile `
+            -KeePassConfigPath $KeePassConfigPath -KeePassAction $KeePassAction -KeePassExportPath $KeePassExportPath
     }
     "help" {
         Show-Help

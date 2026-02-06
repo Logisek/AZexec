@@ -140,6 +140,18 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb <target> -M backup_operator` | `.\azx.ps1 creds -VMName "vm" -CredMethod backup` | ✅ Required | **Backup Operator extraction** (SeBackupPrivilege) |
 | `nxc smb <target> --sccm` | `.\azx.ps1 creds -VMName "vm" -CredMethod sccm` | ✅ Required | **SCCM/GPP/Intune secrets** (GPP cpasswords, IIS configs) |
 | `nxc smb <target> -M wam` | `.\azx.ps1 creds -VMName "vm" -CredMethod wam` | ✅ Required | **WAM Token Broker** (AAD/TokenBroker JWTs) |
+| `nxc smb <target> -M wifi` | `.\azx.ps1 creds -VMName "vm" -CredMethod wifi` | ✅ Required | **WiFi passwords** (netsh wlan key=clear) |
+| `nxc smb <target> -M putty` | `.\azx.ps1 creds -VMName "vm" -CredMethod putty` | ✅ Required | **PuTTY sessions** (registry) |
+| `nxc smb <target> -M winscp` | `.\azx.ps1 creds -VMName "vm" -CredMethod winscp` | ✅ Required | **WinSCP credentials** (XOR decrypt) |
+| `nxc smb <target> -M vnc` | `.\azx.ps1 creds -VMName "vm" -CredMethod vnc` | ✅ Required | **VNC passwords** (DES decrypt) |
+| `nxc smb <target> -M mremoteng` | `.\azx.ps1 creds -VMName "vm" -CredMethod mremoteng` | ✅ Required | **mRemoteNG connections** (AES-GCM decrypt) |
+| `nxc smb <target> -M veeam` | `.\azx.ps1 creds -VMName "vm" -CredMethod veeam` | ✅ Required | **Veeam backup credentials** (SQL+DPAPI) |
+| `nxc smb <target> -M keepass_discover` | `.\azx.ps1 creds -VMName "vm" -CredMethod keepass_discover` | ✅ Required | **KeePass discovery** (find .kdbx, configs) |
+| `nxc smb <target> -M keepass_trigger` | `.\azx.ps1 creds -VMName "vm" -CredMethod keepass_trigger` | ✅ Required | **KeePass trigger exploit** (config injection) |
+| `nxc smb <target> -M rdcman` | `.\azx.ps1 creds -VMName "vm" -CredMethod rdcman` | ✅ Required | **RDCMan connections** (.rdg files, DPAPI blobs) |
+| `nxc smb <target> -M eventlog_creds` | `.\azx.ps1 creds -VMName "vm" -CredMethod eventlog_creds` | ✅ Required | **Event log credentials** (4688/Sysmon regex) |
+| `nxc smb <target> -M notepad` | `.\azx.ps1 creds -VMName "vm" -CredMethod notepad` | ✅ Required | **Notepad tab state** (binary string recovery) |
+| `nxc smb <target> -M notepad++` | `.\azx.ps1 creds -VMName "vm" -CredMethod notepadpp` | ✅ Required | **Notepad++ backups** (backup file content) |
 | *N/A (Azure-specific)* | `.\azx.ps1 creds -VMName "vm" -CredMethod tokens` | ✅ Required | **Extract Managed Identity tokens** (IMDS) |
 | *N/A (Azure-specific)* | `.\azx.ps1 creds -VMName "vm" -CredMethod dpapi` | ✅ Required | **Extract DPAPI secrets** (WiFi, CredMan, browsers) |
 
@@ -1611,7 +1623,7 @@ AZR    vm-web-01            VM     PUT    C:\Windows\Temp\payload.ps1    [+] SUC
 
 ## 🔐 Credential Extraction - NetExec --sam/--lsa/--ntds Equivalent
 
-For penetration testers familiar with NetExec's credential dumping capabilities (`--sam`, `--lsa`, `--ntds`, `-M lsassy`, `-M backup_operator`, `--sccm`, `-M wam`), AZexec provides the **Azure cloud equivalent** through the `creds` command. This command extracts credentials from Azure VMs, Arc-enabled devices, MDE-enrolled devices, and Intune-managed devices using multiple extraction techniques.
+For penetration testers familiar with NetExec's credential dumping capabilities (`--sam`, `--lsa`, `--ntds`, `-M lsassy`, `-M backup_operator`, `--sccm`, `-M wam`, `-M wifi`, `-M putty`, `-M winscp`, `-M vnc`, `-M mremoteng`, `-M veeam`, `-M keepass_discover`, `-M keepass_trigger`, `-M rdcman`, `-M eventlog_creds`, `-M notepad`, `-M notepad++`), AZexec provides the **Azure cloud equivalent** through the `creds` command. This command extracts credentials from Azure VMs, Arc-enabled devices, MDE-enrolled devices, and Intune-managed devices using 21 extraction techniques.
 
 ### Supported Device Types
 
@@ -1635,7 +1647,19 @@ For penetration testers familiar with NetExec's credential dumping capabilities 
 | **backup** | `nxc smb -M backup_operator` | SeBackupPrivilege extraction (robocopy /B for hives + optional NTDS) | Windows | HIGH |
 | **sccm** | `nxc smb --sccm` | SCCM cache, GPP cpasswords, Intune scripts, IIS configs | Windows | MEDIUM |
 | **wam** | `nxc smb -M wam` | Windows Account Manager tokens (TokenBroker, AAD Broker Plugin JWTs) | Windows | MEDIUM |
-| **all** | All of the above | All extraction methods | Windows/Linux | CRITICAL |
+| **wifi** | `nxc smb -M wifi` | WiFi saved passwords via `netsh wlan show profile key=clear` | Windows | LOW |
+| **putty** | `nxc smb -M putty` | PuTTY saved sessions from registry (host, user, proxy creds) | Windows | LOW |
+| **winscp** | `nxc smb -M winscp` | WinSCP stored credentials with XOR decryption (magic 0xA3) | Windows | LOW |
+| **vnc** | `nxc smb -M vnc` | VNC passwords from registry/INI with DES ECB decryption (fixed key) | Windows | LOW |
+| **mremoteng** | `nxc smb -M mremoteng` | mRemoteNG connections from confCons.xml with AES-GCM decryption | Windows | LOW |
+| **veeam** | `nxc smb -M veeam` | Veeam Backup credentials from SQL database with DPAPI decryption | Windows | MEDIUM |
+| **keepass_discover** | `nxc smb -M keepass_discover` | KeePass installation discovery (.kdbx, config, running processes) | Windows | LOW |
+| **keepass_trigger** | `nxc smb -M keepass_trigger` | KeePass trigger injection to export database on next open | Windows | HIGH |
+| **rdcman** | `nxc smb -M rdcman` | RDCMan connections from .rdg files (reports DPAPI-encrypted blobs) | Windows | LOW |
+| **eventlog_creds** | `nxc smb -M eventlog_creds` | Credentials from event logs (Security 4688, Sysmon 1) via regex | Windows | MEDIUM |
+| **notepad** | `nxc smb -M notepad` | Notepad tab state binary files (string recovery from .bin) | Windows | LOW |
+| **notepadpp** | `nxc smb -M notepad++` | Notepad++ backup files and recent session files | Windows | LOW |
+| **all** | All of the above | All extraction methods (21 total) | Windows/Linux | CRITICAL |
 | **auto** | *Conservative* | Only sam + tokens + dpapi (original behavior) | Windows/Linux | HIGH |
 
 ### NetExec to AZexec Comparison
@@ -1655,6 +1679,18 @@ For penetration testers familiar with NetExec's credential dumping capabilities 
 | `nxc smb <target> --sccm` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod sccm` | SCCM/GPP/Intune secrets |
 | `nxc smb <target> --sccm disk` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod sccm -SCCMMethod disk` | SCCM disk search |
 | `nxc smb <target> -M wam` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod wam` | WAM Token Broker extraction |
+| `nxc smb <target> -M wifi` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod wifi` | WiFi password extraction |
+| `nxc smb <target> -M putty` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod putty` | PuTTY session extraction |
+| `nxc smb <target> -M winscp` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod winscp` | WinSCP credential extraction |
+| `nxc smb <target> -M vnc` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod vnc` | VNC password decryption |
+| `nxc smb <target> -M mremoteng` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod mremoteng` | mRemoteNG connection extraction |
+| `nxc smb <target> -M veeam` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod veeam` | Veeam credential extraction |
+| `nxc smb <target> -M keepass_discover` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod keepass_discover` | KeePass discovery |
+| `nxc smb <target> -M keepass_trigger` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod keepass_trigger` | KeePass trigger exploit |
+| `nxc smb <target> -M rdcman` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod rdcman` | RDCMan connection extraction |
+| `nxc smb <target> -M eventlog_creds` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod eventlog_creds` | Event log credential extraction |
+| `nxc smb <target> -M notepad` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod notepad` | Notepad tab state recovery |
+| `nxc smb <target> -M notepad++` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod notepadpp` | Notepad++ backup extraction |
 | *N/A (Azure-specific)* | `.\azx.ps1 creds -VMName "vm-01" -CredMethod tokens` | Extract Managed Identity tokens |
 | *N/A (Azure-specific)* | `.\azx.ps1 creds -VMName "vm-01" -CredMethod dpapi` | Extract DPAPI secrets |
 | *N/A* | `.\azx.ps1 creds -DeviceName "device" -ExecMethod mde` | Extract via MDE Live Response |
@@ -1695,6 +1731,29 @@ For penetration testers familiar with NetExec's credential dumping capabilities 
 # WAM Token Broker (NetExec -M wam equivalent)
 .\azx.ps1 creds -VMName "vm-01" -CredMethod wam
 .\azx.ps1 creds -AllVMs -CredMethod wam -ExportPath wam.json
+
+# WiFi passwords (NetExec -M wifi equivalent)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod wifi
+
+# Application credentials (NetExec -M putty/winscp/vnc/mremoteng equivalent)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod putty                          # PuTTY saved sessions
+.\azx.ps1 creds -VMName "vm-01" -CredMethod winscp                         # WinSCP (XOR decrypt)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod vnc                            # VNC (DES decrypt)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod mremoteng                      # mRemoteNG (AES-GCM)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod veeam                          # Veeam (SQL + DPAPI)
+
+# KeePass (NetExec -M keepass_discover/keepass_trigger equivalent)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod keepass_discover               # Find KeePass installs
+.\azx.ps1 creds -VMName "vm-01" -CredMethod keepass_trigger                # Full trigger cycle
+.\azx.ps1 creds -VMName "vm-01" -CredMethod keepass_trigger -KeePassAction add     # Inject trigger only
+.\azx.ps1 creds -VMName "vm-01" -CredMethod keepass_trigger -KeePassAction poll    # Poll for export
+.\azx.ps1 creds -VMName "vm-01" -CredMethod keepass_trigger -KeePassAction clean   # Clean up
+
+# Forensic extraction (NetExec -M notepad/rdcman/eventlog_creds equivalent)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod notepad                        # Notepad tab state
+.\azx.ps1 creds -VMName "vm-01" -CredMethod notepadpp                      # Notepad++ backups
+.\azx.ps1 creds -VMName "vm-01" -CredMethod rdcman                         # RDCMan .rdg files
+.\azx.ps1 creds -VMName "vm-01" -CredMethod eventlog_creds                 # Event log credentials
 
 # Managed Identity token extraction (Azure-specific)
 .\azx.ps1 creds -VMName "vm-web-01" -CredMethod tokens
