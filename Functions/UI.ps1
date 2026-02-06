@@ -81,7 +81,7 @@ function Show-Help {
         @{Name="spider"; Auth="Required"; Description="Spider Azure Storage for sensitive files (mimics nxc smb --spider / spider_plus)"}
         @{Name="get-file"; Auth="Required"; Description="Download file from Azure target (mimics nxc smb --get-file)"}
         @{Name="put-file"; Auth="Required"; Description="Upload file to Azure target (mimics nxc smb --put-file)"}
-        @{Name="creds"; Auth="Required"; Description="Extract credentials from Azure targets (mimics nxc smb --sam)"}
+        @{Name="creds"; Auth="Required"; Description="Extract credentials from Azure targets (mimics nxc smb --sam/--lsa/--ntds/-M lsassy/-M wam)"}
         @{Name="help"; Auth="N/A"; Description="Display this help message"}
     )
     
@@ -202,6 +202,33 @@ function Show-Help {
     Write-Host "    # Export for cracking"
     Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -HashcatFormat -ExportPath hashes.txt"
     Write-Host "    .\azx.ps1 creds -AllVMs -ExportPath results.json"
+
+    Write-ColorOutput -Message "`n[*] LSA Secrets Examples (NetExec --lsa equivalent):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 creds -VMName 'dc-01' -CredMethod lsa              - Extract LSA secrets"
+    Write-Host "    .\azx.ps1 creds -AllVMs -CredMethod lsa -ExportPath lsa.json  - LSA secrets from all VMs"
+
+    Write-ColorOutput -Message "`n[*] NTDS.dit Dump Examples (NetExec --ntds equivalent):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 creds -VMName 'dc-01' -CredMethod ntds                          - NTDS dump (VSS, default)"
+    Write-Host "    .\azx.ps1 creds -VMName 'dc-01' -CredMethod ntds -NTDSMethod ntdsutil     - NTDS via ntdsutil IFM"
+    Write-Host "    .\azx.ps1 creds -VMName 'dc-01' -CredMethod ntds -NTDSMethod drsuapi      - DCSync via DSInternals"
+    Write-Host "    .\azx.ps1 creds -VMName 'dc-01' -CredMethod ntds -EnabledOnly              - Only enabled accounts"
+    Write-Host "    .\azx.ps1 creds -VMName 'dc-01' -CredMethod ntds -TargetDomainUser admin   - Specific user"
+
+    Write-ColorOutput -Message "`n[*] LSASS Dump Examples (NetExec -M lsassy equivalent):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod lsass                         - LSASS dump (comsvcs, default)"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod lsass -LsassMethod procdump   - Via procdump"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod lsass -LsassMethod direct     - Via P/Invoke MiniDumpWriteDump"
+
+    Write-ColorOutput -Message "`n[*] Backup Operator Examples (NetExec -M backup_operator equivalent):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 creds -VMName 'dc-01' -CredMethod backup            - Extract via SeBackupPrivilege"
+
+    Write-ColorOutput -Message "`n[*] SCCM/Intune Examples (NetExec --sccm equivalent):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod sccm              - Search filesystem for secrets"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod sccm -SCCMMethod api  - Enumerate Intune via Graph API"
+
+    Write-ColorOutput -Message "`n[*] WAM Token Broker Examples (NetExec -M wam equivalent):" -Color "Yellow"
+    Write-Host "    .\azx.ps1 creds -VMName 'vm-01' -CredMethod wam               - Extract WAM/AAD broker tokens"
+    Write-Host "    .\azx.ps1 creds -AllVMs -CredMethod wam -ExportPath wam.json   - WAM tokens from all VMs"
 
     Write-ColorOutput -Message "`n[*] For detailed help and more examples, see README.md or use Get-Help .\azx.ps1" -Color "Cyan"
     Write-Host ""

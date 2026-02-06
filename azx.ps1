@@ -956,16 +956,45 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$RemotePath,           # Remote file path for get-file/put-file
 
-    # Credential extraction options (creds command - NetExec --sam equivalent)
+    # Credential extraction options (creds command - NetExec --sam/--lsa/--ntds equivalent)
     [Parameter(Mandatory = $false)]
-    [ValidateSet("auto", "sam", "tokens", "dpapi", "all")]
-    [string]$CredMethod = "auto",  # Extraction method: auto, sam, tokens, dpapi, all
+    [ValidateSet("auto", "sam", "tokens", "dpapi", "lsa", "ntds", "lsass", "backup", "sccm", "wam", "all")]
+    [string]$CredMethod = "auto",  # Extraction method: auto, sam, tokens, dpapi, lsa, ntds, lsass, backup, sccm, wam, all
 
     [Parameter(Mandatory = $false)]
     [switch]$HashcatFormat,        # Output hashes in hashcat format
 
     [Parameter(Mandatory = $false)]
-    [switch]$JohnFormat            # Output hashes in John the Ripper format
+    [switch]$JohnFormat,           # Output hashes in John the Ripper format
+
+    # NTDS-specific options (creds command)
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("vss", "ntdsutil", "drsuapi")]
+    [string]$NTDSMethod = "vss",   # NTDS extraction method: vss, ntdsutil, drsuapi
+
+    # LSASS-specific options (creds command)
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("comsvcs", "procdump", "nanodump", "direct")]
+    [string]$LsassMethod = "comsvcs",  # LSASS dump method: comsvcs, procdump, nanodump, direct
+
+    # SCCM-specific options (creds command)
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("disk", "api")]
+    [string]$SCCMMethod = "disk",  # SCCM extraction method: disk, api
+
+    # NTDS filtering options (creds command)
+    [Parameter(Mandatory = $false)]
+    [switch]$EnabledOnly,          # Only extract enabled accounts (NTDS)
+
+    [Parameter(Mandatory = $false)]
+    [string]$TargetDomainUser,     # Target specific domain user (NTDS)
+
+    # WAM DPAPI decryption support (creds command)
+    [Parameter(Mandatory = $false)]
+    [string]$PVKFile,              # DPAPI PVK file for WAM token decryption
+
+    [Parameter(Mandatory = $false)]
+    [string]$MasterKeyFile         # DPAPI master key file for WAM token decryption
 )
 
 
@@ -1250,18 +1279,25 @@ if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum
         }
         "creds" {
             Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Credential Extraction:`n" -Color "Yellow"
-            Write-ColorOutput -Message "  Azure VMs (SAM/DPAPI extraction):" -Color "White"
+            Write-ColorOutput -Message "  Azure VMs (SAM/LSA/DPAPI/LSASS/Backup/SCCM/WAM extraction):" -Color "White"
             Write-ColorOutput -Message "    Reader + Virtual Machine Command Executor role" -Color "Gray"
             Write-ColorOutput -Message "    Or: Virtual Machine Contributor role`n" -Color "Gray"
             Write-ColorOutput -Message "  Azure VMs (Token extraction):" -Color "White"
             Write-ColorOutput -Message "    Reader + Virtual Machine Command Executor role" -Color "Gray"
             Write-ColorOutput -Message "    Target VM must have Managed Identity configured`n" -Color "Gray"
+            Write-ColorOutput -Message "  Azure VMs (NTDS extraction - DC only):" -Color "White"
+            Write-ColorOutput -Message "    Target must be a Domain Controller (NTDS service running)" -Color "Gray"
+            Write-ColorOutput -Message "    drsuapi method requires DSInternals module on target`n" -Color "Gray"
             Write-ColorOutput -Message "  Arc Devices:" -Color "White"
             Write-ColorOutput -Message "    Azure Connected Machine Resource Administrator`n" -Color "Gray"
             Write-ColorOutput -Message "  MDE Devices:" -Color "White"
             Write-ColorOutput -Message "    Machine.LiveResponse + Machine.Read.All`n" -Color "Gray"
             Write-ColorOutput -Message "  Intune Devices:" -Color "White"
             Write-ColorOutput -Message "    DeviceManagementManagedDevices.PrivilegedOperations.All`n" -Color "Gray"
+            Write-ColorOutput -Message "  External Tools (local - for offline parsing):" -Color "White"
+            Write-ColorOutput -Message "    secretsdump.py (Impacket) - for SAM/LSA/NTDS hash extraction" -Color "Gray"
+            Write-ColorOutput -Message "    pypykatz - for LSASS dump parsing" -Color "Gray"
+            Write-ColorOutput -Message "    DSInternals - for NTDS drsuapi method (on target DC)`n" -Color "Gray"
         }
     }
 
@@ -1503,8 +1539,12 @@ switch ($Command) {
             Write-ColorOutput -Message "[*]        .\azx.ps1 creds -AllVMs -CredMethod sam" -Color "Yellow"
             Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod tokens" -Color "Yellow"
             Write-ColorOutput -Message "[*]        .\azx.ps1 creds -DeviceName 'arc-01' -CredMethod dpapi" -Color "Yellow"
-            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -DeviceName 'mde-device-01' -ExecMethod mde -CredMethod tokens" -Color "Yellow"
-            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -DeviceName 'intune-device-01' -ExecMethod intune -CredMethod sam" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'dc-01' -CredMethod lsa" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'dc-01' -CredMethod ntds -NTDSMethod vss" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod lsass -LsassMethod comsvcs" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod backup" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod sccm" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod wam" -Color "Yellow"
             Write-ColorOutput -Message "[*]        .\azx.ps1 creds -AllVMs -CredMethod all -ExportPath creds.json" -Color "Yellow"
             return
         }
@@ -1513,7 +1553,10 @@ switch ($Command) {
             -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
             -CredMethod $CredMethod -HashcatFormat:$HashcatFormat -JohnFormat:$JohnFormat `
             -AmsiBypass $AmsiBypass -Timeout $Timeout -ExportPath $ExportPath `
-            -ExecMethod $ExecMethod
+            -ExecMethod $ExecMethod `
+            -NTDSMethod $NTDSMethod -LsassMethod $LsassMethod -SCCMMethod $SCCMMethod `
+            -EnabledOnly:$EnabledOnly -TargetDomainUser $TargetDomainUser `
+            -PVKFile $PVKFile -MasterKeyFile $MasterKeyFile
     }
     "help" {
         Show-Help

